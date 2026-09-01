@@ -14,5 +14,7 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Run"].exists)
         XCTAssertTrue(app.buttons["Add Files"].exists)
         XCTAssertTrue(app.buttons["Add Case"].exists)
+        XCTAssertTrue(app.staticTexts["How should each response be checked?"].exists)
+        XCTAssertTrue(app.radioButtons["AI rubric"].exists)
     }
 }

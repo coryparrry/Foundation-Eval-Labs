@@ -24,7 +24,7 @@ The app itself uses the system `FoundationModels` framework. It does not link th
 
 - Gives every case a fresh `LanguageModelSession` with shared instructions.
 - Runs one to five repetitions to reveal probabilistic variation.
-- Supports deterministic exact/contains checks, human review, and an optional 1–4 model judge.
+- Supports deterministic exact/contains checks, trace collection without scoring, and a guided 1–4 AI rubric with editable templates.
 - Imports UTF-8 text, JSON, CSV, extractable PDF text, and up to four image attachments.
 - Records the effective model input, response, score, rationale, separate subject/judge latency and public token usage, framework error categories, OS/locale, prompt version, and attachment hashes.
 - Saves run history locally in Application Support and exports complete JSON reports.
@@ -33,6 +33,8 @@ The app itself uses the system `FoundationModels` framework. It does not link th
 ## Evaluation practice
 
 Use deterministic checks whenever correctness is computable. Use a model judge only for subjective qualities, write concrete rating criteria, and calibrate it against a small human-reviewed sample before making it a release gate. Keep representative ordinary, boundary, malformed, safety, and adversarial cases in the suite, and version prompts whenever instructions, context preparation, or validation changes.
+
+For the AI rubric, enter one observable requirement per line and keep the set to four or fewer. The app applies a fixed scale: 4 means every requirement is fully met, 3 means the core requirements are met with only minor issues, 2 means a material requirement failed, and 1 means the response is fundamentally wrong or off-task. Scores 3–4 pass. Add a verified reference answer for factual tasks; leave it blank only when multiple open-ended answers can be valid.
 
 Apple's current evaluation model is dataset → subject → evaluators → aggregate results. The app follows that shape while presenting it as an interactive macOS workflow. See [Evaluating language model responses](https://developer.apple.com/documentation/evaluations/evaluating-language-model-responses) and [Designing specific, measurable criteria](https://developer.apple.com/documentation/evaluations/designing-evaluation-criteria).
 

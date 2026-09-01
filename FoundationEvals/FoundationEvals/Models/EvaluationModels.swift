@@ -10,10 +10,41 @@ enum ScoringMode: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .review: "Review only"
-        case .exactMatch: "Exact match"
-        case .containsExpected: "Contains expected"
-        case .modelJudge: "Model judge"
+        case .review: "Collect only"
+        case .exactMatch: "Exact text"
+        case .containsExpected: "Contains text"
+        case .modelJudge: "AI rubric"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .review:
+            "Collect responses for external review. The app records traces but does not assign pass or fail."
+        case .exactMatch:
+            "Pass only when the complete response equals the expected response after trimming outer whitespace."
+        case .containsExpected:
+            "Pass when the response contains the required literal text, ignoring case and accents."
+        case .modelJudge:
+            "Use a second on-device model call for subjective quality. The judge scores 1–4; 3 or 4 passes."
+        }
+    }
+
+    var expectedLabel: String {
+        switch self {
+        case .exactMatch: "Expected response (required)"
+        case .containsExpected: "Required text (required)"
+        case .modelJudge: "Reference answer (recommended for factual tasks)"
+        case .review: ""
+        }
+    }
+
+    var expectedHelp: String {
+        switch self {
+        case .exactMatch: "Example: Paris — the generated response must be exactly this text."
+        case .containsExpected: "Example: Paris — this is literal text, not a regular expression."
+        case .modelJudge: "Give the judge a known-good answer when correctness can be verified. Leave blank only for open-ended tasks."
+        case .review: ""
         }
     }
 
@@ -45,21 +76,36 @@ struct EvaluationAttachment: Identifiable, Codable, Hashable, Sendable {
 }
 
 struct EvaluationSuite: Codable, Equatable, Sendable {
+    static let legacyDefaultCriteria = "The response is correct, relevant, and follows the instructions."
+    static let judgePassingScore = 3
+    static let defaultRubric = """
+        The response is factually correct or consistent with the supplied reference answer.
+        The response directly answers the prompt without irrelevant material.
+        The response follows every requested format, tone, and length constraint.
+        """
+
     var id = UUID()
     var name = "My Foundation Model Eval"
     var version = "v1"
     var instructions = "Answer accurately and concisely."
-    var criteria = "The response is correct, relevant, and follows the instructions."
+    var criteria = EvaluationSuite.defaultRubric
     var scoringMode = ScoringMode.modelJudge
     var repetitions = 1
     var cases = [
         EvaluationCase(
             name: "Example",
             prompt: "Explain why the sky appears blue in two sentences.",
-            expected: ""
+            expected: "Sunlight contains many wavelengths, and air molecules scatter shorter blue wavelengths more strongly than longer red ones. This Rayleigh scattering sends more blue light toward our eyes across the sky."
         )
     ]
     var attachments: [EvaluationAttachment] = []
+
+    var rubricCriteria: [String] {
+        criteria
+            .split(whereSeparator: \Character.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
 }
 
 enum EvaluationResultStatus: String, Codable, Sendable {
@@ -130,6 +176,8 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var criteria: String
     var scoringMode: ScoringMode
     var repetitions: Int
+    var judgePromptVersion: String?
+    var judgePassingScore: Int?
     var startedAt: Date
     var completedAt: Date
     var cancelled: Bool

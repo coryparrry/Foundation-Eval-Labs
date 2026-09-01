@@ -40,10 +40,21 @@ final class EvaluationStore {
         }
 
         let loadedSuite = Self.loadSuite(from: base)
-        suite = loadedSuite.suite ?? EvaluationSuite()
+        var initialSuite = loadedSuite.suite ?? EvaluationSuite()
+        let migratedRubric = initialSuite.criteria == EvaluationSuite.legacyDefaultCriteria
+        if migratedRubric {
+            initialSuite.criteria = EvaluationSuite.defaultRubric
+            if initialSuite.cases.count == 1,
+               initialSuite.cases[0].prompt == "Explain why the sky appears blue in two sentences.",
+               initialSuite.cases[0].expected.isEmpty {
+                initialSuite.cases[0].expected = EvaluationSuite().cases[0].expected
+            }
+        }
+        let initialNotice = [startupNotice, loadedSuite.notice].compactMap { $0 }.joined(separator: "\n")
+        suite = initialSuite
         runs = Self.loadRuns(from: runsDirectory)
-        notice = [startupNotice, loadedSuite.notice].compactMap { $0 }.joined(separator: "\n")
-        if notice?.isEmpty == true { notice = nil }
+        notice = initialNotice.isEmpty ? nil : initialNotice
+        if migratedRubric { saveSuite() }
     }
 
     var modelStatus: ModelStatus {
@@ -195,9 +206,13 @@ final class EvaluationStore {
            suite.cases.contains(where: { $0.expected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             return "Every case needs expected text for the selected deterministic metric."
         }
-        if suite.scoringMode == .modelJudge,
-           suite.criteria.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Add specific criteria for the model judge."
+        if suite.scoringMode == .modelJudge {
+            if suite.rubricCriteria.isEmpty {
+                return "Add at least one requirement for the AI rubric."
+            }
+            if suite.rubricCriteria.count > 4 {
+                return "Keep the AI rubric to four requirements or fewer so the judge can evaluate each one reliably."
+            }
         }
         return modelStatus.isAvailable ? nil : modelStatus.detail
     }

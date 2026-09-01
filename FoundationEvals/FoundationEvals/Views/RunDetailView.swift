@@ -70,8 +70,12 @@ struct RunDetailView: View {
     }
 
     private var summary: some View {
-        HStack(spacing: 12) {
-            MetricCard(title: "Pass rate", value: run.passRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—")
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
+            MetricCard(title: "Pass rate (scored)", value: run.passRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—")
+            if let averageScore = run.averageScore {
+                MetricCard(title: "Average AI score", value: "\(averageScore.formatted(.number.precision(.fractionLength(1)))) / 4")
+            }
+            MetricCard(title: "Scored", value: "\(run.scoredCount) / \(run.results.count)")
             MetricCard(title: "Passed / Failed", value: "\(run.passedCount) / \(run.failedCount)")
             MetricCard(title: "Errors", value: "\(run.errorCount)")
             MetricCard(title: "Avg subject latency", value: Duration.milliseconds(run.averageDurationMilliseconds).formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)))
@@ -84,7 +88,11 @@ struct RunDetailView: View {
             VStack(alignment: .leading, spacing: 12) {
                 LabeledText(label: "Instructions", text: run.instructions.isEmpty ? "None" : run.instructions)
                 if run.scoringMode == .modelJudge {
-                    LabeledText(label: "Evaluation criteria", text: run.criteria)
+                    LabeledText(label: "AI rubric requirements", text: run.criteria)
+                    LabeledText(
+                        label: "AI judge",
+                        text: "Prompt \(run.judgePromptVersion ?? "legacy") • scores \(run.judgePassingScore ?? EvaluationSuite.judgePassingScore)–4 pass • same on-device model as subject"
+                    )
                 }
                 LabeledText(
                     label: "Environment",
@@ -115,7 +123,7 @@ struct RunDetailView: View {
                     }
                     Spacer()
                     if let score = result.score {
-                        Text("\(score) / 4")
+                        Text("\(score) / 4 • \(score >= (run.judgePassingScore ?? EvaluationSuite.judgePassingScore) ? "Pass" : "Fail")")
                             .font(.headline.monospacedDigit())
                     }
                 }
@@ -136,7 +144,7 @@ struct RunDetailView: View {
                     }
                     LabeledText(label: "Response", text: result.response)
                     if let rationale = result.rationale {
-                        LabeledText(label: "Rationale", text: rationale)
+                        LabeledText(label: run.scoringMode == .modelJudge ? "Judge rationale" : "Scoring rationale", text: rationale)
                     }
                     if let judgeErrorMessage = result.judgeErrorMessage {
                         Text(judgeErrorMessage)

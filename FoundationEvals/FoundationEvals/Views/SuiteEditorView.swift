@@ -1,6 +1,52 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum RubricTemplate: String, CaseIterable, Identifiable {
+    case general
+    case factual
+    case summary
+    case writing
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .general: "General answer"
+        case .factual: "Grounded answer"
+        case .summary: "Summary"
+        case .writing: "Writing and tone"
+        }
+    }
+
+    var requirements: String {
+        switch self {
+        case .general:
+            EvaluationSuite.defaultRubric
+        case .factual:
+            """
+            Every material claim agrees with the supplied reference answer or reference files.
+            The response includes all facts needed to answer the prompt.
+            The response does not invent unsupported details.
+            The response follows every requested format and length constraint.
+            """
+        case .summary:
+            """
+            The summary includes every central point from the supplied source.
+            The summary contains no claim that is unsupported by the source.
+            The summary removes repetition and nonessential detail.
+            The summary follows the requested length, format, and tone.
+            """
+        case .writing:
+            """
+            The response uses the requested audience, tone, and point of view.
+            The response communicates the intended meaning clearly and unambiguously.
+            The response is concise and contains no unnecessary repetition.
+            The response follows every requested structure and length constraint.
+            """
+        }
+    }
+}
+
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
 
@@ -92,42 +138,79 @@ struct SuiteEditorView: View {
     private var scoring: some View {
         GroupBox("Scoring") {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Picker("Metric", selection: $store.suite.scoringMode) {
-                        ForEach(ScoringMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
+                Text("How should each response be checked?")
+                    .font(.headline)
+                Picker("Scoring method", selection: $store.suite.scoringMode) {
+                    ForEach(ScoringMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
                     }
-                    .pickerStyle(.menu)
+                }
+                .pickerStyle(.segmented)
 
+                Text(store.suite.scoringMode.explanation)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                HStack {
                     Spacer()
-
                     Stepper("Repetitions: \(store.suite.repetitions)", value: $store.suite.repetitions, in: 1...5)
                 }
 
                 if store.suite.scoringMode == .modelJudge {
-                    Text("Evaluation criteria")
-                        .font(.headline)
+                    Divider()
+                    HStack {
+                        Text("Rubric requirements")
+                            .font(.headline)
+                        Spacer()
+                        Menu("Replace with template", systemImage: "wand.and.stars") {
+                            ForEach(RubricTemplate.allCases) { template in
+                                Button(template.title) {
+                                    store.suite.criteria = template.requirements
+                                }
+                            }
+                        }
+                    }
+                    Text("Write one observable requirement per line. Keep it to four or fewer; the score definitions are added automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     TextEditor(text: $store.suite.criteria)
-                        .accessibilityLabel("Evaluation criteria")
-                        .frame(minHeight: 70)
+                        .accessibilityLabel("AI rubric requirements")
+                        .font(.body.monospaced())
+                        .frame(minHeight: 105)
                         .padding(6)
                         .background(.background, in: .rect(cornerRadius: 6))
-                    Text("Use specific rating criteria. Calibrate judge scores against a small human-reviewed set before treating them as a release gate.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if store.suite.scoringMode == .review {
-                    Text("Responses are collected without a pass/fail score for human review.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("The expected text on each case is checked deterministically before any model-based judgment.")
+
+                    Label(
+                        "\(store.suite.rubricCriteria.count) of 4 recommended requirements",
+                        systemImage: (1...4).contains(store.suite.rubricCriteria.count) ? "checkmark.circle" : "exclamationmark.triangle"
+                    )
+                    .foregroundStyle((1...4).contains(store.suite.rubricCriteria.count) ? Color.secondary : Color.orange)
+
+                    rubricScale
+
+                    Label(
+                        "Advisory: the subject and judge use the same on-device model. Compare its scores with a small human-reviewed set before using them as a release gate.",
+                        systemImage: "person.2"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             .padding(8)
         }
+    }
+
+    private var rubricScale: some View {
+        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
+            GridRow { Text("4").bold(); Text("Every requirement is fully met; no material error.") }
+            GridRow { Text("3").bold(); Text("Core requirements are met; only minor issues. Pass.") }
+            GridRow { Text("2").bold(); Text("At least one requirement is materially unmet. Fail.") }
+            GridRow { Text("1").bold(); Text("Fundamentally wrong, off-task, or violates a key constraint. Fail.") }
+        }
+        .font(.caption)
+        .padding(10)
+        .background(.quaternary, in: .rect(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
     }
 
     private var attachments: some View {
@@ -234,7 +317,7 @@ private struct EvaluationCaseEditor: View {
                     .background(.background, in: .rect(cornerRadius: 6))
 
                 if scoringMode != .review {
-                    Text(scoringMode == .modelJudge ? "Reference answer (optional)" : "Expected text")
+                    Text(scoringMode.expectedLabel)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     TextEditor(text: $evaluationCase.expected)
@@ -242,6 +325,9 @@ private struct EvaluationCaseEditor: View {
                         .frame(minHeight: 58)
                         .padding(6)
                         .background(.background, in: .rect(cornerRadius: 6))
+                    Text(scoringMode.expectedHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding(8)
