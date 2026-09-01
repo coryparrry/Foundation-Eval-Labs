@@ -151,6 +151,10 @@ struct SuiteEditorView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
+                if store.suite.scoringMode.needsExpected {
+                    expectedValues
+                }
+
                 HStack {
                     Spacer()
                     Stepper("Repetitions: \(store.suite.repetitions)", value: $store.suite.repetitions, in: 1...5)
@@ -188,6 +192,8 @@ struct SuiteEditorView: View {
 
                     rubricScale
 
+                    expectedValues
+
                     Label(
                         "Advisory: the subject and judge use the same on-device model. Compare its scores with a small human-reviewed set before using them as a release gate.",
                         systemImage: "person.2"
@@ -197,6 +203,36 @@ struct SuiteEditorView: View {
                 }
             }
             .padding(8)
+        }
+    }
+
+    private var expectedValues: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            Text(store.suite.scoringMode.expectedLabel)
+                .font(.headline)
+            Text("Enter the value used to score each case. Each case can have a different value.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach($store.suite.cases) { $evaluationCase in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $evaluationCase.expected)
+                        .accessibilityLabel("\(store.suite.scoringMode.expectedLabel) for \(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)")
+                        .accessibilityIdentifier("Scoring expected text")
+                        .font(.body.monospaced())
+                        .frame(minHeight: 58)
+                        .padding(6)
+                        .background(.background, in: .rect(cornerRadius: 6))
+                }
+            }
+
+            Text(store.suite.scoringMode.expectedHelp)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -268,7 +304,6 @@ struct SuiteEditorView: View {
             ForEach($store.suite.cases) { $evaluationCase in
                 EvaluationCaseEditor(
                     evaluationCase: $evaluationCase,
-                    scoringMode: store.suite.scoringMode,
                     remove: { store.removeCase(id: evaluationCase.id) }
                 )
             }
@@ -290,7 +325,6 @@ private struct ModelStatusBadge: View {
 
 private struct EvaluationCaseEditor: View {
     @Binding var evaluationCase: EvaluationCase
-    var scoringMode: ScoringMode
     var remove: () -> Void
 
     var body: some View {
@@ -316,19 +350,6 @@ private struct EvaluationCaseEditor: View {
                     .padding(6)
                     .background(.background, in: .rect(cornerRadius: 6))
 
-                if scoringMode != .review {
-                    Text(scoringMode.expectedLabel)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    TextEditor(text: $evaluationCase.expected)
-                        .accessibilityLabel("Expected answer for \(evaluationCase.name)")
-                        .frame(minHeight: 58)
-                        .padding(6)
-                        .background(.background, in: .rect(cornerRadius: 6))
-                    Text(scoringMode.expectedHelp)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
             .padding(8)
         }
