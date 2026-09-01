@@ -52,34 +52,28 @@ struct SuiteEditorView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                instructions
-                scoring
-                attachments
-                cases
-            }
-            .padding(24)
-            .frame(maxWidth: 980, alignment: .leading)
-            .disabled(store.isRunning || store.isProcessingFiles)
-        }
-        .navigationTitle("Evaluation Suite")
-        .toolbar {
-            ToolbarItemGroup {
-                if store.isRunning {
-                    ProgressView(value: Double(store.completedSamples), total: Double(max(store.totalSamples, 1)))
-                        .frame(width: 120)
-                    Button("Cancel", role: .cancel) { store.cancelRun() }
-                } else {
-                    if store.isProcessingFiles {
-                        ProgressView("Importing files")
-                            .controlSize(.small)
-                    }
-                    Button("Run", systemImage: "play.fill") { store.startRun() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(store.isProcessingFiles)
+            VStack(alignment: .leading, spacing: 22) {
+                SuiteOverviewHeader(store: store)
+                RunReadinessPanel(store: store)
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 350), alignment: .top)],
+                    alignment: .leading,
+                    spacing: 18
+                ) {
+                    ModelInstructionsSection(store: store)
+                    SharedReferenceFilesSection(store: store)
                 }
+
+                ScoringSection(store: store)
+                CasesSection(store: store)
             }
+            .padding(28)
+            .frame(maxWidth: 1_080, alignment: .leading)
+        }
+        .navigationTitle("Suite Editor")
+        .toolbar {
+            RunToolbarContent(store: store)
         }
         .fileImporter(
             isPresented: $store.isImportingFiles,
@@ -92,54 +86,209 @@ struct SuiteEditorView: View {
             }
         }
     }
+}
 
-    private var header: some View {
+private struct SuiteOverviewHeader: View {
+    @Bindable var store: EvaluationStore
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
+            Text("ON-DEVICE EVALUATION SUITE")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.6)
+
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
                 TextField("Suite name", text: $store.suite.name)
                     .textFieldStyle(.plain)
-                    .font(.largeTitle.bold())
-                Spacer()
+                    .font(.title.bold())
+                    .accessibilityLabel("Suite name")
+
+                Spacer(minLength: 12)
                 ModelStatusBadge(status: store.modelStatus)
             }
 
-            HStack {
-                LabeledContent("Prompt version") {
+            HStack(spacing: 16) {
+                LabeledContent("Suite version") {
                     TextField("v1", text: $store.suite.version)
-                        .frame(width: 130)
+                        .frame(width: 110)
+                        .multilineTextAlignment(.trailing)
                 }
-                Spacer()
-                Text("Runs stay on this Mac and export as JSON.")
-                    .font(.caption)
+                .fixedSize()
+
+                Divider()
+                    .frame(height: 18)
+
+                Label("Saved automatically on this Mac", systemImage: "lock.laptopcomputer")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
         }
+        .disabled(store.isRunning || store.isProcessingFiles)
+    }
+}
+
+private struct RunReadinessPanel: View {
+    @Bindable var store: EvaluationStore
+
+    private var responseLabel: String {
+        "\(store.plannedSampleCount) response\(store.plannedSampleCount == 1 ? "" : "s")"
     }
 
-    private var instructions: some View {
-        GroupBox("Model setup") {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Instructions")
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: statusSymbol)
+                .font(.title2)
+                .foregroundStyle(statusColor)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(statusTitle)
                     .font(.headline)
-                TextEditor(text: $store.suite.instructions)
-                    .accessibilityLabel("Instructions")
-                    .font(.body.monospaced())
-                    .frame(minHeight: 90)
-                    .padding(6)
-                    .background(.background, in: .rect(cornerRadius: 6))
-                Text("A fresh LanguageModelSession uses these instructions for every case and repetition.")
-                    .font(.caption)
+                Text(statusDetail)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(8)
+
+            Spacer(minLength: 18)
+
+            if store.isRunning {
+                VStack(alignment: .trailing, spacing: 5) {
+                    Text("\(store.completedSamples) of \(store.totalSamples) responses")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    ProgressView(
+                        value: Double(store.completedSamples),
+                        total: Double(max(store.totalSamples, 1))
+                    )
+                    .frame(width: 150)
+                }
+                Button("Cancel", role: .cancel) { store.cancelRun() }
+            } else {
+                Button("Run \(responseLabel)", systemImage: "play.fill") {
+                    store.startRun()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(store.runBlocker != nil || store.isProcessingFiles)
+                .accessibilityIdentifier("Run evaluation")
+            }
+        }
+        .padding(16)
+        .background(statusColor.opacity(0.08), in: .rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(statusColor.opacity(0.22))
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var statusTitle: LocalizedStringResource {
+        if store.isRunning { return "Evaluation in progress" }
+        if store.isProcessingFiles { return "Importing reference files" }
+        return store.runBlocker == nil ? "Ready to run" : "Needs attention"
+    }
+
+    private var statusDetail: String {
+        if store.isRunning {
+            return "You can review the suite while the current run finishes."
+        }
+        if store.isProcessingFiles {
+            return "The suite will be ready when every selected file has been processed."
+        }
+        if let blocker = store.runBlocker {
+            return blocker
+        }
+        if store.suite.scoringMode == .modelJudge {
+            return "\(responseLabel) plus \(store.plannedSampleCount) AI rubric check\(store.plannedSampleCount == 1 ? "" : "s") · \(store.plannedRequestCount) on-device requests total."
+        }
+        return "\(responseLabel) · \(store.plannedRequestCount) on-device request\(store.plannedRequestCount == 1 ? "" : "s") total."
+    }
+
+    private var statusSymbol: String {
+        if store.isRunning { return "waveform.circle.fill" }
+        if store.isProcessingFiles { return "arrow.down.doc.fill" }
+        return store.runBlocker == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+    }
+
+    private var statusColor: Color {
+        if store.isRunning || store.isProcessingFiles { return .accentColor }
+        return store.runBlocker == nil ? .green : .orange
+    }
+}
+
+private struct RunToolbarContent: ToolbarContent {
+    @Bindable var store: EvaluationStore
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup {
+            if store.isRunning {
+                HStack(spacing: 8) {
+                    ProgressView(
+                        value: Double(store.completedSamples),
+                        total: Double(max(store.totalSamples, 1))
+                    )
+                    .frame(width: 90)
+                    Text("\(store.completedSamples) of \(store.totalSamples)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Evaluation progress")
+                Button("Cancel", role: .cancel) { store.cancelRun() }
+            } else {
+                if store.isProcessingFiles {
+                    ProgressView("Importing files")
+                        .controlSize(.small)
+                }
+                Button("Run", systemImage: "play.fill") { store.startRun() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.runBlocker != nil || store.isProcessingFiles)
+                    .help(store.runBlocker ?? "Run the current evaluation suite")
+            }
         }
     }
+}
 
-    private var scoring: some View {
-        GroupBox("Scoring") {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("How should each response be checked?")
-                    .font(.headline)
+private struct ModelInstructionsSection: View {
+    @Bindable var store: EvaluationStore
+
+    var body: some View {
+        EditorSection(
+            "Model instructions",
+            systemImage: "text.quote",
+            description: "Shared guidance applied to every test case."
+        ) {
+            TextEditor(text: $store.suite.instructions)
+                .accessibilityLabel("Model instructions")
+                .font(.body)
+                .frame(minHeight: 118)
+                .padding(8)
+                .background(.background, in: .rect(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.2))
+                }
+
+            Text("Each repetition starts with a fresh model session, so cases cannot influence one another.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .disabled(store.isRunning || store.isProcessingFiles)
+    }
+}
+
+private struct ScoringSection: View {
+    @Bindable var store: EvaluationStore
+
+    var body: some View {
+        EditorSection(
+            "Scoring and repetitions",
+            systemImage: "checkmark.seal",
+            description: "Choose how responses are judged and how many times each case runs."
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
                 Picker("Scoring method", selection: $store.suite.scoringMode) {
                     ForEach(ScoringMode.allCases) { mode in
                         Text(mode.title).tag(mode)
@@ -151,83 +300,128 @@ struct SuiteEditorView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                if store.suite.scoringMode.needsExpected {
-                    expectedValues
+                HStack {
+                    Label(
+                        "\(store.plannedSampleCount) response\(store.plannedSampleCount == 1 ? "" : "s") per run",
+                        systemImage: "square.stack.3d.up"
+                    )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Stepper(
+                        "Repetitions: \(store.suite.repetitions)",
+                        value: $store.suite.repetitions,
+                        in: 1...5
+                    )
                 }
 
-                HStack {
-                    Spacer()
-                    Stepper("Repetitions: \(store.suite.repetitions)", value: $store.suite.repetitions, in: 1...5)
+                if store.suite.scoringMode.needsExpected {
+                    ScoringExpectedValues(store: store)
                 }
 
                 if store.suite.scoringMode == .modelJudge {
-                    Divider()
-                    HStack {
-                        Text("Rubric requirements")
-                            .font(.headline)
-                        Spacer()
-                        Menu("Replace with template", systemImage: "wand.and.stars") {
-                            ForEach(RubricTemplate.allCases) { template in
-                                Button(template.title) {
-                                    store.suite.criteria = template.requirements
-                                }
-                            }
-                        }
-                    }
-                    Text("Write one observable requirement per line. Keep it to four or fewer; the score definitions are added automatically.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextEditor(text: $store.suite.criteria)
-                        .accessibilityLabel("AI rubric requirements")
-                        .font(.body.monospaced())
-                        .frame(minHeight: 105)
-                        .padding(6)
-                        .background(.background, in: .rect(cornerRadius: 6))
-
-                    Label(
-                        "\(store.suite.rubricCriteria.count) of 4 recommended requirements",
-                        systemImage: (1...4).contains(store.suite.rubricCriteria.count) ? "checkmark.circle" : "exclamationmark.triangle"
-                    )
-                    .foregroundStyle((1...4).contains(store.suite.rubricCriteria.count) ? Color.secondary : Color.orange)
-
-                    rubricScale
-
-                    expectedValues
-
-                    Label(
-                        "Advisory: the subject and judge use the same on-device model. Compare its scores with a small human-reviewed set before using them as a release gate.",
-                        systemImage: "person.2"
-                    )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    ModelRubricEditor(store: store)
+                    ScoringExpectedValues(store: store)
                 }
             }
-            .padding(8)
+            .disabled(store.isRunning || store.isProcessingFiles)
         }
     }
+}
 
-    private var expectedValues: some View {
-        VStack(alignment: .leading, spacing: 8) {
+private struct ModelRubricEditor: View {
+    @Bindable var store: EvaluationStore
+
+    private var isValid: Bool {
+        (1...4).contains(store.suite.rubricCriteria.count)
+    }
+
+    var body: some View {
+        Divider()
+
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("AI rubric requirements")
+                    .font(.headline)
+                Text("Write one observable requirement per line, up to four.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu("Use Template", systemImage: "wand.and.stars") {
+                ForEach(RubricTemplate.allCases) { template in
+                    Button(template.title) {
+                        store.suite.criteria = template.requirements
+                    }
+                }
+            }
+        }
+
+        TextEditor(text: $store.suite.criteria)
+            .accessibilityLabel("AI rubric requirements")
+            .font(.body)
+            .frame(minHeight: 112)
+            .padding(8)
+            .background(.background, in: .rect(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.secondary.opacity(0.2))
+            }
+
+        Label(
+            "\(store.suite.rubricCriteria.count) of 4 requirements",
+            systemImage: isValid ? "checkmark.circle" : "exclamationmark.triangle"
+        )
+        .font(.callout)
+        .foregroundStyle(isValid ? Color.secondary : Color.orange)
+
+        RubricScale()
+
+        Label(
+            "The response and its score come from the same on-device model. Compare scores with a small human-reviewed set before using them as a release gate.",
+            systemImage: "person.2"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+}
+
+private struct ScoringExpectedValues: View {
+    @Bindable var store: EvaluationStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
             Divider()
             Text(store.suite.scoringMode.expectedLabel)
                 .font(.headline)
-            Text("Enter the value used to score each case. Each case can have a different value.")
+            Text("Set the scoring value for each case. The prompt preview keeps the value tied to the right test.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             ForEach($store.suite.cases) { $evaluationCase in
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 7) {
                     Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.callout.weight(.semibold))
+
+                    Text(evaluationCase.prompt.isEmpty ? "No prompt entered yet." : evaluationCase.prompt)
+                        .font(.caption)
+                        .foregroundStyle(evaluationCase.prompt.isEmpty ? .tertiary : .secondary)
+                        .lineLimit(2)
+
                     TextEditor(text: $evaluationCase.expected)
                         .accessibilityLabel("\(store.suite.scoringMode.expectedLabel) for \(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)")
                         .accessibilityIdentifier("Scoring expected text")
-                        .font(.body.monospaced())
-                        .frame(minHeight: 58)
-                        .padding(6)
-                        .background(.background, in: .rect(cornerRadius: 6))
+                        .font(store.suite.scoringMode == .modelJudge ? .body : .body.monospaced())
+                        .frame(minHeight: 64)
+                        .padding(8)
+                        .background(.background, in: .rect(cornerRadius: 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.secondary.opacity(0.2))
+                        }
                 }
+                .padding(12)
+                .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 10))
             }
 
             Text(store.suite.scoringMode.expectedHelp)
@@ -235,75 +429,52 @@ struct SuiteEditorView: View {
                 .foregroundStyle(.secondary)
         }
     }
+}
 
-    private var rubricScale: some View {
-        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
-            GridRow { Text("4").bold(); Text("Every requirement is fully met; no material error.") }
-            GridRow { Text("3").bold(); Text("Core requirements are met; only minor issues. Pass.") }
-            GridRow { Text("2").bold(); Text("At least one requirement is materially unmet. Fail.") }
-            GridRow { Text("1").bold(); Text("Fundamentally wrong, off-task, or violates a key constraint. Fail.") }
+private struct RubricScale: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Passing score: 3 or 4")
+                .font(.caption.weight(.semibold))
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                GridRow { Text("4").bold(); Text("Every requirement is fully met; no material error.") }
+                GridRow { Text("3").bold(); Text("Core requirements are met; only minor issues.") }
+                GridRow { Text("2").bold(); Text("At least one requirement is materially unmet.") }
+                GridRow { Text("1").bold(); Text("Fundamentally wrong, off-task, or violates a key constraint.") }
+            }
+            .font(.caption)
         }
-        .font(.caption)
-        .padding(10)
-        .background(.quaternary, in: .rect(cornerRadius: 8))
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.55), in: .rect(cornerRadius: 9))
         .accessibilityElement(children: .combine)
     }
+}
 
-    private var attachments: some View {
-        GroupBox("Reference files") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Text, JSON, CSV, PDF, and up to four images")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Add Files", systemImage: "paperclip") {
-                        store.isImportingFiles = true
-                    }
-                    .disabled(store.isRunning || store.isProcessingFiles)
-                }
+private struct CasesSection: View {
+    @Bindable var store: EvaluationStore
 
-                if store.suite.attachments.isEmpty {
-                    Text("No files attached. Text and PDF content is added to each prompt; images use Foundation Models attachments.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    ForEach(store.suite.attachments) { attachment in
-                        HStack {
-                            Image(systemName: attachment.kind == .image ? "photo" : "doc.text")
-                                .foregroundStyle(.secondary)
-                            Text(attachment.name)
-                                .lineLimit(1)
-                            Spacer()
-                            Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Button("Remove", systemImage: "xmark", role: .destructive) {
-                                store.removeAttachment(id: attachment.id)
-                            }
-                            .labelStyle(.iconOnly)
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-            .padding(8)
-        }
-    }
-
-    private var cases: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    var body: some View {
+        EditorSection(
+            "Test cases",
+            systemImage: "list.bullet.rectangle",
+            description: "Each case gets its own fresh model session and produces one result per repetition."
+        ) {
             HStack {
-                Text("Cases")
-                    .font(.title2.bold())
-                Text("\(store.suite.cases.count)")
+                Text("\(store.suite.cases.count) case\(store.suite.cases.count == 1 ? "" : "s")")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Add Case", systemImage: "plus") { store.addCase() }
+                    .disabled(store.isRunning || store.isProcessingFiles)
             }
 
             ForEach($store.suite.cases) { $evaluationCase in
                 EvaluationCaseEditor(
                     evaluationCase: $evaluationCase,
+                    canDelete: store.suite.cases.count > 1,
+                    isDisabled: store.isRunning || store.isProcessingFiles,
+                    duplicate: { store.duplicateCase(id: evaluationCase.id) },
                     remove: { store.removeCase(id: evaluationCase.id) }
                 )
             }
@@ -311,47 +482,256 @@ struct SuiteEditorView: View {
     }
 }
 
-private struct ModelStatusBadge: View {
-    var status: ModelStatus
-
-    var body: some View {
-        Label(status.label, systemImage: status.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-            .foregroundStyle(status.isAvailable ? .green : .orange)
-            .help(status.detail)
-            .accessibilityLabel("Foundation model status")
-            .accessibilityValue(status.label)
-    }
-}
-
 private struct EvaluationCaseEditor: View {
     @Binding var evaluationCase: EvaluationCase
-    var remove: () -> Void
+    let canDelete: Bool
+    let isDisabled: Bool
+    let duplicate: () -> Void
+    let remove: () -> Void
+    @State private var isConfirmingDeletion = false
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    TextField("Case name", text: $evaluationCase.name)
-                        .font(.headline)
-                        .textFieldStyle(.plain)
-                    Spacer()
-                    Button("Delete Case", systemImage: "trash", role: .destructive, action: remove)
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.plain)
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                TextField("Case name", text: $evaluationCase.name)
+                    .font(.headline)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Case name")
 
+                Spacer()
+
+                Menu("Case actions", systemImage: "ellipsis.circle") {
+                    Button("Duplicate Case", systemImage: "plus.square.on.square", action: duplicate)
+                    Divider()
+                    Button("Delete Case", systemImage: "trash", role: .destructive) {
+                        isConfirmingDeletion = true
+                    }
+                    .disabled(!canDelete)
+                }
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .help("Case actions")
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
                 Text("Prompt")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 TextEditor(text: $evaluationCase.prompt)
-                    .accessibilityLabel("Prompt for \(evaluationCase.name)")
-                    .font(.body.monospaced())
-                    .frame(minHeight: 90)
-                    .padding(6)
-                    .background(.background, in: .rect(cornerRadius: 6))
-
+                    .accessibilityLabel("Prompt for \(evaluationCase.name.isEmpty ? "untitled case" : evaluationCase.name)")
+                    .font(.body)
+                    .frame(minHeight: 104)
+                    .padding(8)
+                    .background(.background, in: .rect(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.2))
+                    }
             }
-            .padding(8)
+        }
+        .padding(14)
+        .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 11))
+        .disabled(isDisabled)
+        .confirmationDialog(
+            "Delete \(evaluationCase.name.isEmpty ? "this case" : evaluationCase.name)?",
+            isPresented: $isConfirmingDeletion,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Case", role: .destructive, action: remove)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes its prompt and scoring value from the suite.")
+        }
+    }
+}
+
+private struct SharedReferenceFilesSection: View {
+    @Bindable var store: EvaluationStore
+    @State private var isDropTargeted = false
+
+    private var imageCount: Int {
+        store.suite.attachments.count(where: { $0.kind == .image })
+    }
+
+    var body: some View {
+        EditorSection(
+            "Shared reference files",
+            systemImage: "paperclip",
+            description: "Applied to every case. Text is extracted; images are attached directly."
+        ) {
+            HStack {
+                Label("\(store.suite.attachments.count) file\(store.suite.attachments.count == 1 ? "" : "s")", systemImage: "doc.on.doc")
+                Text("·")
+                Text("Images \(imageCount) of 4")
+                Spacer()
+                Button("Add Files", systemImage: "plus") {
+                    store.isImportingFiles = true
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+
+            if store.suite.attachments.isEmpty {
+                Button {
+                    store.isImportingFiles = true
+                } label: {
+                    VStack(spacing: 7) {
+                        Image(systemName: isDropTargeted ? "arrow.down.doc.fill" : "arrow.down.doc")
+                            .font(.title2)
+                            .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
+                        Text(isDropTargeted ? "Drop to add files" : "Drop files here or choose files")
+                            .font(.callout.weight(.medium))
+                        Text("Text, JSON, CSV, PDF, and up to four images")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 104)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(
+                            isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.28),
+                            style: StrokeStyle(lineWidth: isDropTargeted ? 2 : 1, dash: [6, 5])
+                        )
+                }
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(store.suite.attachments) { attachment in
+                        AttachmentRow(
+                            attachment: attachment,
+                            remove: { store.removeAttachment(id: attachment.id) }
+                        )
+                        if attachment.id != store.suite.attachments.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 9))
+            }
+        }
+        .disabled(store.isRunning || store.isProcessingFiles)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !urls.isEmpty else { return false }
+            store.importFiles(urls)
+            return true
+        } isTargeted: { isTargeted in
+            isDropTargeted = isTargeted
+        }
+    }
+}
+
+private struct AttachmentRow: View {
+    let attachment: EvaluationAttachment
+    let remove: () -> Void
+    @State private var isConfirmingDeletion = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: attachment.kind == .image ? "photo" : "doc.text")
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(attachment.name)
+                    .lineLimit(1)
+                Text(attachment.kind == .image ? "Image attachment" : "Extracted text")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button("Remove \(attachment.name)", systemImage: "xmark", role: .destructive) {
+                isConfirmingDeletion = true
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 9)
+        .confirmationDialog(
+            "Remove \(attachment.name)?",
+            isPresented: $isConfirmingDeletion,
+            titleVisibility: .visible
+        ) {
+            Button("Remove File", role: .destructive, action: remove)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The file will no longer be included in future runs.")
+        }
+    }
+}
+
+private struct ModelStatusBadge: View {
+    let status: ModelStatus
+
+    var body: some View {
+        Label(
+            status.label,
+            systemImage: status.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.callout.weight(.medium))
+        .foregroundStyle(status.isAvailable ? Color.green : Color.orange)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.7), in: .capsule)
+        .help(status.detail)
+        .accessibilityLabel("Foundation model status")
+        .accessibilityValue("\(status.label). \(status.detail)")
+    }
+}
+
+private struct EditorSection<Content: View>: View {
+    let title: LocalizedStringResource
+    let systemImage: String
+    let sectionDescription: LocalizedStringResource
+    @ViewBuilder let content: Content
+
+    init(
+        _ title: LocalizedStringResource,
+        systemImage: String,
+        description: LocalizedStringResource,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        sectionDescription = description
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: systemImage)
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.title3.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Text(sectionDescription)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+            content
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: .rect(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.secondary.opacity(0.14))
         }
     }
 }

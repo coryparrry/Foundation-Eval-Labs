@@ -10,11 +10,15 @@ final class FoundationEvalsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["Evaluation Suite"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Suite Editor"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Run"].exists)
         XCTAssertTrue(app.buttons["Add Files"].exists)
         XCTAssertTrue(app.buttons["Add Case"].exists)
-        XCTAssertTrue(app.staticTexts["How should each response be checked?"].exists)
+        XCTAssertTrue(app.staticTexts["Scoring and repetitions"].exists)
+        XCTAssertTrue(
+            app.staticTexts["Ready to run"].exists
+                || app.staticTexts["Needs attention"].exists
+        )
         XCTAssertTrue(app.radioButtons["AI rubric"].exists)
 
         let expectedInputs = app.textViews.matching(identifier: "Scoring expected text")
@@ -30,5 +34,10 @@ final class FoundationEvalsUITests: XCTestCase {
 
         app.radioButtons["AI rubric"].click()
         XCTAssertEqual(expectedInputs.count, 1)
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Refined suite editor"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 }

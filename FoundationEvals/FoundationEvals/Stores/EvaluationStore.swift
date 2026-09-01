@@ -24,9 +24,10 @@ final class EvaluationStore {
     private let runsDirectory: URL
     private var runTask: Task<Void, Never>?
 
-    init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "FoundationEvals", directoryHint: .isDirectory)
+    init(supportDirectory customSupportDirectory: URL? = nil) {
+        let base = customSupportDirectory
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appending(path: "FoundationEvals", directoryHint: .isDirectory)
         supportDirectory = base
         attachmentsDirectory = base.appending(path: "Attachments", directoryHint: .isDirectory)
         runsDirectory = base.appending(path: "Runs", directoryHint: .isDirectory)
@@ -50,9 +51,12 @@ final class EvaluationStore {
                 initialSuite.cases[0].expected = EvaluationSuite().cases[0].expected
             }
         }
-        let initialNotice = [startupNotice, loadedSuite.notice].compactMap { $0 }.joined(separator: "\n")
+        let loadedRuns = Self.loadRuns(from: runsDirectory)
+        let initialNotice = [startupNotice, loadedSuite.notice, loadedRuns.notice]
+            .compactMap { $0 }
+            .joined(separator: "\n")
         suite = initialSuite
-        runs = Self.loadRuns(from: runsDirectory)
+        runs = loadedRuns.runs
         notice = initialNotice.isEmpty ? nil : initialNotice
         if migratedRubric { saveSuite() }
     }
@@ -72,6 +76,18 @@ final class EvaluationStore {
         }
     }
 
+    var plannedSampleCount: Int {
+        suite.cases.count * suite.repetitions
+    }
+
+    var plannedRequestCount: Int {
+        plannedSampleCount * (suite.scoringMode == .modelJudge ? 2 : 1)
+    }
+
+    var runBlocker: String? {
+        validationError()
+    }
+
     func addCase() {
         suite.cases.append(
             EvaluationCase(
@@ -82,12 +98,39 @@ final class EvaluationStore {
         )
     }
 
+    func duplicateCase(id: UUID) {
+        guard let index = suite.cases.firstIndex(where: { $0.id == id }) else { return }
+        var copy = suite.cases[index]
+        copy.id = UUID()
+        copy.name = copy.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Copied case"
+            : "\(copy.name) copy"
+        suite.cases.insert(copy, at: index + 1)
+    }
+
     func removeCase(id: UUID) {
         guard suite.cases.count > 1 else {
             notice = "An evaluation suite needs at least one case."
             return
         }
         suite.cases.removeAll { $0.id == id }
+    }
+
+    func deleteRun(id: UUID) {
+        guard runs.contains(where: { $0.id == id }) else { return }
+        do {
+            try FileManager.default.removeItem(at: runsDirectory.appending(path: "\(id.uuidString).json"))
+        } catch CocoaError.fileNoSuchFile {
+            // Remove the history entry even if its backing file is already gone.
+        } catch {
+            notice = "Could not delete the saved run: \(error.localizedDescription)"
+            return
+        }
+
+        runs.removeAll { $0.id == id }
+        if selection == .run(id) {
+            selection = .suite
+        }
     }
 
     func importFiles(_ urls: [URL]) {
@@ -148,7 +191,7 @@ final class EvaluationStore {
             notice = "Wait for file import to finish before running the suite."
             return
         }
-        guard let validationError = validationError() else {
+        guard let validationError = runBlocker else {
             let suiteSnapshot = suite
             let images = imageInputs(for: suiteSnapshot)
             isRunning = true
@@ -326,18 +369,28 @@ final class EvaluationStore {
         }
     }
 
-    private static func loadRuns(from directory: URL) -> [EvaluationRun] {
+    private static func loadRuns(from directory: URL) -> (runs: [EvaluationRun], notice: String?) {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil
-        ) else { return [] }
-        return urls
+        ) else { return ([], nil) }
+
+        var unreadableCount = 0
+        let runs = urls
             .filter { $0.pathExtension == "json" }
-            .compactMap { url in
-                guard let data = try? Data(contentsOf: url) else { return nil }
-                return try? decoder.decode(EvaluationRun.self, from: data)
+            .compactMap { url -> EvaluationRun? in
+                guard let data = try? Data(contentsOf: url),
+                      let run = try? decoder.decode(EvaluationRun.self, from: data) else {
+                    unreadableCount += 1
+                    return nil
+                }
+                return run
             }
             .sorted { $0.startedAt > $1.startedAt }
+        let notice = unreadableCount == 0
+            ? nil
+            : "\(unreadableCount) saved run\(unreadableCount == 1 ? "" : "s") could not be read and was left unchanged on disk."
+        return (runs, notice)
     }
 
     private static let encoder: JSONEncoder = {

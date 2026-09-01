@@ -122,6 +122,7 @@ actor EvaluationRunner {
             repetitions: suite.repetitions,
             judgePromptVersion: suite.scoringMode == .modelJudge ? "rubric-v2" : nil,
             judgePassingScore: suite.scoringMode == .modelJudge ? EvaluationSuite.judgePassingScore : nil,
+            plannedSampleCount: total,
             startedAt: startedAt,
             completedAt: Date(),
             cancelled: cancelled,

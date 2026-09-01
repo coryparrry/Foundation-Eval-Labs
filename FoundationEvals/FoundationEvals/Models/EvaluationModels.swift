@@ -178,6 +178,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var repetitions: Int
     var judgePromptVersion: String?
     var judgePassingScore: Int?
+    var plannedSampleCount: Int?
     var startedAt: Date
     var completedAt: Date
     var cancelled: Bool
@@ -192,6 +193,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
         results.count(where: { $0.errorCategory != nil || $0.judgeErrorCategory != nil })
     }
     var scoredCount: Int { passedCount + failedCount }
+    var plannedResultCount: Int { plannedSampleCount ?? results.count }
 
     var passRate: Double? {
         scoredCount == 0 ? nil : Double(passedCount) / Double(scoredCount)
@@ -204,6 +206,10 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
 
     var averageDurationMilliseconds: Double {
         results.isEmpty ? 0 : results.map(\.durationMilliseconds).reduce(0, +) / Double(results.count)
+    }
+
+    var totalDuration: Duration {
+        .seconds(completedAt.timeIntervalSince(startedAt))
     }
 
     var totalTokens: Int {

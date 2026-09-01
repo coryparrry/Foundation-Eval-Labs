@@ -25,9 +25,11 @@ The app itself uses the system `FoundationModels` framework. It does not link th
 - Gives every case a fresh `LanguageModelSession` with shared instructions.
 - Runs one to five repetitions to reveal probabilistic variation.
 - Supports deterministic exact/contains checks, trace collection without scoring, and a guided 1–4 AI rubric with editable templates.
-- Imports UTF-8 text, JSON, CSV, extractable PDF text, and up to four image attachments.
+- Shows model readiness and the complete on-device request workload before a run starts.
+- Imports or accepts dropped UTF-8 text, JSON, CSV, extractable PDF text, and up to four image attachments.
 - Records the effective model input, response, score, rationale, separate subject/judge latency and public token usage, framework error categories, OS/locale, prompt version, and attachment hashes.
-- Saves run history locally in Application Support and exports complete JSON reports.
+- Saves searchable run history locally in Application Support, supports confirmed local deletion, and exports complete JSON reports.
+- Filters and searches run results, keeps failures expanded for review, and provides one-click response copying.
 - Emits metadata-only `OSSignposter` intervals for Instruments correlation.
 
 ## Evaluation practice

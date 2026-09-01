@@ -1,29 +1,77 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum ResultFilter: String, CaseIterable, Identifiable {
+    case all
+    case passed
+    case failed
+    case issues
+
+    var id: Self { self }
+
+    var title: LocalizedStringResource {
+        switch self {
+        case .all: "All"
+        case .passed: "Passed"
+        case .failed: "Failed"
+        case .issues: "Issues"
+        }
+    }
+
+    func includes(_ result: EvaluationSampleResult) -> Bool {
+        switch self {
+        case .all:
+            true
+        case .passed:
+            result.status == .passed
+        case .failed:
+            result.status == .failed
+        case .issues:
+            result.status == .error || result.status == .unscored || result.judgeErrorMessage != nil
+        }
+    }
+}
+
 struct RunDetailView: View {
-    var run: EvaluationRun
+    let run: EvaluationRun
     @State private var exportDocument = JSONDocument()
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var resultFilter = ResultFilter.all
+    @State private var resultSearch = ""
+
+    private var visibleResults: [EvaluationSampleResult] {
+        let query = resultSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return run.results.filter { result in
+            resultFilter.includes(result)
+                && (query.isEmpty
+                    || result.caseName.localizedCaseInsensitiveContains(query)
+                    || result.prompt.localizedCaseInsensitiveContains(query)
+                    || result.response.localizedCaseInsensitiveContains(query)
+                    || result.errorMessage?.localizedCaseInsensitiveContains(query) == true)
+        }
+    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                summary
-                configuration
-
-                ForEach(run.results) { result in
-                    resultCard(result)
-                }
+            VStack(alignment: .leading, spacing: 22) {
+                RunOverviewHeader(run: run)
+                RunSummaryGrid(run: run)
+                RunConfigurationSection(run: run)
+                ResultsSection(
+                    run: run,
+                    results: visibleResults,
+                    filter: $resultFilter,
+                    searchText: $resultSearch
+                )
             }
-            .padding(24)
-            .frame(maxWidth: 980, alignment: .leading)
+            .padding(28)
+            .frame(maxWidth: 1_100, alignment: .leading)
         }
-        .navigationTitle(run.suiteName)
+        .navigationTitle("Run Results")
         .toolbar {
-            Button("Export JSON", systemImage: "square.and.arrow.up") {
+            Button("Export Run as JSON", systemImage: "square.and.arrow.up") {
                 exportDocument = JSONDocument(run: run)
                 isExporting = true
             }
@@ -38,153 +86,16 @@ struct RunDetailView: View {
                 exportError = error.localizedDescription
             }
         }
-        .alert("Could not export trace", isPresented: Binding(
-            get: { exportError != nil },
-            set: { if !$0 { exportError = nil } }
-        )) {
+        .alert(
+            "Could not export run",
+            isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            )
+        ) {
             Button("OK") { exportError = nil }
         } message: {
             Text(exportError ?? "")
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(run.suiteName)
-                    .font(.largeTitle.bold())
-                if run.cancelled {
-                    Text("Cancelled")
-                        .foregroundStyle(.orange)
-                } else if run.terminationReason == "rateLimited" {
-                    Text("Stopped: rate limited")
-                        .foregroundStyle(.orange)
-                }
-                Spacer()
-                Text(run.startedAt, format: .dateTime.year().month().day().hour().minute().second())
-                    .foregroundStyle(.secondary)
-            }
-            Text("\(run.suiteVersion) • \(run.scoringMode.title) • \(run.repetitions) repetition\(run.repetitions == 1 ? "" : "s")")
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var summary: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
-            MetricCard(title: "Pass rate (scored)", value: run.passRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—")
-            if let averageScore = run.averageScore {
-                MetricCard(title: "Average AI score", value: "\(averageScore.formatted(.number.precision(.fractionLength(1)))) / 4")
-            }
-            MetricCard(title: "Scored", value: "\(run.scoredCount) / \(run.results.count)")
-            MetricCard(title: "Passed / Failed", value: "\(run.passedCount) / \(run.failedCount)")
-            MetricCard(title: "Errors", value: "\(run.errorCount)")
-            MetricCard(title: "Avg subject latency", value: Duration.milliseconds(run.averageDurationMilliseconds).formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)))
-            MetricCard(title: "Tokens", value: run.totalTokens.formatted())
-        }
-    }
-
-    private var configuration: some View {
-        DisclosureGroup("Run configuration") {
-            VStack(alignment: .leading, spacing: 12) {
-                LabeledText(label: "Instructions", text: run.instructions.isEmpty ? "None" : run.instructions)
-                if run.scoringMode == .modelJudge {
-                    LabeledText(label: "AI rubric requirements", text: run.criteria)
-                    LabeledText(
-                        label: "AI judge",
-                        text: "Prompt \(run.judgePromptVersion ?? "legacy") • scores \(run.judgePassingScore ?? EvaluationSuite.judgePassingScore)–4 pass • same on-device model as subject"
-                    )
-                }
-                LabeledText(
-                    label: "Environment",
-                    text: "\(run.environment.model) • context \(run.environment.modelContextSize) tokens • \(run.environment.operatingSystem) • \(run.environment.locale)"
-                )
-                if !run.attachments.isEmpty {
-                    LabeledText(
-                        label: "Reference files",
-                        text: run.attachments.map { "\($0.name) (\($0.kind.rawValue), \($0.byteCount) bytes, SHA-256 \($0.sha256))" }.joined(separator: "\n")
-                    )
-                }
-            }
-            .padding(.top, 8)
-        }
-    }
-
-    private func resultCard(_ result: EvaluationSampleResult) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Label(result.caseName, systemImage: statusSymbol(result.status))
-                        .foregroundStyle(statusColor(result.status))
-                        .font(.headline)
-                        .accessibilityValue(result.status.rawValue.capitalized)
-                    if run.repetitions > 1 {
-                        Text("Run \(result.repetition)")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if let score = result.score {
-                        Text("\(score) / 4 • \(score >= (run.judgePassingScore ?? EvaluationSuite.judgePassingScore) ? "Pass" : "Fail")")
-                            .font(.headline.monospacedDigit())
-                    }
-                }
-
-                if let errorMessage = result.errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(.red)
-                    Text(result.errorCategory ?? "error")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                } else {
-                    LabeledText(label: "Prompt", text: result.prompt)
-                    if let effectivePrompt = result.effectivePrompt, effectivePrompt != result.prompt {
-                        LabeledText(label: "Effective model input", text: effectivePrompt)
-                    }
-                    if !result.expected.isEmpty {
-                        LabeledText(label: "Expected / reference answer", text: result.expected)
-                    }
-                    LabeledText(label: "Response", text: result.response)
-                    if let rationale = result.rationale {
-                        LabeledText(label: run.scoringMode == .modelJudge ? "Judge rationale" : "Scoring rationale", text: rationale)
-                    }
-                    if let judgeErrorMessage = result.judgeErrorMessage {
-                        Text(judgeErrorMessage)
-                            .foregroundStyle(.red)
-                        Text("Judge: \(result.judgeErrorCategory ?? "error")")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Divider()
-                Text("\(result.durationMilliseconds.formatted(.number.precision(.fractionLength(0)))) ms • \(result.usage.inputTokens) input • \(result.usage.outputTokens) output • \(result.usage.cachedInputTokens) cached")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                if let judgeDuration = result.judgeDurationMilliseconds {
-                    let judgeUsage = result.judgeUsage ?? EvaluationUsage()
-                    Text("Judge: \(judgeDuration.formatted(.number.precision(.fractionLength(0)))) ms • \(judgeUsage.inputTokens) input • \(judgeUsage.outputTokens) output • \(judgeUsage.cachedInputTokens) cached")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(8)
-            .textSelection(.enabled)
-        }
-    }
-
-    private func statusSymbol(_ status: EvaluationResultStatus) -> String {
-        switch status {
-        case .passed: "checkmark.circle.fill"
-        case .failed: "xmark.circle.fill"
-        case .unscored: "circle.dotted"
-        case .error: "exclamationmark.triangle.fill"
-        }
-    }
-
-    private func statusColor(_ status: EvaluationResultStatus) -> Color {
-        switch status {
-        case .passed: .green
-        case .failed, .error: .red
-        case .unscored: .secondary
         }
     }
 
@@ -193,27 +104,452 @@ struct RunDetailView: View {
     }
 }
 
-private struct MetricCard: View {
-    var title: String
-    var value: String
+private struct RunOverviewHeader: View {
+    let run: EvaluationRun
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("EVALUATION RUN")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.6)
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(run.suiteName)
+                    .font(.largeTitle.bold())
+                RunStatusBadge(run: run)
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                Text(run.suiteVersion)
+                Text("·")
+                Text(run.scoringMode.title)
+                Text("·")
+                Text(run.startedAt, format: .dateTime.year().month().day().hour().minute().second())
+                Text("·")
+                Text(run.totalDuration.formatted(.units(allowed: [.minutes, .seconds], width: .abbreviated)))
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
+private struct RunStatusBadge: View {
+    let run: EvaluationRun
+
+    private var title: LocalizedStringResource {
+        if run.cancelled { return "Cancelled" }
+        if run.terminationReason == "rateLimited" { return "Stopped early" }
+        if run.errorCount > 0 { return "Completed with issues" }
+        if run.failedCount > 0 { return "Completed with failures" }
+        return "Completed"
+    }
+
+    private var symbol: String {
+        if run.cancelled { return "stop.circle.fill" }
+        if run.terminationReason == "rateLimited" || run.errorCount > 0 { return "exclamationmark.circle.fill" }
+        if run.failedCount > 0 { return "xmark.circle.fill" }
+        return "checkmark.circle.fill"
+    }
+
+    private var color: Color {
+        if run.cancelled || run.terminationReason == "rateLimited" { return .orange }
+        return run.errorCount > 0 || run.failedCount > 0 ? .red : .green
+    }
+
+    var body: some View {
+        Label(title, systemImage: symbol)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(color.opacity(0.09), in: .capsule)
+    }
+}
+
+private struct RunSummaryGrid: View {
+    let run: EvaluationRun
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
+            MetricCard(
+                title: "Scored pass rate",
+                value: run.passRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—",
+                symbol: "chart.bar.fill"
+            )
+            MetricCard(
+                title: "Completed",
+                value: "\(run.results.count) / \(run.plannedResultCount)",
+                symbol: "checklist"
+            )
+            MetricCard(title: "Passed", value: run.passedCount.formatted(), symbol: "checkmark.circle")
+            MetricCard(title: "Failed", value: run.failedCount.formatted(), symbol: "xmark.circle")
+            MetricCard(title: "Issues", value: run.errorCount.formatted(), symbol: "exclamationmark.triangle")
+            if let averageScore = run.averageScore {
+                MetricCard(
+                    title: "Average AI score",
+                    value: "\(averageScore.formatted(.number.precision(.fractionLength(1)))) / 4",
+                    symbol: "sparkles"
+                )
+            }
+            MetricCard(
+                title: "Average latency",
+                value: Duration.milliseconds(run.averageDurationMilliseconds)
+                    .formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)),
+                symbol: "timer"
+            )
+            MetricCard(title: "Tokens", value: run.totalTokens.formatted(), symbol: "number")
+        }
+    }
+}
+
+private struct RunConfigurationSection: View {
+    let run: EvaluationRun
+
+    var body: some View {
+        DisclosureGroup("Run configuration") {
+            VStack(alignment: .leading, spacing: 14) {
+                LabeledText(label: "Instructions", text: run.instructions.isEmpty ? "None" : run.instructions)
+                if run.scoringMode == .modelJudge {
+                    LabeledText(label: "AI rubric requirements", text: run.criteria)
+                    LabeledText(
+                        label: "AI judge",
+                        text: "Prompt \(run.judgePromptVersion ?? "legacy") · scores \(run.judgePassingScore ?? EvaluationSuite.judgePassingScore)–4 pass · same on-device model as the response"
+                    )
+                }
+                LabeledText(
+                    label: "Environment",
+                    text: "\(run.environment.model) · \(run.environment.modelContextSize) token context · \(run.environment.operatingSystem) · \(run.environment.locale)"
+                )
+                if !run.attachments.isEmpty {
+                    LabeledText(
+                        label: "Shared reference files",
+                        text: run.attachments.map {
+                            "\($0.name) (\($0.kind.rawValue), \($0.byteCount) bytes, SHA-256 \($0.sha256))"
+                        }.joined(separator: "\n")
+                    )
+                }
+            }
+            .padding(.top, 12)
+        }
+        .font(.headline)
+        .padding(18)
+        .background(.thinMaterial, in: .rect(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.secondary.opacity(0.14))
+        }
+    }
+}
+
+private struct ResultsSection: View {
+    let run: EvaluationRun
+    let results: [EvaluationSampleResult]
+    @Binding var filter: ResultFilter
+    @Binding var searchText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Results")
+                    .font(.title2.bold())
+                    .accessibilityAddTraits(.isHeader)
+                Text("\(results.count)")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+
+            HStack(spacing: 12) {
+                Picker("Result filter", selection: $filter) {
+                    ForEach(ResultFilter.allCases) { filter in
+                        Text(filter.title).tag(filter)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 390)
+
+                Spacer()
+
+                TextField("Search case, prompt, or response", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 290)
+            }
+
+            if results.isEmpty {
+                ContentUnavailableView(
+                    "No Matching Results",
+                    systemImage: "line.3.horizontal.decrease.circle",
+                    description: Text("Change the filter or search text to see more results.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 220)
+            } else {
+                ForEach(results) { result in
+                    ResultDisclosureCard(
+                        result: result,
+                        scoringMode: run.scoringMode,
+                        repetitions: run.repetitions,
+                        passingScore: run.judgePassingScore ?? EvaluationSuite.judgePassingScore
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct ResultDisclosureCard: View {
+    let result: EvaluationSampleResult
+    let scoringMode: ScoringMode
+    let repetitions: Int
+    let passingScore: Int
+    @State private var isExpanded: Bool
+    @State private var hasCopiedResponse = false
+
+    init(
+        result: EvaluationSampleResult,
+        scoringMode: ScoringMode,
+        repetitions: Int,
+        passingScore: Int
+    ) {
+        self.result = result
+        self.scoringMode = scoringMode
+        self.repetitions = repetitions
+        self.passingScore = passingScore
+        _isExpanded = State(initialValue: result.status != .passed)
+    }
+
+    var body: some View {
+        GroupBox {
+            DisclosureGroup(isExpanded: $isExpanded) {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let errorMessage = result.errorMessage {
+                        ErrorBanner(
+                            title: "Response failed",
+                            message: errorMessage,
+                            category: result.errorCategory
+                        )
+                    }
+
+                    LabeledText(label: "Prompt", text: result.prompt)
+
+                    if let effectivePrompt = result.effectivePrompt, effectivePrompt != result.prompt {
+                        LabeledText(label: "Effective model input", text: effectivePrompt)
+                    }
+
+                    if !result.expected.isEmpty {
+                        LabeledText(label: "Expected or reference answer", text: result.expected)
+                    }
+
+                    ResponseTextBlock(
+                        response: result.response,
+                        hasCopied: hasCopiedResponse,
+                        copy: copyResponse
+                    )
+
+                    if let rationale = result.rationale {
+                        LabeledText(
+                            label: scoringMode == .modelJudge ? "AI judge rationale" : "Scoring rationale",
+                            text: rationale
+                        )
+                    }
+
+                    if let judgeErrorMessage = result.judgeErrorMessage {
+                        ErrorBanner(
+                            title: "AI scoring failed",
+                            message: judgeErrorMessage,
+                            category: result.judgeErrorCategory
+                        )
+                    }
+
+                    ResultTraceFooter(result: result)
+                }
+                .padding(.top, 14)
+            } label: {
+                ResultCardHeader(
+                    result: result,
+                    repetitions: repetitions,
+                    passingScore: passingScore
+                )
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    private func copyResponse() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(result.response, forType: .string)
+        hasCopiedResponse = true
+    }
+}
+
+private struct ResultCardHeader: View {
+    let result: EvaluationSampleResult
+    let repetitions: Int
+    let passingScore: Int
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: statusSymbol)
+                .foregroundStyle(statusColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(result.caseName)
+                    .font(.headline)
+                if repetitions > 1 {
+                    Text("Repetition \(result.repetition) of \(repetitions)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            Text(statusTitle)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(statusColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(statusColor.opacity(0.09), in: .capsule)
+
+            if let score = result.score {
+                Text("\(score) / 4")
+                    .font(.headline.monospacedDigit())
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var statusTitle: String {
+        switch result.status {
+        case .passed: "Passed"
+        case .failed: "Failed"
+        case .unscored: "Unscored"
+        case .error: "Error"
+        }
+    }
+
+    private var statusSymbol: String {
+        switch result.status {
+        case .passed: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        case .unscored: "circle.dotted"
+        case .error: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch result.status {
+        case .passed: .green
+        case .failed, .error: .red
+        case .unscored: .secondary
+        }
+    }
+}
+
+private struct ResponseTextBlock: View {
+    let response: String
+    let hasCopied: Bool
+    let copy: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text("Response")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if !response.isEmpty {
+                    Button(
+                        hasCopied ? "Copied" : "Copy Response",
+                        systemImage: hasCopied ? "checkmark" : "doc.on.doc",
+                        action: copy
+                    )
+                    .buttonStyle(.borderless)
+                }
+            }
+            Text(response.isEmpty ? "No response was captured." : response)
+                .foregroundStyle(response.isEmpty ? .secondary : .primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct ErrorBanner: View {
+    let title: LocalizedStringResource
+    let message: String
+    let category: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(message)
+                if let category {
+                    Text(category)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.08), in: .rect(cornerRadius: 9))
+    }
+}
+
+private struct ResultTraceFooter: View {
+    let result: EvaluationSampleResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Divider()
+            Text("Response: \(result.durationMilliseconds.formatted(.number.precision(.fractionLength(0)))) ms · \(result.usage.inputTokens) input · \(result.usage.outputTokens) output · \(result.usage.cachedInputTokens) cached")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            if let judgeDuration = result.judgeDurationMilliseconds {
+                let judgeUsage = result.judgeUsage ?? EvaluationUsage()
+                Text("AI judge: \(judgeDuration.formatted(.number.precision(.fractionLength(0)))) ms · \(judgeUsage.inputTokens) input · \(judgeUsage.outputTokens) output · \(judgeUsage.cachedInputTokens) cached")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct MetricCard: View {
+    let title: LocalizedStringResource
+    let value: String
+    let symbol: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: symbol)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.title3.bold().monospacedDigit())
+                .font(.title2.bold().monospacedDigit())
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.quaternary, in: .rect(cornerRadius: 10))
+        .padding(14)
+        .background(.thinMaterial, in: .rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.secondary.opacity(0.12))
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
 private struct LabeledText: View {
-    var label: String
-    var text: String
+    let label: LocalizedStringResource
+    let text: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -221,6 +557,7 @@ private struct LabeledText: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(text)
+                .font(.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
