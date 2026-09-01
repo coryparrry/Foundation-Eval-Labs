@@ -341,6 +341,7 @@ private struct ModelInstructionsSection: View {
 
 private struct ScoringSection: View {
     @Bindable var store: EvaluationStore
+    @State private var selectedCaseID: UUID?
 
     var body: some View {
         EditorSection(
@@ -375,11 +376,82 @@ private struct ScoringSection: View {
                     )
                 }
 
+                if store.suite.scoringMode != .review, let selectedCaseIndex {
+                    Divider()
+
+                    HStack {
+                        Text("Scoring target")
+                            .font(.headline)
+                        Spacer()
+                        Picker("Scoring case", selection: $selectedCaseID) {
+                            ForEach(store.suite.cases) { evaluationCase in
+                                Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
+                                    .tag(Optional(evaluationCase.id))
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 260)
+                        .accessibilityIdentifier("Scoring case selector")
+                    }
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Prompt")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(store.suite.cases[selectedCaseIndex].prompt.isEmpty
+                             ? "No prompt entered yet."
+                             : store.suite.cases[selectedCaseIndex].prompt)
+                            .font(.callout)
+                            .foregroundStyle(store.suite.cases[selectedCaseIndex].prompt.isEmpty ? .secondary : .primary)
+                            .lineLimit(4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 8))
+                    }
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(store.suite.scoringMode.expectedLabel)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $store.suite.cases[selectedCaseIndex].expected)
+                            .accessibilityLabel(
+                                "\(store.suite.scoringMode.expectedLabel) for \(store.suite.cases[selectedCaseIndex].name.isEmpty ? "Untitled case" : store.suite.cases[selectedCaseIndex].name)"
+                            )
+                            .accessibilityIdentifier("Scoring expected text")
+                            .font(store.suite.scoringMode == .modelJudge ? .body : .body.monospaced())
+                            .frame(minHeight: 72)
+                            .padding(8)
+                            .background(.background, in: .rect(cornerRadius: 8))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.secondary.opacity(0.2))
+                            }
+                        Text(store.suite.scoringMode.expectedHelp)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if store.suite.scoringMode == .modelJudge {
                     ModelRubricEditor(store: store)
                 }
             }
             .disabled(store.isRunning || store.isProcessingFiles)
+        }
+        .onAppear { selectFirstCaseIfNeeded() }
+        .onChange(of: store.suite.cases.map(\.id)) { _, _ in
+            selectFirstCaseIfNeeded()
+        }
+    }
+
+    private var selectedCaseIndex: Int? {
+        guard let selectedCaseID else { return nil }
+        return store.suite.cases.firstIndex(where: { $0.id == selectedCaseID })
+    }
+
+    private func selectFirstCaseIfNeeded() {
+        if selectedCaseID.flatMap({ id in store.suite.cases.firstIndex(where: { $0.id == id }) }) == nil {
+            selectedCaseID = store.suite.cases.first?.id
         }
     }
 }
@@ -497,7 +569,6 @@ private struct CasesSection: View {
             if let selectedCaseIndex {
                 EvaluationCaseEditor(
                     evaluationCase: $store.suite.cases[selectedCaseIndex],
-                    scoringMode: store.suite.scoringMode,
                     canDelete: store.suite.cases.count > 1,
                     isDisabled: store.isRunning || store.isProcessingFiles,
                     duplicate: {
@@ -532,7 +603,6 @@ private struct CasesSection: View {
 
 private struct EvaluationCaseEditor: View {
     @Binding var evaluationCase: EvaluationCase
-    let scoringMode: ScoringMode
     let canDelete: Bool
     let isDisabled: Bool
     let duplicate: () -> Void
@@ -578,27 +648,6 @@ private struct EvaluationCaseEditor: View {
                     }
             }
 
-            if scoringMode != .review {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(scoringMode.expectedLabel)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    TextEditor(text: $evaluationCase.expected)
-                        .accessibilityLabel("\(scoringMode.expectedLabel) for \(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)")
-                        .accessibilityIdentifier("Scoring expected text")
-                        .font(scoringMode == .modelJudge ? .body : .body.monospaced())
-                        .frame(minHeight: 72)
-                        .padding(8)
-                        .background(.background, in: .rect(cornerRadius: 8))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.secondary.opacity(0.2))
-                        }
-                    Text(scoringMode.expectedHelp)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
         }
         .padding(14)
         .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 11))

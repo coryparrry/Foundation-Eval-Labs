@@ -32,26 +32,20 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertTrue(app.radioButtons["AI rubric"].exists)
 
         app.radioButtons["Collect only"].click()
-        app.radioButtons["Cases"].click()
         var expectedInputs = app.textViews.matching(identifier: "Scoring expected text")
         XCTAssertEqual(expectedInputs.count, 0)
 
-        app.radioButtons["Scoring"].click()
         app.radioButtons["Exact text"].click()
-        app.radioButtons["Cases"].click()
         XCTAssertTrue(app.staticTexts["Expected response (required)"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["Prompt"].exists)
         expectedInputs = app.textViews.matching(identifier: "Scoring expected text")
         XCTAssertEqual(expectedInputs.count, 1)
 
-        app.radioButtons["Scoring"].click()
         app.radioButtons["Contains text"].click()
-        app.radioButtons["Cases"].click()
         expectedInputs = app.textViews.matching(identifier: "Scoring expected text")
         XCTAssertEqual(expectedInputs.count, 1)
 
-        app.radioButtons["Scoring"].click()
         app.radioButtons["AI rubric"].click()
-        app.radioButtons["Cases"].click()
         expectedInputs = app.textViews.matching(identifier: "Scoring expected text")
         XCTAssertEqual(expectedInputs.count, 1)
 
