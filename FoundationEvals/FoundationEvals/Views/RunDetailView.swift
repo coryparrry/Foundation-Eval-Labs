@@ -38,33 +38,14 @@ struct RunDetailView: View {
     @State private var exportDocument = JSONDocument()
     @State private var isExporting = false
     @State private var exportError: String?
-    @State private var resultFilter = ResultFilter.all
-    @State private var resultSearch = ""
-
-    private var visibleResults: [EvaluationSampleResult] {
-        let query = resultSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return run.results.filter { result in
-            resultFilter.includes(result)
-                && (query.isEmpty
-                    || result.caseName.localizedCaseInsensitiveContains(query)
-                    || result.prompt.localizedCaseInsensitiveContains(query)
-                    || result.response.localizedCaseInsensitiveContains(query)
-                    || result.errorMessage?.localizedCaseInsensitiveContains(query) == true)
-        }
-    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            LazyVStack(alignment: .leading, spacing: 22) {
                 RunOverviewHeader(run: run)
                 RunSummaryGrid(run: run)
                 RunConfigurationSection(run: run)
-                ResultsSection(
-                    run: run,
-                    results: visibleResults,
-                    filter: $resultFilter,
-                    searchText: $resultSearch
-                )
+                ResultsSection(run: run)
             }
             .padding(28)
             .frame(maxWidth: 1_100, alignment: .leading)
@@ -203,6 +184,12 @@ private struct RunSummaryGrid: View {
             )
             MetricCard(title: "Tokens", value: run.totalTokens.formatted(), symbol: "number")
         }
+        .padding(16)
+        .background(.thinMaterial, in: .rect(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.secondary.opacity(0.12))
+        }
     }
 }
 
@@ -276,9 +263,28 @@ private struct RunConfigurationSection: View {
 
 private struct ResultsSection: View {
     let run: EvaluationRun
-    let results: [EvaluationSampleResult]
-    @Binding var filter: ResultFilter
-    @Binding var searchText: String
+    @State private var filter = ResultFilter.all
+    @State private var searchText = ""
+    @State private var selectedResultID: UUID?
+
+    private var results: [EvaluationSampleResult] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return run.results.filter { result in
+            filter.includes(result)
+                && (query.isEmpty
+                    || result.caseName.localizedCaseInsensitiveContains(query)
+                    || result.prompt.localizedCaseInsensitiveContains(query)
+                    || result.response.localizedCaseInsensitiveContains(query)
+                    || result.reasoningText?.localizedCaseInsensitiveContains(query) == true
+                    || result.judgeReasoningText?.localizedCaseInsensitiveContains(query) == true
+                    || result.errorMessage?.localizedCaseInsensitiveContains(query) == true)
+        }
+    }
+
+    private var selectedResult: EvaluationSampleResult? {
+        guard let selectedResultID else { return results.first }
+        return results.first(where: { $0.id == selectedResultID }) ?? results.first
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -315,97 +321,179 @@ private struct ResultsSection: View {
                 )
                 .frame(maxWidth: .infinity, minHeight: 220)
             } else {
-                ForEach(results) { result in
-                    ResultDisclosureCard(
-                        result: result,
-                        scoringMode: run.scoringMode,
-                        repetitions: run.repetitions,
-                        passingScore: run.judgePassingScore ?? EvaluationSuite.judgePassingScore
-                    )
+                HStack(alignment: .top, spacing: 20) {
+                    List(results, selection: $selectedResultID) { result in
+                        ResultListRow(result: result, repetitions: run.repetitions)
+                            .tag(result.id)
+                    }
+                    .listStyle(.inset)
+                    .frame(width: 290)
+                    .accessibilityIdentifier("Result list")
+
+                    if let selectedResult {
+                        ScrollView {
+                            ResultDetail(
+                                result: selectedResult,
+                                scoringMode: run.scoringMode,
+                                repetitions: run.repetitions,
+                                passingScore: run.judgePassingScore ?? EvaluationSuite.judgePassingScore
+                            )
+                            .id(selectedResult.id)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.trailing, 8)
+                            .accessibilityIdentifier("Result detail")
+                        }
+                    }
                 }
+                .frame(height: 560)
             }
+        }
+        .onAppear { selectFirstResultIfNeeded() }
+        .onChange(of: results.map(\.id)) { _, _ in
+            selectFirstResultIfNeeded()
+        }
+    }
+
+    private func selectFirstResultIfNeeded() {
+        if selectedResultID.flatMap({ id in results.firstIndex(where: { $0.id == id }) }) == nil {
+            selectedResultID = results.first?.id
         }
     }
 }
 
-private struct ResultDisclosureCard: View {
+private struct ResultListRow: View {
+    let result: EvaluationSampleResult
+    let repetitions: Int
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: statusSymbol)
+                .foregroundStyle(statusColor)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(result.caseName)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if repetitions > 1 {
+                        Text("Repetition \(result.repetition)")
+                    }
+                    Text(statusTitle)
+                    if let score = result.score {
+                        Text("\(score) / 4")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var statusTitle: String {
+        switch result.status {
+        case .passed: "Passed"
+        case .failed: "Failed"
+        case .unscored: "Unscored"
+        case .error: "Error"
+        }
+    }
+
+    private var statusSymbol: String {
+        switch result.status {
+        case .passed: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        case .unscored: "circle.dotted"
+        case .error: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch result.status {
+        case .passed: .green
+        case .failed, .error: .red
+        case .unscored: .secondary
+        }
+    }
+}
+
+private struct ResultDetail: View {
     let result: EvaluationSampleResult
     let scoringMode: ScoringMode
     let repetitions: Int
     let passingScore: Int
-    @State private var isExpanded: Bool
     @State private var hasCopiedResponse = false
 
-    init(
-        result: EvaluationSampleResult,
-        scoringMode: ScoringMode,
-        repetitions: Int,
-        passingScore: Int
-    ) {
-        self.result = result
-        self.scoringMode = scoringMode
-        self.repetitions = repetitions
-        self.passingScore = passingScore
-        _isExpanded = State(initialValue: result.status != .passed)
-    }
-
     var body: some View {
-        GroupBox {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let errorMessage = result.errorMessage {
-                        ErrorBanner(
-                            title: "Response failed",
-                            message: errorMessage,
-                            category: result.errorCategory
-                        )
-                    }
+        VStack(alignment: .leading, spacing: 14) {
+            ResultCardHeader(
+                result: result,
+                repetitions: repetitions,
+                passingScore: passingScore
+            )
 
-                    LabeledText(label: "Prompt", text: result.prompt)
+            Divider()
 
-                    if let effectivePrompt = result.effectivePrompt, effectivePrompt != result.prompt {
-                        LabeledText(label: "Effective model input", text: effectivePrompt)
-                    }
-
-                    if !result.expected.isEmpty {
-                        LabeledText(label: "Expected or reference answer", text: result.expected)
-                    }
-
-                    ResponseTextBlock(
-                        response: result.response,
-                        hasCopied: hasCopiedResponse,
-                        copy: copyResponse
-                    )
-
-                    if let rationale = result.rationale {
-                        LabeledText(
-                            label: scoringMode == .modelJudge ? "AI judge rationale" : "Scoring rationale",
-                            text: rationale
-                        )
-                    }
-
-                    if let judgeErrorMessage = result.judgeErrorMessage {
-                        ErrorBanner(
-                            title: "AI scoring failed",
-                            message: judgeErrorMessage,
-                            category: result.judgeErrorCategory
-                        )
-                    }
-
-                    if let toolCalls = result.toolCalls, !toolCalls.isEmpty {
-                        ToolTraceSection(toolCalls: toolCalls)
-                    }
-
-                    ResultTraceFooter(result: result)
-                }
-                .padding(.top, 14)
-            } label: {
-                ResultCardHeader(
-                    result: result,
-                    repetitions: repetitions,
-                    passingScore: passingScore
+            if let errorMessage = result.errorMessage {
+                ErrorBanner(
+                    title: "Response failed",
+                    message: errorMessage,
+                    category: result.errorCategory
                 )
             }
+
+            LabeledText(label: "Prompt", text: result.prompt)
+
+            if let effectivePrompt = result.effectivePrompt, effectivePrompt != result.prompt {
+                LabeledText(label: "Effective model input", text: effectivePrompt)
+            }
+
+            if !result.expected.isEmpty {
+                LabeledText(label: "Expected or reference answer", text: result.expected)
+            }
+
+            ResponseTextBlock(
+                response: result.response,
+                hasCopied: hasCopiedResponse,
+                copy: copyResponse
+            )
+
+            if result.reasoningText != nil || result.usage.reasoningTokens > 0 {
+                ReasoningTraceSection(
+                    title: "Response reasoning",
+                    text: result.reasoningText,
+                    tokenCount: result.usage.reasoningTokens
+                )
+            }
+
+            if let rationale = result.rationale {
+                LabeledText(
+                    label: scoringMode == .modelJudge ? "AI judge rationale" : "Scoring rationale",
+                    text: rationale
+                )
+            }
+
+            if result.judgeReasoningText != nil || (result.judgeUsage?.reasoningTokens ?? 0) > 0 {
+                ReasoningTraceSection(
+                    title: "AI judge reasoning",
+                    text: result.judgeReasoningText,
+                    tokenCount: result.judgeUsage?.reasoningTokens ?? 0
+                )
+            }
+
+            if let judgeErrorMessage = result.judgeErrorMessage {
+                ErrorBanner(
+                    title: "AI scoring failed",
+                    message: judgeErrorMessage,
+                    category: result.judgeErrorCategory
+                )
+            }
+
+            if let toolCalls = result.toolCalls, !toolCalls.isEmpty {
+                ToolTraceSection(toolCalls: toolCalls)
+            }
+
+            ResultTraceFooter(result: result)
         }
         .textSelection(.enabled)
     }
@@ -415,6 +503,21 @@ private struct ResultDisclosureCard: View {
         pasteboard.clearContents()
         pasteboard.setString(result.response, forType: .string)
         hasCopiedResponse = true
+    }
+}
+
+private struct ReasoningTraceSection: View {
+    let title: LocalizedStringResource
+    let text: String?
+    let tokenCount: Int
+
+    var body: some View {
+        DisclosureGroup(title) {
+            Text(text ?? "The model used \(tokenCount) reasoning tokens, but did not expose readable reasoning for this response.")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 8)
+        }
+        .font(.callout)
     }
 }
 
@@ -601,12 +704,6 @@ private struct MetricCard: View {
                 .font(.title2.bold().monospacedDigit())
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.thinMaterial, in: .rect(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.secondary.opacity(0.12))
-        }
         .accessibilityElement(children: .combine)
     }
 }

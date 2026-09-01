@@ -144,6 +144,71 @@ struct ModelConfigurationTests {
         #expect(decoded == suite)
     }
 
+    @MainActor
+    @Test func storeMigratesPrivateCloudSuiteToOnDevice() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "FoundationEvalsTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        var suite = EvaluationSuite()
+        suite.modelConfiguration.provider = .privateCloudCompute
+        suite.modelConfiguration.reasoningLevel = .deep
+        try JSONEncoder().encode(suite).write(
+            to: directory.appending(path: "suite.json"),
+            options: .atomic
+        )
+
+        let store = EvaluationStore(supportDirectory: directory)
+        let persisted = try JSONDecoder().decode(
+            EvaluationSuite.self,
+            from: Data(contentsOf: directory.appending(path: "suite.json"))
+        )
+
+        #expect(store.suite.modelConfiguration.provider == .onDevice)
+        #expect(store.suite.modelConfiguration.reasoningLevel == .automatic)
+        #expect(persisted.modelConfiguration.provider == .onDevice)
+        #expect(persisted.modelConfiguration.reasoningLevel == .automatic)
+    }
+
+    @MainActor
+    @Test func automaticSuiteSaveDebouncesTyping() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "FoundationEvalsTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = EvaluationStore(supportDirectory: directory)
+        store.suite.name = "First"
+        store.scheduleSuiteSave()
+        store.suite.name = "Final"
+        store.scheduleSuiteSave()
+        try await Task.sleep(for: .milliseconds(600))
+
+        let persisted = try JSONDecoder().decode(
+            EvaluationSuite.self,
+            from: Data(contentsOf: directory.appending(path: "suite.json"))
+        )
+        #expect(persisted.name == "Final")
+    }
+
+    @Test func reasoningExtractorKeepsReadableTextOnly() {
+        let entries: [Transcript.Entry] = [
+            .reasoning(
+                Transcript.Reasoning(
+                    segments: [
+                        .text(Transcript.TextSegment(content: "  First step.  ")),
+                        .text(Transcript.TextSegment(content: "Second step."))
+                    ],
+                    signature: Data([0xCA, 0xFE])
+                )
+            ),
+            .reasoning(Transcript.Reasoning(segments: [], signature: Data([0xBA, 0xBE])))
+        ]
+
+        #expect(EvaluationRunner.reasoningText(from: entries) == "First step.\n\nSecond step.")
+        #expect(EvaluationRunner.reasoningText(from: [Transcript.Entry]()) == nil)
+    }
+
     @Test func executionControlsMapToFoundationModelsOptions() {
         var configuration = EvaluationModelConfiguration()
         configuration.reasoningLevel = .moderate

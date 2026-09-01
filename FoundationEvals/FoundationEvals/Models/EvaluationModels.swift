@@ -163,7 +163,7 @@ enum EvaluationContextPolicy: String, Codable, CaseIterable, Identifiable, Senda
 }
 
 struct EvaluationModelConfiguration: Codable, Equatable, Sendable {
-    static let currentBehaviorVersion = "foundation-evals-v4"
+    static let currentBehaviorVersion = "foundation-evals-v5"
 
     var provider: EvaluationModelProvider = .onDevice
     var reasoningLevel: EvaluationReasoningLevel = .automatic
@@ -269,6 +269,7 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var effectivePrompt: String?
     var expected: String
     var response: String
+    var reasoningText: String? = nil
     var status: EvaluationResultStatus
     var score: Int?
     var rationale: String?
@@ -276,6 +277,7 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var usage: EvaluationUsage
     var judgeDurationMilliseconds: Double?
     var judgeUsage: EvaluationUsage?
+    var judgeReasoningText: String? = nil
     var errorCategory: String?
     var errorMessage: String?
     var judgeErrorCategory: String?

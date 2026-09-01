@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable var store: EvaluationStore
 
     var body: some View {
@@ -31,7 +32,12 @@ struct ContentView: View {
         }
         .frame(minWidth: 920, minHeight: 640)
         .onChange(of: store.suite) {
-            store.saveSuite()
+            store.scheduleSuiteSave()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                store.saveSuite()
+            }
         }
         .alert(
             "Foundation Evals",

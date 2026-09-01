@@ -1,8 +1,9 @@
 # Worklog
 
-- Goal: make AI-rubric scoring respect only the suite's explicit requirements and application-owned reference evidence.
-- Scope: deterministic exact-reference scoring, escaped judge inputs, prompt-version traceability, focused tests, and real-runtime validation.
-- Current: root-cause fix and final review corrections are complete on `codex/model-controls-tools`.
-- Steering: a probabilistic judge must not overrule an exact application-owned reference match.
-- Validation: all 13 unit tests pass against Xcode 27. A temporary UI run of the persisted `Every answer is cory` suite passed, and trace `52D18B7F-D14D-4949-A90D-A3172485C9FA` records three 4/4 passes with no judge calls or errors.
-- Boundary: this task's saved project path is stale (`Documents/ChatGPT/...`); the live clean checkout is `/Users/coryparry/Documents/Projects/Apples-Foundation-Evals`. Xcode MCP is disabled on the host, so the implementation stays within already reviewed Foundation Models APIs and will be compiled against the installed Xcode 27 SDK.
+- Goal: make the Suite Editor easier to navigate and faster to type in, hide PCC for the open-source surface, and show available reasoning context in results.
+- Scope: existing SwiftUI view/data flow, provider visibility and migration, response transcript/usage traces, focused tests, and real-interface validation.
+- Current: implementation and live UI validation complete; final diff review in progress on `codex/model-controls-tools`.
+- Steering: remove card/scroll friction and fix invalidation at the source; keep dormant PCC code reusable; expose only reasoning data Apple actually returns, never opaque signatures.
+- Boundary: Apple documents that current models may return reasoning token counts while textual reasoning segments are empty. PCC itself does not require app-managed login/API keys, but its managed entitlement and eligibility are unsuitable for the default open-source UI.
+- Implemented: four editor pages, one selected case editor, compact result list/detail, single summary surface, 400 ms autosave debounce, on-device suite migration, readable subject/judge reasoning traces, and removal of the PCC entitlement/build path.
+- Evidence: Xcode build-for-testing passed; 17/17 unit and UI tests passed; live macOS inspection confirmed pinned editor navigation plus compact passing/failing result navigation with an independently scrollable detail pane.

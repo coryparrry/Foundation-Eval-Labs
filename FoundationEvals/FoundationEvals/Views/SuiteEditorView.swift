@@ -47,31 +47,56 @@ private enum RubricTemplate: String, CaseIterable, Identifiable {
     }
 }
 
+private enum SuiteEditorPage: String, CaseIterable, Identifiable {
+    case cases
+    case instructions
+    case scoring
+    case model
+
+    var id: Self { self }
+
+    var title: LocalizedStringResource {
+        switch self {
+        case .cases: "Cases"
+        case .instructions: "Instructions"
+        case .scoring: "Scoring"
+        case .model: "Model"
+        }
+    }
+}
+
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
+    @State private var selectedPage = SuiteEditorPage.cases
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
                 SuiteOverviewHeader(store: store)
                 RunReadinessPanel(store: store)
 
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 350), alignment: .top)],
-                    alignment: .leading,
-                    spacing: 18
-                ) {
-                    ModelInstructionsSection(store: store)
-                    SharedReferenceFilesSection(store: store)
+                Picker("Editor page", selection: $selectedPage) {
+                    ForEach(SuiteEditorPage.allCases) { page in
+                        Text(page.title).tag(page)
+                    }
                 }
-
-                ModelControlsSection(store: store)
-                ScoringSection(store: store)
-                CasesSection(store: store)
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("Editor page")
             }
-            .padding(28)
+            .padding(.horizontal, 28)
+            .padding(.top, 28)
+            .padding(.bottom, 18)
             .frame(maxWidth: 1_080, alignment: .leading)
+
+            ScrollView {
+                selectedPageContent
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 28)
+                    .frame(maxWidth: 1_080, alignment: .leading)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
         .navigationTitle("Suite Editor")
         .toolbar {
             RunToolbarContent(store: store)
@@ -85,6 +110,27 @@ struct SuiteEditorView: View {
             case .success(let urls): store.importFiles(urls)
             case .failure(let error): store.notice = error.localizedDescription
             }
+        }
+    }
+
+    @ViewBuilder
+    private var selectedPageContent: some View {
+        switch selectedPage {
+        case .cases:
+            CasesSection(store: store)
+        case .instructions:
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 350), alignment: .top)],
+                alignment: .leading,
+                spacing: 18
+            ) {
+                ModelInstructionsSection(store: store)
+                SharedReferenceFilesSection(store: store)
+            }
+        case .scoring:
+            ScoringSection(store: store)
+        case .model:
+            ModelControlsSection(store: store)
         }
     }
 }
@@ -137,16 +183,17 @@ private struct RunReadinessPanel: View {
     }
 
     var body: some View {
+        let blocker = store.runBlocker
         HStack(spacing: 14) {
-            Image(systemName: statusSymbol)
+            Image(systemName: statusSymbol(blocker: blocker))
                 .font(.title2)
-                .foregroundStyle(statusColor)
+                .foregroundStyle(statusColor(blocker: blocker))
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(statusTitle)
+                Text(statusTitle(blocker: blocker))
                     .font(.headline)
-                Text(statusDetail)
+                Text(statusDetail(blocker: blocker))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -172,33 +219,33 @@ private struct RunReadinessPanel: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(store.runBlocker != nil || store.isProcessingFiles)
+                .disabled(blocker != nil || store.isProcessingFiles)
                 .accessibilityIdentifier("Run evaluation")
             }
         }
         .padding(16)
-        .background(statusColor.opacity(0.08), in: .rect(cornerRadius: 12))
+        .background(statusColor(blocker: blocker).opacity(0.08), in: .rect(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
-                .stroke(statusColor.opacity(0.22))
+                .stroke(statusColor(blocker: blocker).opacity(0.22))
         }
         .accessibilityElement(children: .contain)
     }
 
-    private var statusTitle: LocalizedStringResource {
+    private func statusTitle(blocker: String?) -> LocalizedStringResource {
         if store.isRunning { return "Evaluation in progress" }
         if store.isProcessingFiles { return "Importing reference files" }
-        return store.runBlocker == nil ? "Ready to run" : "Needs attention"
+        return blocker == nil ? "Ready to run" : "Needs attention"
     }
 
-    private var statusDetail: String {
+    private func statusDetail(blocker: String?) -> String {
         if store.isRunning {
             return "You can review the suite while the current run finishes."
         }
         if store.isProcessingFiles {
             return "The suite will be ready when every selected file has been processed."
         }
-        if let blocker = store.runBlocker {
+        if let blocker {
             return blocker
         }
         if store.suite.scoringMode == .modelJudge {
@@ -218,15 +265,15 @@ private struct RunReadinessPanel: View {
         return "\(responseLabel) · \(store.plannedRequestCount) model request\(store.plannedRequestCount == 1 ? "" : "s") · \(provider)\(toolSuffix)."
     }
 
-    private var statusSymbol: String {
+    private func statusSymbol(blocker: String?) -> String {
         if store.isRunning { return "waveform.circle.fill" }
         if store.isProcessingFiles { return "arrow.down.doc.fill" }
-        return store.runBlocker == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        return blocker == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
     }
 
-    private var statusColor: Color {
+    private func statusColor(blocker: String?) -> Color {
         if store.isRunning || store.isProcessingFiles { return .accentColor }
-        return store.runBlocker == nil ? .green : .orange
+        return blocker == nil ? .green : .orange
     }
 }
 
@@ -234,6 +281,7 @@ private struct RunToolbarContent: ToolbarContent {
     @Bindable var store: EvaluationStore
 
     var body: some ToolbarContent {
+        let blocker = store.runBlocker
         ToolbarItemGroup {
             if store.isRunning {
                 HStack(spacing: 8) {
@@ -256,8 +304,8 @@ private struct RunToolbarContent: ToolbarContent {
                 }
                 Button("Run", systemImage: "play.fill") { store.startRun() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(store.runBlocker != nil || store.isProcessingFiles)
-                    .help(store.runBlocker ?? "Run the current evaluation suite")
+                    .disabled(blocker != nil || store.isProcessingFiles)
+                    .help(blocker ?? "Run the current evaluation suite")
             }
         }
     }
@@ -327,13 +375,8 @@ private struct ScoringSection: View {
                     )
                 }
 
-                if store.suite.scoringMode.needsExpected {
-                    ScoringExpectedValues(store: store)
-                }
-
                 if store.suite.scoringMode == .modelJudge {
                     ModelRubricEditor(store: store)
-                    ScoringExpectedValues(store: store)
                 }
             }
             .disabled(store.isRunning || store.isProcessingFiles)
@@ -398,51 +441,6 @@ private struct ModelRubricEditor: View {
     }
 }
 
-private struct ScoringExpectedValues: View {
-    @Bindable var store: EvaluationStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
-            Text(store.suite.scoringMode.expectedLabel)
-                .font(.headline)
-            Text("Set the scoring value for each case. The prompt preview keeps the value tied to the right test.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            ForEach($store.suite.cases) { $evaluationCase in
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
-                        .font(.callout.weight(.semibold))
-
-                    Text(evaluationCase.prompt.isEmpty ? "No prompt entered yet." : evaluationCase.prompt)
-                        .font(.caption)
-                        .foregroundStyle(evaluationCase.prompt.isEmpty ? .tertiary : .secondary)
-                        .lineLimit(2)
-
-                    TextEditor(text: $evaluationCase.expected)
-                        .accessibilityLabel("\(store.suite.scoringMode.expectedLabel) for \(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)")
-                        .accessibilityIdentifier("Scoring expected text")
-                        .font(store.suite.scoringMode == .modelJudge ? .body : .body.monospaced())
-                        .frame(minHeight: 64)
-                        .padding(8)
-                        .background(.background, in: .rect(cornerRadius: 8))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.secondary.opacity(0.2))
-                        }
-                }
-                .padding(12)
-                .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 10))
-            }
-
-            Text(store.suite.scoringMode.expectedHelp)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
 private struct RubricScale: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -465,6 +463,7 @@ private struct RubricScale: View {
 
 private struct CasesSection: View {
     @Bindable var store: EvaluationStore
+    @State private var selectedCaseID: UUID?
 
     var body: some View {
         EditorSection(
@@ -472,30 +471,68 @@ private struct CasesSection: View {
             systemImage: "list.bullet.rectangle",
             description: "Each case gets its own fresh model session and produces one result per repetition."
         ) {
-            HStack {
+            HStack(spacing: 12) {
                 Text("\(store.suite.cases.count) case\(store.suite.cases.count == 1 ? "" : "s")")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+
+                Picker("Editing case", selection: $selectedCaseID) {
+                    ForEach(store.suite.cases) { evaluationCase in
+                        Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
+                            .tag(Optional(evaluationCase.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 260)
+                .accessibilityIdentifier("Case selector")
+
                 Spacer()
-                Button("Add Case", systemImage: "plus") { store.addCase() }
+                Button("Add Case", systemImage: "plus") {
+                    store.addCase()
+                    selectedCaseID = store.suite.cases.last?.id
+                }
                     .disabled(store.isRunning || store.isProcessingFiles)
             }
 
-            ForEach($store.suite.cases) { $evaluationCase in
+            if let selectedCaseIndex {
                 EvaluationCaseEditor(
-                    evaluationCase: $evaluationCase,
+                    evaluationCase: $store.suite.cases[selectedCaseIndex],
+                    scoringMode: store.suite.scoringMode,
                     canDelete: store.suite.cases.count > 1,
                     isDisabled: store.isRunning || store.isProcessingFiles,
-                    duplicate: { store.duplicateCase(id: evaluationCase.id) },
-                    remove: { store.removeCase(id: evaluationCase.id) }
+                    duplicate: {
+                        let id = store.suite.cases[selectedCaseIndex].id
+                        store.duplicateCase(id: id)
+                        selectedCaseID = store.suite.cases[selectedCaseIndex + 1].id
+                    },
+                    remove: {
+                        store.removeCase(id: store.suite.cases[selectedCaseIndex].id)
+                        selectedCaseID = store.suite.cases.first?.id
+                    }
                 )
             }
+        }
+        .onAppear { selectFirstCaseIfNeeded() }
+        .onChange(of: store.suite.cases.map(\.id)) { _, _ in
+            selectFirstCaseIfNeeded()
+        }
+    }
+
+    private var selectedCaseIndex: Int? {
+        guard let selectedCaseID else { return nil }
+        return store.suite.cases.firstIndex(where: { $0.id == selectedCaseID })
+    }
+
+    private func selectFirstCaseIfNeeded() {
+        if selectedCaseID.flatMap({ id in store.suite.cases.firstIndex(where: { $0.id == id }) }) == nil {
+            selectedCaseID = store.suite.cases.first?.id
         }
     }
 }
 
 private struct EvaluationCaseEditor: View {
     @Binding var evaluationCase: EvaluationCase
+    let scoringMode: ScoringMode
     let canDelete: Bool
     let isDisabled: Bool
     let duplicate: () -> Void
@@ -539,6 +576,28 @@ private struct EvaluationCaseEditor: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.secondary.opacity(0.2))
                     }
+            }
+
+            if scoringMode != .review {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(scoringMode.expectedLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $evaluationCase.expected)
+                        .accessibilityLabel("\(scoringMode.expectedLabel) for \(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)")
+                        .accessibilityIdentifier("Scoring expected text")
+                        .font(scoringMode == .modelJudge ? .body : .body.monospaced())
+                        .frame(minHeight: 72)
+                        .padding(8)
+                        .background(.background, in: .rect(cornerRadius: 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.secondary.opacity(0.2))
+                        }
+                    Text(scoringMode.expectedHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(14)

@@ -11,7 +11,7 @@ struct ModelControlsSection: View {
         EditorSection(
             "Model controls",
             systemImage: "slider.horizontal.3",
-            description: "Make provider, reasoning, decoding, context, and tool behavior explicit for every run."
+            description: "Make decoding, context, and tool behavior explicit for every run."
         ) {
             VStack(alignment: .leading, spacing: 18) {
                 providerAndReasoning
@@ -30,37 +30,11 @@ struct ModelControlsSection: View {
             Text("Execution")
                 .font(.headline)
 
-            Picker("Model provider", selection: $store.suite.modelConfiguration.provider) {
-                ForEach(EvaluationModelProvider.allCases) { provider in
-                    Text(provider.title).tag(provider)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("Model provider")
-            .onChange(of: store.suite.modelConfiguration.provider) { _, provider in
-                if provider == .onDevice {
-                    store.suite.modelConfiguration.reasoningLevel = .automatic
-                }
-            }
+            Label("On-device Foundation Model", systemImage: "cpu")
+                .font(.body.weight(.medium))
+                .accessibilityIdentifier("On-device model")
 
-            Text(configuration.provider.detail)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            LabeledContent("Reasoning level") {
-                Picker("Reasoning level", selection: $store.suite.modelConfiguration.reasoningLevel) {
-                    ForEach(EvaluationReasoningLevel.allCases) { level in
-                        Text(level.title).tag(level)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 190)
-                .disabled(configuration.provider == .onDevice)
-            }
-
-            Text(configuration.provider == .onDevice
-                 ? "The current on-device model does not expose explicit reasoning levels. Automatic leaves the framework default unchanged."
-                 : "Apple recommends Moderate as a starting point. Deeper reasoning can improve hard tasks but uses more context and quota.")
+            Text("Prompts stay on this Mac. The framework chooses reasoning automatically and the run trace records any reasoning tokens or readable reasoning it returns.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

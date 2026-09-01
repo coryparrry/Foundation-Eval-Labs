@@ -22,6 +22,7 @@ private struct JudgeOutcome: Sendable {
     var rationale: String? = nil
     var durationMilliseconds: Double? = nil
     var usage: EvaluationUsage? = nil
+    var reasoningText: String? = nil
     var errorCategory: String? = nil
     var errorMessage: String? = nil
 }
@@ -293,6 +294,7 @@ actor EvaluationRunner {
 
             let subjectDuration = Self.milliseconds(since: started)
             let usage = Self.usage(from: response.usage)
+            let reasoningText = Self.reasoningText(from: response.transcriptEntries)
             let toolCalls = await recorder.snapshot()
             let toolEvidence = await recorder.evidenceText()
             let scoring = await score(
@@ -315,6 +317,7 @@ actor EvaluationRunner {
                 effectivePrompt: prepared.text,
                 expected: evaluationCase.expected,
                 response: response.content,
+                reasoningText: reasoningText,
                 status: scoring.status,
                 score: scoring.score,
                 rationale: scoring.rationale,
@@ -322,6 +325,7 @@ actor EvaluationRunner {
                 usage: usage,
                 judgeDurationMilliseconds: scoring.durationMilliseconds,
                 judgeUsage: scoring.usage,
+                judgeReasoningText: scoring.reasoningText,
                 errorCategory: nil,
                 errorMessage: nil,
                 judgeErrorCategory: scoring.errorCategory,
@@ -455,6 +459,7 @@ actor EvaluationRunner {
                 rationale: rationale,
                 durationMilliseconds: Self.milliseconds(since: started),
                 usage: Self.usage(from: verdict.usage),
+                reasoningText: Self.reasoningText(from: verdict.transcriptEntries),
                 errorCategory: nil,
                 errorMessage: nil
             )
@@ -637,6 +642,18 @@ actor EvaluationRunner {
             outputTokens: usage.output.totalTokenCount,
             reasoningTokens: usage.output.reasoningTokenCount
         )
+    }
+
+    static func reasoningText<S: Sequence>(from entries: S) -> String? where S.Element == Transcript.Entry {
+        let text = entries.flatMap { entry -> [String] in
+            guard case .reasoning(let reasoning) = entry else { return [] }
+            return reasoning.segments.compactMap { segment in
+                guard case .text(let text) = segment else { return nil }
+                let content = text.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                return content.isEmpty ? nil : content
+            }
+        }.joined(separator: "\n\n")
+        return text.isEmpty ? nil : text
     }
 
     private static func milliseconds(since instant: ContinuousClock.Instant) -> Double {

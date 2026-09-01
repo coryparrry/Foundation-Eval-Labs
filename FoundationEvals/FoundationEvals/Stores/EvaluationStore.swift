@@ -24,6 +24,7 @@ final class EvaluationStore {
     private let attachmentsDirectory: URL
     private let runsDirectory: URL
     private var runTask: Task<Void, Never>?
+    private var suiteSaveTask: Task<Void, Never>?
 
     init(supportDirectory customSupportDirectory: URL? = nil) {
         let base = customSupportDirectory
@@ -44,6 +45,7 @@ final class EvaluationStore {
         let loadedSuite = Self.loadSuite(from: base)
         var initialSuite = loadedSuite.suite ?? EvaluationSuite()
         let migratedRubric = initialSuite.criteria == EvaluationSuite.legacyDefaultCriteria
+        let migratedProvider = initialSuite.modelConfiguration.provider != .onDevice
         if migratedRubric {
             initialSuite.criteria = EvaluationSuite.defaultRubric
             if initialSuite.cases.count == 1,
@@ -52,6 +54,10 @@ final class EvaluationStore {
                 initialSuite.cases[0].expected = EvaluationSuite().cases[0].expected
             }
         }
+        if migratedProvider {
+            initialSuite.modelConfiguration.provider = .onDevice
+            initialSuite.modelConfiguration.reasoningLevel = .automatic
+        }
         let loadedRuns = Self.loadRuns(from: runsDirectory)
         let initialNotice = [startupNotice, loadedSuite.notice, loadedRuns.notice]
             .compactMap { $0 }
@@ -59,7 +65,7 @@ final class EvaluationStore {
         suite = initialSuite
         runs = loadedRuns.runs
         notice = initialNotice.isEmpty ? nil : initialNotice
-        if migratedRubric { saveSuite() }
+        if migratedRubric || migratedProvider { saveSuite() }
     }
 
     var modelStatus: ModelStatus {
@@ -225,6 +231,22 @@ final class EvaluationStore {
     }
 
     func saveSuite() {
+        suiteSaveTask?.cancel()
+        suiteSaveTask = nil
+        writeSuite()
+    }
+
+    func scheduleSuiteSave() {
+        suiteSaveTask?.cancel()
+        suiteSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, let self else { return }
+            suiteSaveTask = nil
+            writeSuite()
+        }
+    }
+
+    private func writeSuite() {
         do {
             let data = try Self.encoder.encode(suite)
             try data.write(to: supportDirectory.appending(path: "suite.json"), options: .atomic)
@@ -328,7 +350,7 @@ final class EvaluationStore {
         }
         if configuration.reasoningLevel != .automatic,
            !selectedModelCapabilities.contains(.reasoning) {
-            return "The selected model does not support explicit reasoning levels. Choose Automatic or use Private Cloud Compute."
+            return "The on-device model does not support explicit reasoning levels. Choose Automatic."
         }
         if configuration.referenceMode == .lookupTool {
             if !selectedModelCapabilities.contains(.toolCalling) {
