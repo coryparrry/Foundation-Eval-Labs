@@ -1,6 +1,6 @@
 # Foundation Evals
 
-A small native macOS app for running repeatable evaluations against Apple's on-device Foundation Models without working in Xcode.
+A small native macOS app for running repeatable evaluations against Apple's on-device and Private Cloud Compute Foundation Models without working in Xcode.
 
 ## Run it
 
@@ -10,6 +10,8 @@ Requirements:
 - Apple Intelligence enabled and the system model downloaded
 - Xcode 27 command-line tools for local development builds
 
+Private Cloud Compute additionally requires network access, available quota, and Apple's managed entitlement on an approved signing identity.
+
 From this repository:
 
 ```sh
@@ -18,14 +20,26 @@ From this repository:
 
 That creates `dist/Foundation Evals.app`. Quit the app before rebuilding; the script will never terminate an evaluation that is already running. After the first build, open the `.app` directly for normal use without opening Xcode.
 
+For an approved Private Cloud Compute development setup, build and launch the entitled Release configuration:
+
+```sh
+FOUNDATION_EVALS_TEAM_ID=ABCDE12345 ./script/build_and_run.sh --pcc
+```
+
+Replace the placeholder with the Apple Developer team approved for the managed entitlement. The script defaults to an `Apple Development` identity; set `FOUNDATION_EVALS_SIGNING_IDENTITY` when an approved distribution identity is required. It allows Xcode to update provisioning, then verifies the exact team identifier and embedded entitlement before installing or launching the app.
+
+The normal Debug build deliberately has no cloud entitlement. The app requires both the managed entitlement and a non-ad-hoc team signature before enabling cloud requests.
+
 The app itself uses the system `FoundationModels` framework. It does not link the Xcode-only `Evaluations` developer framework, so a built app has no evaluation-runtime dependency on Xcode.
 
 ## What it does
 
 - Gives every case a fresh `LanguageModelSession` with shared instructions.
+- Controls provider, reasoning level, sampling, temperature, seed, response headroom, input policy, and reference delivery per suite.
+- Supports a bounded read-only reference-search tool; saved traces keep call metadata while omitting queries and returned passages.
 - Runs one to five repetitions to reveal probabilistic variation.
 - Supports deterministic exact/contains checks, trace collection without scoring, and a guided 1–4 AI rubric with editable templates.
-- Shows model readiness and the complete on-device request workload before a run starts.
+- Shows selected-provider readiness, capabilities, quota state, and the complete request workload before a run starts.
 - Imports or accepts dropped UTF-8 text, JSON, CSV, extractable PDF text, and up to four image attachments.
 - Records the effective model input, response, score, rationale, separate subject/judge latency and public token usage, framework error categories, OS/locale, prompt version, and attachment hashes.
 - Saves searchable run history locally in Application Support, supports confirmed local deletion, and exports complete JSON reports.

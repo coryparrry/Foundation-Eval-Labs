@@ -142,7 +142,7 @@ private struct RunStatusBadge: View {
 
     private var title: LocalizedStringResource {
         if run.cancelled { return "Cancelled" }
-        if run.terminationReason == "rateLimited" { return "Stopped early" }
+        if run.stoppedEarly { return "Stopped early" }
         if run.errorCount > 0 { return "Completed with issues" }
         if run.failedCount > 0 { return "Completed with failures" }
         return "Completed"
@@ -150,13 +150,13 @@ private struct RunStatusBadge: View {
 
     private var symbol: String {
         if run.cancelled { return "stop.circle.fill" }
-        if run.terminationReason == "rateLimited" || run.errorCount > 0 { return "exclamationmark.circle.fill" }
+        if run.stoppedEarly || run.errorCount > 0 { return "exclamationmark.circle.fill" }
         if run.failedCount > 0 { return "xmark.circle.fill" }
         return "checkmark.circle.fill"
     }
 
     private var color: Color {
-        if run.cancelled || run.terminationReason == "rateLimited" { return .orange }
+        if run.cancelled || run.stoppedEarly { return .orange }
         return run.errorCount > 0 || run.failedCount > 0 ? .red : .green
     }
 
@@ -213,11 +213,30 @@ private struct RunConfigurationSection: View {
         DisclosureGroup("Run configuration") {
             VStack(alignment: .leading, spacing: 14) {
                 LabeledText(label: "Instructions", text: run.instructions.isEmpty ? "None" : run.instructions)
+                if let execution = run.execution {
+                    let configuration = execution.configuration
+                    LabeledText(
+                        label: "Model provider",
+                        text: "\(execution.modelDisplayName) · \(configuration.provider.title)"
+                    )
+                    LabeledText(
+                        label: "Reasoning and generation",
+                        text: "Reasoning \(configuration.reasoningLevel.title) · \(configuration.samplingSummary) · temperature \(configuration.temperatureEnabled ? configuration.temperature.formatted(.number.precision(.fractionLength(2))) : "automatic") · maximum \(configuration.maximumResponseTokens) response tokens"
+                    )
+                    LabeledText(
+                        label: "Context and references",
+                        text: contextSummary(execution: execution)
+                    )
+                    LabeledText(
+                        label: "Execution contract",
+                        text: "\(execution.behaviorVersion) · capabilities: \(execution.capabilities.joined(separator: ", ")) · tools: \(execution.toolNames.isEmpty ? "none" : execution.toolNames.joined(separator: ", "))"
+                    )
+                }
                 if run.scoringMode == .modelJudge {
                     LabeledText(label: "AI rubric requirements", text: run.criteria)
                     LabeledText(
                         label: "AI judge",
-                        text: "Prompt \(run.judgePromptVersion ?? "legacy") · scores \(run.judgePassingScore ?? EvaluationSuite.judgePassingScore)–4 pass · same on-device model as the response"
+                        text: "Prompt \(run.judgePromptVersion ?? "legacy") · scores \(run.judgePassingScore ?? EvaluationSuite.judgePassingScore)–4 pass · selected provider with fixed greedy decoding and tools off"
                     )
                 }
                 LabeledText(
@@ -242,6 +261,16 @@ private struct RunConfigurationSection: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color.secondary.opacity(0.14))
         }
+    }
+
+    private func contextSummary(execution: EvaluationExecutionTrace) -> String {
+        let configuration = execution.configuration
+        let requested = configuration.maximumInputTokens.map { "\($0) tokens" } ?? "automatic"
+        let effective = execution.effectiveInputTokenLimit.map { " · effective \($0) tokens" } ?? ""
+        let toolReserve = execution.reservedToolOutputTokens.flatMap { $0 > 0 ? " · tool reserve \($0) tokens" : nil } ?? ""
+        let judgeReserve = execution.reservedJudgeOverheadTokens.flatMap { $0 > 0 ? " · judge reserve \($0) tokens" : nil } ?? ""
+        let counting = execution.inputTokenCountingMethod.map { " · \($0)" } ?? ""
+        return "Requested \(requested)\(effective)\(toolReserve)\(judgeReserve)\(counting) · \(configuration.contextPolicy.title) · \(configuration.referenceMode.title)"
     }
 }
 
@@ -361,6 +390,10 @@ private struct ResultDisclosureCard: View {
                             message: judgeErrorMessage,
                             category: result.judgeErrorCategory
                         )
+                    }
+
+                    if let toolCalls = result.toolCalls, !toolCalls.isEmpty {
+                        ToolTraceSection(toolCalls: toolCalls)
                     }
 
                     ResultTraceFooter(result: result)
@@ -509,17 +542,48 @@ private struct ResultTraceFooter: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Divider()
-            Text("Response: \(result.durationMilliseconds.formatted(.number.precision(.fractionLength(0)))) ms · \(result.usage.inputTokens) input · \(result.usage.outputTokens) output · \(result.usage.cachedInputTokens) cached")
+            Text("Response: \(result.durationMilliseconds.formatted(.number.precision(.fractionLength(0)))) ms · \(result.usage.inputTokens) input · \(result.usage.outputTokens) output · \(result.usage.reasoningTokens) reasoning · \(result.usage.cachedInputTokens) cached")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
 
             if let judgeDuration = result.judgeDurationMilliseconds {
                 let judgeUsage = result.judgeUsage ?? EvaluationUsage()
-                Text("AI judge: \(judgeDuration.formatted(.number.precision(.fractionLength(0)))) ms · \(judgeUsage.inputTokens) input · \(judgeUsage.outputTokens) output · \(judgeUsage.cachedInputTokens) cached")
+                Text("AI judge: \(judgeDuration.formatted(.number.precision(.fractionLength(0)))) ms · \(judgeUsage.inputTokens) input · \(judgeUsage.outputTokens) output · \(judgeUsage.reasoningTokens) reasoning · \(judgeUsage.cachedInputTokens) cached")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+private struct ToolTraceSection: View {
+    let toolCalls: [EvaluationToolCallTrace]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Reference tool activity")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ForEach(Array(toolCalls.enumerated()), id: \.offset) { _, call in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: call.outcome == "completed" ? "checkmark.circle" : "magnifyingglass.circle")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text("Call \(call.callIndex) · \(call.toolName) · \(call.outcome) · \(call.matchedFiles.isEmpty ? "no matched files" : call.matchedFiles.joined(separator: ", ")) · \(call.outputCharacterCount) output characters")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            }
+
+            Text("Queries and returned reference passages are intentionally omitted from the saved trace.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 8))
     }
 }
 

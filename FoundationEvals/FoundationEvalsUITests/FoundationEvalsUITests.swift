@@ -8,6 +8,7 @@ final class FoundationEvalsUITests: XCTestCase {
     @MainActor
     func testSuiteEditorShowsPrimaryRunControls() throws {
         let app = XCUIApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Suite Editor"].waitForExistence(timeout: 5))
@@ -15,6 +16,10 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Add Files"].exists)
         XCTAssertTrue(app.buttons["Add Case"].exists)
         XCTAssertTrue(app.staticTexts["Scoring and repetitions"].exists)
+        XCTAssertTrue(app.staticTexts["Model controls"].exists)
+        XCTAssertTrue(app.radioButtons["On device"].exists)
+        XCTAssertTrue(app.radioButtons["Private Cloud Compute"].exists)
+        XCTAssertTrue(app.staticTexts["Context and references"].exists)
         XCTAssertTrue(
             app.staticTexts["Ready to run"].exists
                 || app.staticTexts["Needs attention"].exists

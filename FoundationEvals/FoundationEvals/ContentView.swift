@@ -139,7 +139,7 @@ private struct RunSidebarRow: View {
 
     private var statusSummary: String {
         if run.cancelled { return "Cancelled · \(run.results.count) of \(run.plannedResultCount)" }
-        if run.terminationReason == "rateLimited" { return "Rate limited · \(run.results.count) of \(run.plannedResultCount)" }
+        if run.stoppedEarly { return "\(run.terminationSummary ?? "Stopped early") · \(run.results.count) of \(run.plannedResultCount)" }
         if run.errorCount > 0 { return "\(run.errorCount) issue\(run.errorCount == 1 ? "" : "s")" }
         if let passRate = run.passRate {
             return "\(passRate.formatted(.percent.precision(.fractionLength(0)))) passed"
@@ -148,14 +148,14 @@ private struct RunSidebarRow: View {
     }
 
     private var statusSymbol: String {
-        if run.cancelled || run.terminationReason == "rateLimited" { return "exclamationmark.circle.fill" }
+        if run.cancelled || run.stoppedEarly { return "exclamationmark.circle.fill" }
         if run.errorCount > 0 || run.failedCount > 0 { return "xmark.circle.fill" }
         if run.scoredCount > 0 { return "checkmark.circle.fill" }
         return "circle.dotted"
     }
 
     private var statusColor: Color {
-        if run.cancelled || run.terminationReason == "rateLimited" { return .orange }
+        if run.cancelled || run.stoppedEarly { return .orange }
         if run.errorCount > 0 || run.failedCount > 0 { return .red }
         if run.scoredCount > 0 { return .green }
         return .secondary

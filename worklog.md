@@ -1,10 +1,10 @@
 # Worklog
 
-- Goal: refine the macOS evaluation app into a clear, friendly daily-use tool without changing evaluation semantics.
-- Scope: visual hierarchy, wording, native macOS layout, run-history navigation, editor ergonomics, result scanning, accessibility, and focused basic features.
-- Current: refinement complete; final app bundle built and launched from `dist/Foundation Evals.app`.
-- Baseline: clean `codex/foundation-evals-app` branch at `cd7a72d`; previous 3/3 Xcode tests and live Foundation Models run passed.
-- Steering: preserve the useful scoring workflow and local trace pipeline; keep the app simple; use native SwiftUI/macOS patterns and real-interface validation.
-- Implemented: readiness/workload guidance, clearer editor hierarchy and wording, drag-and-drop references, safer case/run/file actions, searchable history, accurate partial-run counts, scalable result filtering/collapse/search, response copy, and native menu shortcuts.
-- Verified: Xcode 27 unit/UI test run passed 4/4; the scoring-mode workflow and editable expected-value fields were exercised through the real macOS interface; captured UI was visually inspected.
-- Review: independent diff review completed; dated history, failed-run status, scoped pass-rate wording, and persisted trace deletion coverage were corrected; no actionable findings remain.
+- Goal: add truthful Foundation Models controls for provider, reasoning, context, generation, and read-only reference-tool use.
+- Scope: suite configuration, provider admission/capabilities, bounded local tool calling, provider-aligned judging, context budgeting, trace persistence, result inspection, focused tests, and real-runtime validation.
+- Current: implementation and final review fixes complete on `codex/model-controls-tools`; final reconciliation and commit in progress.
+- Baseline: clean `main` at `24cc10e`; previous UI refinement passed three unit tests, one UI test, launch verification, and strict bundle signature verification.
+- Steering: preserve evaluator semantics and editable scoring values; expose only real SDK capabilities; keep tools read-only and bounded; never hide provider, quota, context, or fallback behavior.
+- Verified facts: the current on-device runtime reports tool calling, guided generation, vision, and an 8,192-token context but no reasoning capability; PCC reports reasoning, tools, guided generation, vision, and a 32,768-token context, with a managed-entitlement, network, and quota boundary.
+- Validation: 12 unit tests and 1 UI test pass; Debug build/launch verification and unsigned Release compilation pass; the Debug artifact has no PCC entitlement; a temporary live on-device tool + fixed-judge round trip passed; final diff, script syntax, and entitlement checks pass.
+- Boundary: no Apple Development signing identity is installed, so a signed PCC request was not attempted; `--pcc` now provides the explicit entitled Release path for approved identities.

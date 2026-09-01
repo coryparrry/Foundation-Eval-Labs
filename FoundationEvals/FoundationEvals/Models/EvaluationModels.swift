@@ -26,7 +26,7 @@ enum ScoringMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .containsExpected:
             "Pass when the response contains the required literal text, ignoring case and accents."
         case .modelJudge:
-            "Use a second on-device model call for subjective quality. The judge scores 1–4; 3 or 4 passes."
+            "Use a separate call to the selected model provider with fixed judge settings. The judge scores 1–4; 3 or 4 passes."
         }
     }
 
@@ -75,6 +75,112 @@ struct EvaluationAttachment: Identifiable, Codable, Hashable, Sendable {
     var sha256: String
 }
 
+enum EvaluationModelProvider: String, Codable, CaseIterable, Identifiable, Sendable {
+    case onDevice
+    case privateCloudCompute
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .onDevice: "On device"
+        case .privateCloudCompute: "Private Cloud Compute"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .onDevice:
+            "Keeps prompts on this Mac. The current system model supports tools but not explicit reasoning levels."
+        case .privateCloudCompute:
+            "Supports explicit reasoning and a larger context. Requires a network connection, available quota, and Apple's managed entitlement."
+        }
+    }
+}
+
+enum EvaluationReasoningLevel: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case light
+    case moderate
+    case deep
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .light: "Light"
+        case .moderate: "Moderate"
+        case .deep: "Deep"
+        }
+    }
+}
+
+enum EvaluationSamplingMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case greedy
+    case topK
+    case probability
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .greedy: "Greedy"
+        case .topK: "Random · top K"
+        case .probability: "Random · probability"
+        }
+    }
+}
+
+enum EvaluationReferenceMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case inline
+    case lookupTool
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .inline: "Include in prompt"
+        case .lookupTool: "Search with tool"
+        }
+    }
+}
+
+enum EvaluationContextPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
+    case fitReferences
+    case requireFullInput
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .fitReferences: "Fit reference text"
+        case .requireFullInput: "Require full input"
+        }
+    }
+}
+
+struct EvaluationModelConfiguration: Codable, Equatable, Sendable {
+    static let currentBehaviorVersion = "foundation-evals-v3"
+
+    var provider: EvaluationModelProvider = .onDevice
+    var reasoningLevel: EvaluationReasoningLevel = .automatic
+    var samplingMode: EvaluationSamplingMode = .automatic
+    var temperatureEnabled = false
+    var temperature = 0.7
+    var seedEnabled = false
+    var seed: UInt64 = 42
+    var topK = 40
+    var probabilityThreshold = 0.9
+    var maximumResponseTokens = 1_024
+    var maximumInputTokens: Int? = nil
+    var referenceMode: EvaluationReferenceMode = .inline
+    var contextPolicy: EvaluationContextPolicy = .fitReferences
+    var maximumToolCalls = 2
+}
+
 struct EvaluationSuite: Codable, Equatable, Sendable {
     static let legacyDefaultCriteria = "The response is correct, relevant, and follows the instructions."
     static let judgePassingScore = 3
@@ -91,6 +197,7 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
     var criteria = EvaluationSuite.defaultRubric
     var scoringMode = ScoringMode.modelJudge
     var repetitions = 1
+    var modelConfiguration = EvaluationModelConfiguration()
     var cases = [
         EvaluationCase(
             name: "Example",
@@ -105,6 +212,28 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
             .split(whereSeparator: \Character.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, version, instructions, criteria, scoringMode, repetitions, modelConfiguration, cases, attachments
+    }
+
+    init(from decoder: Decoder) throws {
+        let defaults = EvaluationSuite()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? defaults.id
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? defaults.name
+        version = try container.decodeIfPresent(String.self, forKey: .version) ?? defaults.version
+        instructions = try container.decodeIfPresent(String.self, forKey: .instructions) ?? defaults.instructions
+        criteria = try container.decodeIfPresent(String.self, forKey: .criteria) ?? defaults.criteria
+        scoringMode = try container.decodeIfPresent(ScoringMode.self, forKey: .scoringMode) ?? defaults.scoringMode
+        repetitions = try container.decodeIfPresent(Int.self, forKey: .repetitions) ?? defaults.repetitions
+        modelConfiguration = try container.decodeIfPresent(EvaluationModelConfiguration.self, forKey: .modelConfiguration)
+            ?? defaults.modelConfiguration
+        cases = try container.decodeIfPresent([EvaluationCase].self, forKey: .cases) ?? defaults.cases
+        attachments = try container.decodeIfPresent([EvaluationAttachment].self, forKey: .attachments) ?? defaults.attachments
     }
 }
 
@@ -151,6 +280,15 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var errorMessage: String?
     var judgeErrorCategory: String?
     var judgeErrorMessage: String?
+    var toolCalls: [EvaluationToolCallTrace]? = nil
+}
+
+struct EvaluationToolCallTrace: Codable, Sendable {
+    var toolName: String
+    var callIndex: Int
+    var matchedFiles: [String]
+    var outputCharacterCount: Int
+    var outcome: String
 }
 
 struct EvaluationAttachmentTrace: Codable, Sendable {
@@ -165,6 +303,18 @@ struct EvaluationEnvironment: Codable, Sendable {
     var locale: String
     var model: String
     var modelContextSize: Int
+}
+
+struct EvaluationExecutionTrace: Codable, Sendable {
+    var behaviorVersion: String
+    var configuration: EvaluationModelConfiguration
+    var modelDisplayName: String
+    var capabilities: [String]
+    var toolNames: [String]
+    var effectiveInputTokenLimit: Int? = nil
+    var reservedToolOutputTokens: Int? = nil
+    var reservedJudgeOverheadTokens: Int? = nil
+    var inputTokenCountingMethod: String? = nil
 }
 
 struct EvaluationRun: Identifiable, Codable, Sendable {
@@ -186,6 +336,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var environment: EvaluationEnvironment
     var attachments: [EvaluationAttachmentTrace]
     var results: [EvaluationSampleResult]
+    var execution: EvaluationExecutionTrace? = nil
 
     var passedCount: Int { results.count(where: { $0.status == .passed }) }
     var failedCount: Int { results.count(where: { $0.status == .failed }) }
@@ -194,6 +345,22 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     }
     var scoredCount: Int { passedCount + failedCount }
     var plannedResultCount: Int { plannedSampleCount ?? results.count }
+    var stoppedEarly: Bool {
+        !cancelled && terminationReason != nil && results.count < plannedResultCount
+    }
+
+    var terminationSummary: String? {
+        switch terminationReason {
+        case "rateLimited": "Rate limited"
+        case "quotaLimitReached": "Cloud quota reached"
+        case "networkFailure": "Network failure"
+        case "serviceUnavailable": "Service unavailable"
+        case "modelUnavailable": "Model unavailable"
+        case "modelAssetsUnavailable": "Model assets unavailable"
+        case .some(let reason): reason
+        case nil: nil
+        }
+    }
 
     var passRate: Double? {
         scoredCount == 0 ? nil : Double(passedCount) / Double(scoredCount)

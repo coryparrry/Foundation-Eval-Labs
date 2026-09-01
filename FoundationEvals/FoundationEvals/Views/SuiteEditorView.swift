@@ -65,6 +65,7 @@ struct SuiteEditorView: View {
                     SharedReferenceFilesSection(store: store)
                 }
 
+                ModelControlsSection(store: store)
                 ScoringSection(store: store)
                 CasesSection(store: store)
             }
@@ -93,7 +94,7 @@ private struct SuiteOverviewHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("ON-DEVICE EVALUATION SUITE")
+            Text("FOUNDATION MODEL EVALUATION SUITE")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .tracking(0.6)
@@ -201,9 +202,20 @@ private struct RunReadinessPanel: View {
             return blocker
         }
         if store.suite.scoringMode == .modelJudge {
-            return "\(responseLabel) plus \(store.plannedSampleCount) AI rubric check\(store.plannedSampleCount == 1 ? "" : "s") · \(store.plannedRequestCount) on-device requests total."
+            let quotaNote = store.suite.modelConfiguration.provider == .privateCloudCompute
+                ? " It uses an additional cloud request and quota for each response."
+                : ""
+            return requestSummary + " The AI rubric uses the selected provider with fixed greedy decoding and tools off." + quotaNote
         }
-        return "\(responseLabel) · \(store.plannedRequestCount) on-device request\(store.plannedRequestCount == 1 ? "" : "s") total."
+        return requestSummary
+    }
+
+    private var requestSummary: String {
+        let provider = store.suite.modelConfiguration.provider.title
+        let toolSuffix = store.plannedToolCallLimit > 0
+            ? " · up to \(store.plannedToolCallLimit) local reference-tool calls"
+            : ""
+        return "\(responseLabel) · \(store.plannedRequestCount) model request\(store.plannedRequestCount == 1 ? "" : "s") · \(provider)\(toolSuffix)."
     }
 
     private var statusSymbol: String {
@@ -378,7 +390,7 @@ private struct ModelRubricEditor: View {
         RubricScale()
 
         Label(
-            "The response and its score come from the same on-device model. Compare scores with a small human-reviewed set before using them as a release gate.",
+            "The response and its score use the selected provider, but the judge uses fixed greedy decoding with tools off. Compare scores with a small human-reviewed set before using them as a release gate.",
             systemImage: "person.2"
         )
         .font(.caption)
@@ -687,7 +699,7 @@ private struct ModelStatusBadge: View {
     }
 }
 
-private struct EditorSection<Content: View>: View {
+struct EditorSection<Content: View>: View {
     let title: LocalizedStringResource
     let systemImage: String
     let sectionDescription: LocalizedStringResource

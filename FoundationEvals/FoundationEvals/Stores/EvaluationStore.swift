@@ -3,6 +3,7 @@ import Foundation
 import FoundationModels
 import Observation
 import PDFKit
+import Security
 import UniformTypeIdentifiers
 
 @MainActor
@@ -62,17 +63,58 @@ final class EvaluationStore {
     }
 
     var modelStatus: ModelStatus {
-        switch SystemLanguageModel.default.availability {
-        case .available:
-            ModelStatus(isAvailable: true, label: "Model ready", detail: "Apple's on-device system language model is available.")
-        case .unavailable(.deviceNotEligible):
-            ModelStatus(isAvailable: false, label: "Device not eligible", detail: "This Mac does not support Apple Intelligence.")
-        case .unavailable(.appleIntelligenceNotEnabled):
-            ModelStatus(isAvailable: false, label: "Apple Intelligence off", detail: "Enable Apple Intelligence in System Settings.")
-        case .unavailable(.modelNotReady):
-            ModelStatus(isAvailable: false, label: "Model not ready", detail: "The model may still be downloading.")
-        case .unavailable:
-            ModelStatus(isAvailable: false, label: "Model unavailable", detail: "The model is unavailable for an unknown reason.")
+        switch suite.modelConfiguration.provider {
+        case .onDevice:
+            return switch SystemLanguageModel.default.availability {
+            case .available:
+                ModelStatus(isAvailable: true, label: "On-device model ready", detail: "Prompts and reference-tool lookups stay on this Mac.")
+            case .unavailable(.deviceNotEligible):
+                ModelStatus(isAvailable: false, label: "Device not eligible", detail: "This Mac does not support Apple Intelligence.")
+            case .unavailable(.appleIntelligenceNotEnabled):
+                ModelStatus(isAvailable: false, label: "Apple Intelligence off", detail: "Enable Apple Intelligence in System Settings.")
+            case .unavailable(.modelNotReady):
+                ModelStatus(isAvailable: false, label: "Model not ready", detail: "The model may still be downloading.")
+            case .unavailable:
+                ModelStatus(isAvailable: false, label: "Model unavailable", detail: "The model is unavailable for an unknown reason.")
+            }
+        case .privateCloudCompute:
+            guard Self.hasAuthorizedPrivateCloudComputeSignature else {
+                return ModelStatus(
+                    isAvailable: false,
+                    label: "Approved cloud signature required",
+                    detail: "Sign a Release build with a non-ad-hoc Apple Development or Distribution identity approved for the managed Private Cloud Compute entitlement."
+                )
+            }
+            let model = PrivateCloudComputeLanguageModel()
+            if model.quotaUsage.isLimitReached {
+                return ModelStatus(
+                    isAvailable: false,
+                    label: "Cloud quota reached",
+                    detail: model.quotaUsage.resetDate.map { "Quota resets \($0.formatted(date: .abbreviated, time: .shortened))." }
+                        ?? "Private Cloud Compute quota is currently exhausted."
+                )
+            }
+            switch model.availability {
+            case .available:
+                return ModelStatus(
+                    isAvailable: true,
+                    label: "Cloud model ready",
+                    detail: "Requests use Apple's Private Cloud Compute over the network and consume quota."
+                )
+            case .unavailable(.deviceNotEligible):
+                return ModelStatus(isAvailable: false, label: "Device not eligible", detail: "This Mac is not eligible for Private Cloud Compute model requests.")
+            case .unavailable(.systemNotReady):
+                return ModelStatus(isAvailable: false, label: "Cloud model not ready", detail: "Check the network connection and Private Cloud Compute entitlement.")
+            case .unavailable:
+                return ModelStatus(isAvailable: false, label: "Cloud model unavailable", detail: "Private Cloud Compute is unavailable for an unknown reason.")
+            }
+        }
+    }
+
+    var selectedModelCapabilities: LanguageModelCapabilities {
+        switch suite.modelConfiguration.provider {
+        case .onDevice: SystemLanguageModel.default.capabilities
+        case .privateCloudCompute: PrivateCloudComputeLanguageModel().capabilities
         }
     }
 
@@ -82,6 +124,12 @@ final class EvaluationStore {
 
     var plannedRequestCount: Int {
         plannedSampleCount * (suite.scoringMode == .modelJudge ? 2 : 1)
+    }
+
+    var plannedToolCallLimit: Int {
+        suite.modelConfiguration.referenceMode == .lookupTool
+            ? plannedSampleCount * suite.modelConfiguration.maximumToolCalls
+            : 0
     }
 
     var runBlocker: String? {
@@ -239,6 +287,7 @@ final class EvaluationStore {
     }
 
     private func validationError() -> String? {
+        let configuration = suite.modelConfiguration
         if suite.cases.isEmpty {
             return "Add at least one evaluation case."
         }
@@ -256,6 +305,54 @@ final class EvaluationStore {
             if suite.rubricCriteria.count > 4 {
                 return "Keep the AI rubric to four requirements or fewer so the judge can evaluate each one reliably."
             }
+            if !selectedModelCapabilities.contains(.guidedGeneration) {
+                return "The selected model does not support the guided output required by the AI judge."
+            }
+        }
+        if !(128...4_096).contains(configuration.maximumResponseTokens) {
+            return "Choose a maximum response length between 128 and 4,096 tokens."
+        }
+        if let maximumInputTokens = configuration.maximumInputTokens,
+           !(512...32_768).contains(maximumInputTokens) {
+            return "Choose an input ceiling between 512 and 32,768 tokens."
+        }
+        if configuration.temperatureEnabled, !(0...1).contains(configuration.temperature) {
+            return "Temperature must be between 0 and 1."
+        }
+        if configuration.samplingMode == .topK, !(1...1_000).contains(configuration.topK) {
+            return "Top K must be between 1 and 1,000."
+        }
+        if configuration.samplingMode == .probability,
+           !(0.01...1).contains(configuration.probabilityThreshold) {
+            return "Probability threshold must be between 0.01 and 1."
+        }
+        if configuration.reasoningLevel != .automatic,
+           !selectedModelCapabilities.contains(.reasoning) {
+            return "The selected model does not support explicit reasoning levels. Choose Automatic or use Private Cloud Compute."
+        }
+        if configuration.referenceMode == .lookupTool {
+            if !selectedModelCapabilities.contains(.toolCalling) {
+                return "The selected model does not support tool calling."
+            }
+            if !suite.attachments.contains(where: { $0.kind == .text }) {
+                return "Import at least one text reference before enabling reference search."
+            }
+            if !(1...4).contains(configuration.maximumToolCalls) {
+                return "The reference tool limit must be between one and four calls per response."
+            }
+        }
+        if configuration.provider == .onDevice {
+            let allocation = configuration.contextAllocation(
+                contextSize: SystemLanguageModel.default.contextSize,
+                includesModelJudge: suite.scoringMode == .modelJudge
+            )
+            if allocation.effectiveInputLimit < 512 {
+                return "Reduce the response limit or reference-tool call limit so at least 512 input tokens remain."
+            }
+        }
+        if suite.attachments.contains(where: { $0.kind == .image }),
+           !selectedModelCapabilities.contains(.vision) {
+            return "The selected model does not support image input."
         }
         return modelStatus.isAvailable ? nil : modelStatus.detail
     }
@@ -405,6 +502,22 @@ final class EvaluationStore {
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }()
+
+    private static var hasAuthorizedPrivateCloudComputeSignature: Bool {
+        guard let task = SecTaskCreateFromSelf(nil),
+              let entitlement = SecTaskCopyValueForEntitlement(
+                task,
+                "com.apple.developer.private-cloud-compute" as CFString,
+                nil
+              ),
+              entitlement as? Bool == true,
+              let teamIdentifier = SecTaskCopyValueForEntitlement(
+                task,
+                "com.apple.developer.team-identifier" as CFString,
+                nil
+              ) as? String else { return false }
+        return !teamIdentifier.isEmpty
+    }
 }
 
 private enum ImportError: LocalizedError {
