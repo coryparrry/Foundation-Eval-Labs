@@ -390,7 +390,7 @@ private struct ModelRubricEditor: View {
         RubricScale()
 
         Label(
-            "The response and its score use the selected provider, but the judge uses fixed greedy decoding with tools off. Compare scores with a small human-reviewed set before using them as a release gate.",
+            "An exact verified-reference match passes deterministically. Other responses use the selected provider as a fixed greedy judge with tools off. Compare judged scores with a small human-reviewed set before using them as a release gate.",
             systemImage: "person.2"
         )
         .font(.caption)

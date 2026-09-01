@@ -43,7 +43,7 @@ enum ScoringMode: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .exactMatch: "Example: Paris — the generated response must be exactly this text."
         case .containsExpected: "Example: Paris — this is literal text, not a regular expression."
-        case .modelJudge: "Give the judge a known-good answer when correctness can be verified. Leave blank only for open-ended tasks."
+        case .modelJudge: "Give the judge a known-good answer when correctness can be verified. An exact match passes deterministically without asking the model judge."
         case .review: ""
         }
     }
@@ -163,7 +163,7 @@ enum EvaluationContextPolicy: String, Codable, CaseIterable, Identifiable, Senda
 }
 
 struct EvaluationModelConfiguration: Codable, Equatable, Sendable {
-    static let currentBehaviorVersion = "foundation-evals-v3"
+    static let currentBehaviorVersion = "foundation-evals-v4"
 
     var provider: EvaluationModelProvider = .onDevice
     var reasoningLevel: EvaluationReasoningLevel = .automatic
