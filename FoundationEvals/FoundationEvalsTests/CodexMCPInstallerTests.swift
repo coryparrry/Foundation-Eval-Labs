@@ -64,7 +64,44 @@ struct CodexMCPInstallerTests {
         #expect(installed.hasPrefix(commented))
     }
 
-    @Test func malformedAndUnsupportedConfigurationsAreLeftUntouched() throws {
+    @Test func multilineStringsArePreservedDuringInstallation() throws {
+        let original = #"""
+        developer_instructions = """
+        Keep [mcp_servers.foundation-evals], # signs, and { braces } inside this string.
+        A quoted ending is valid here.""""
+        literal_instructions = '''
+        Keep [this.literal.table] inside the literal string too.
+        '''
+        """# + "\n"
+
+        let installed = try CodexMCPInstaller.installing(
+            configuration: CodexMCPConfiguration(bearerToken: token),
+            into: original
+        )
+
+        #expect(installed.hasPrefix(original))
+        #expect(installed.contains(CodexMCPInstaller.beginMarker))
+    }
+
+    @Test func repeatedArrayTablesArePreservedDuringInstallation() throws {
+        let original = """
+        [[skills.config]]
+        path = "first"
+        enabled = true
+        [[skills.config]]
+        path = "second"
+        enabled = false
+        """ + "\n"
+
+        let installed = try CodexMCPInstaller.installing(
+            configuration: CodexMCPConfiguration(bearerToken: token),
+            into: original
+        )
+
+        #expect(installed.hasPrefix(original))
+    }
+
+    @Test func malformedConfigurationsAreLeftUntouched() throws {
         let configuration = try CodexMCPConfiguration(bearerToken: token)
 
         #expect(throws: CodexMCPInstallerError.malformedManagedBlock) {
@@ -76,14 +113,20 @@ struct CodexMCPInstallerTests {
         #expect(throws: CodexMCPInstallerError.malformedConfiguration) {
             try CodexMCPInstaller.installing(configuration: configuration, into: "model = \"unterminated\n")
         }
-        #expect(throws: CodexMCPInstallerError.unsupportedConfiguration) {
-            try CodexMCPInstaller.installing(configuration: configuration, into: "notes = \"\"\"multiline\"\"\"\n")
+        #expect(throws: CodexMCPInstallerError.malformedConfiguration) {
+            try CodexMCPInstaller.installing(configuration: configuration, into: "notes = \"\"\"unterminated\n")
         }
         #expect(throws: CodexMCPInstallerError.malformedConfiguration) {
             try CodexMCPInstaller.installing(configuration: configuration, into: "model = nope nope\n")
         }
         #expect(throws: CodexMCPInstallerError.malformedConfiguration) {
             try CodexMCPInstaller.installing(configuration: configuration, into: "model = \"one\"\nmodel = \"two\"\n")
+        }
+        #expect(throws: CodexMCPInstallerError.malformedConfiguration) {
+            try CodexMCPInstaller.installing(configuration: configuration, into: "[skills]\nname = \"one\"\n[[skills]]\nname = \"two\"\n")
+        }
+        #expect(throws: CodexMCPInstallerError.malformedConfiguration) {
+            try CodexMCPInstaller.installing(configuration: configuration, into: "[[skills]]\nname = \"one\"\n[skills]\nname = \"two\"\n")
         }
     }
 

@@ -1,5 +1,8 @@
 # Worklog
 
+- Current task: finish the live Codex connector installer fix. Root causes found: valid multiline strings were rejected outright, then repeated array-of-table keys were incorrectly treated as duplicates across distinct entries. Preserve all existing configuration and verify the rebuilt UI flow.
+- Evidence: the real `~/.codex/config.toml` validates without modification (`accepted=true appended=true`); all 11 installer tests pass; the rebuilt app installed and started the connector without the former TOML-layout alert. Authenticated legacy and modern MCP handshakes, `tools/list`, and `eval_get_state` returned HTTP 200. Sending the identical live suite through `eval_replace_suite` returned `duplicate`; the post-read revision and suite were unchanged. This already-running Codex task needs a restart to load the new native tool palette.
+
 - Goal: add a Swift-native MCP connector so agents can configure suites, upload context, run/cancel evals, and read durable results without UI control.
 - Current: App Sandbox and the folder picker are removed; Connect to Codex writes the managed block directly under `~/.codex`.
 - Steering: never launch the installed and DerivedData builds together; fix the broken Suite Editor at its source, not with window-size workarounds.

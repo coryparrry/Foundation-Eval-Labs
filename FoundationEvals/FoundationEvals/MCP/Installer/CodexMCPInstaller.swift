@@ -455,7 +455,9 @@ struct CodexMCPInstaller {
     private static func validateTOML(_ text: String) throws {
         let statements = try statements(in: text)
         var section: [String] = []
+        var sectionOccurrence = 0
         var tables = Set<String>()
+        var arrayTableOccurrences: [String: Int] = [:]
         var values = Set<String>()
 
         for statement in statements {
@@ -467,8 +469,16 @@ struct CodexMCPInstaller {
                 let body = String(trimmed.dropFirst(leading).dropLast(trailing))
                 section = try keyPath(body)
                 let identity = section.joined(separator: "\u{1F}")
-                if !isArray, !tables.insert(identity).inserted {
+                if isArray {
+                    guard !tables.contains(identity) else {
+                        throw CodexMCPInstallerError.malformedConfiguration
+                    }
+                    arrayTableOccurrences[identity, default: 0] += 1
+                    sectionOccurrence = arrayTableOccurrences[identity, default: 0]
+                } else if arrayTableOccurrences[identity] != nil || !tables.insert(identity).inserted {
                     throw CodexMCPInstallerError.malformedConfiguration
+                } else {
+                    sectionOccurrence = 0
                 }
                 continue
             }
@@ -477,7 +487,8 @@ struct CodexMCPInstaller {
                 throw CodexMCPInstallerError.malformedConfiguration
             }
             let path = section + (try keyPath(String(statement.text[..<equals])))
-            guard values.insert(path.joined(separator: "\u{1F}")).inserted else {
+            let identity = "\(sectionOccurrence)\u{1E}" + path.joined(separator: "\u{1F}")
+            guard values.insert(identity).inserted else {
                 throw CodexMCPInstallerError.malformedConfiguration
             }
             let value = String(statement.text[statement.text.index(after: equals)...])
@@ -517,20 +528,23 @@ struct CodexMCPInstaller {
     }
 
     private static func statements(in text: String) throws -> [TOMLStatement] {
-        if text.contains("\"\"\"") || text.contains("'''") {
-            throw CodexMCPInstallerError.unsupportedConfiguration
-        }
         var result: [TOMLStatement] = []
         var pending = ""
         var squareDepth = 0
         var braceDepth = 0
+        var multilineQuote: Character?
 
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = try uncommented(String(rawLine), squareDepth: &squareDepth, braceDepth: &braceDepth)
+            let line = try uncommented(
+                String(rawLine),
+                squareDepth: &squareDepth,
+                braceDepth: &braceDepth,
+                multilineQuote: &multilineQuote
+            )
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if pending.isEmpty, trimmed.isEmpty { continue }
             pending += (pending.isEmpty ? "" : "\n") + line
-            guard squareDepth == 0, braceDepth == 0 else { continue }
+            guard multilineQuote == nil, squareDepth == 0, braceDepth == 0 else { continue }
 
             let statement = pending.trimmingCharacters(in: .whitespacesAndNewlines)
             pending = ""
@@ -552,7 +566,7 @@ struct CodexMCPInstaller {
                 result.append(TOMLStatement(text: statement, equalsIndex: equals))
             }
         }
-        guard pending.isEmpty, squareDepth == 0, braceDepth == 0 else {
+        guard pending.isEmpty, multilineQuote == nil, squareDepth == 0, braceDepth == 0 else {
             throw CodexMCPInstallerError.malformedConfiguration
         }
         return result
@@ -561,12 +575,50 @@ struct CodexMCPInstaller {
     private static func uncommented(
         _ line: String,
         squareDepth: inout Int,
-        braceDepth: inout Int
+        braceDepth: inout Int,
+        multilineQuote: inout Character?
     ) throws -> String {
         var quote: Character?
         var escaped = false
         var output = ""
-        for character in line {
+        var index = line.startIndex
+        while index < line.endIndex {
+            let character = line[index]
+            let next = line.index(after: index)
+            let hasTripleQuote = next < line.endIndex
+                && line[next] == character
+                && line.index(after: next) < line.endIndex
+                && line[line.index(after: next)] == character
+
+            if let currentQuote = multilineQuote {
+                if currentQuote == "\"", character == "\\" {
+                    output.append(character)
+                    index = next
+                    if index < line.endIndex {
+                        output.append(line[index])
+                        index = line.index(after: index)
+                    }
+                    continue
+                }
+                if character == currentQuote, hasTripleQuote {
+                    var end = index
+                    var count = 0
+                    while end < line.endIndex, line[end] == currentQuote {
+                        output.append(currentQuote)
+                        count += 1
+                        end = line.index(after: end)
+                    }
+                    guard count <= 5 else {
+                        throw CodexMCPInstallerError.malformedConfiguration
+                    }
+                    index = end
+                    multilineQuote = nil
+                } else {
+                    output.append(character)
+                    index = next
+                }
+                continue
+            }
             if let currentQuote = quote {
                 output.append(character)
                 if currentQuote == "\"", escaped {
@@ -576,12 +628,21 @@ struct CodexMCPInstaller {
                 } else if character == currentQuote {
                     quote = nil
                 }
+                index = next
                 continue
             }
             if character == "#" { break }
             if character == "\"" || character == "'" {
-                quote = character
                 output.append(character)
+                if hasTripleQuote {
+                    output.append(character)
+                    output.append(character)
+                    index = line.index(index, offsetBy: 3)
+                    multilineQuote = character
+                } else {
+                    quote = character
+                    index = next
+                }
             } else {
                 switch character {
                 case "[": squareDepth += 1
@@ -594,6 +655,7 @@ struct CodexMCPInstaller {
                     throw CodexMCPInstallerError.malformedConfiguration
                 }
                 output.append(character)
+                index = next
             }
         }
         guard quote == nil else { throw CodexMCPInstallerError.malformedConfiguration }
@@ -626,6 +688,10 @@ struct CodexMCPInstaller {
         let value = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = value.first, let last = value.last else { return false }
         if first == "\"" || first == "'" {
+            let delimiter = String(repeating: first, count: 3)
+            if value.hasPrefix(delimiter) {
+                return value.count >= 6 && value.hasSuffix(delimiter)
+            }
             guard last == first else { return false }
             var quote: Character? = first
             var escaped = false
