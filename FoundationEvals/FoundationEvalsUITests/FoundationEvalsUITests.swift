@@ -8,12 +8,13 @@ final class FoundationEvalsUITests: XCTestCase {
     @MainActor
     func testSuiteEditorShowsPrimaryRunControls() throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "--disable-mcp-autostart"]
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Suite Editor"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Run"].exists)
         XCTAssertTrue(app.buttons["Add Case"].exists)
+        XCTAssertTrue(app.buttons["Add Case"].isHittable)
         XCTAssertTrue(
             app.staticTexts["Ready to run"].exists
                 || app.staticTexts["Needs attention"].exists

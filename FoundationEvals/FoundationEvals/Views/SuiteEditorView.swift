@@ -70,25 +70,25 @@ struct SuiteEditorView: View {
     @State private var selectedPage = SuiteEditorPage.cases
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                SuiteOverviewHeader(store: store)
-                RunReadinessPanel(store: store)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 18) {
+                    SuiteOverviewHeader(store: store)
+                    RunReadinessPanel(store: store)
 
-                Picker("Editor page", selection: $selectedPage) {
-                    ForEach(SuiteEditorPage.allCases) { page in
-                        Text(page.title).tag(page)
+                    Picker("Editor page", selection: $selectedPage) {
+                        ForEach(SuiteEditorPage.allCases) { page in
+                            Text(page.title).tag(page)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("Editor page")
                 }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("Editor page")
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 28)
-            .padding(.bottom, 18)
-            .frame(maxWidth: 1_080, alignment: .leading)
+                .padding(.horizontal, 28)
+                .padding(.top, 28)
+                .padding(.bottom, 18)
+                .frame(maxWidth: 1_080, alignment: .leading)
 
-            ScrollView {
                 selectedPageContent
                     .padding(.horizontal, 28)
                     .padding(.bottom, 28)

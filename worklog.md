@@ -1,5 +1,18 @@
 # Worklog
 
+- Goal: add a Swift-native MCP connector so agents can configure suites, upload context, run/cancel evals, and read durable results without UI control.
+- Current: finishing protocol hardening and acceptance on `codex/swift-mcp-eval-control`; no Git remote is configured, so the branch cannot be pushed or opened as a PR.
+- Steering: never launch the installed and DerivedData builds together; fix the broken Suite Editor at its source, not with window-size workarounds.
+- Contract: loopback HTTP on fixed port 17873; MCP 2026-07-28 plus Codex-compatible 2025-11-25; bearer auth; one active run; on-device model only.
+- Integrity: durable writes before success, revision/resource-based idempotency, bounded requests/workloads, no caller file paths, cooperative cancellation, interrupted-run recovery.
+- Installation: one-time sandbox folder grant, managed Codex TOML block, plaintext token disclosure, per-server approval mode, reconnect required after changes.
+- Evidence: Xcode build-for-testing passes. The unsigned protocol lane passes 15/15, including real hostile/admission/socket/rebind checks. In the signed app-host lane, 45/46 passed and the socket client was correctly denied because the production app requests `network.server`, not `network.client`; that test now declares the sandbox precondition explicitly.
+- Boundaries: the follow-up signed run and UI test hit Xcode 27 beta worker/automation stalls, although the live UI geometry was verified directly. The official conformance CLI has no bearer-header option, so it cannot drive this authenticated endpoint without weakening the production contract. Guided Codex acceptance still requires the one-time folder picker, Keychain authorization for a newly signed build, and restart.
+- Signing: this checkout produces an ad-hoc development build. A stable distribution signature is required before treating Keychain identity across app rebuilds as release evidence.
+- UI repair: commit `d501878` introduced `VStack { header; ScrollView { page } }`, causing a `1180×780` window to host a vertically centred `1180×1830` split view. Restoring one outer `ScrollView` preserves the tabbed editor and now produces matching `1180×780` window/split-view geometry with the MCP runtime connected.
+
+## Previous completed work
+
 - Goal: make the Suite Editor easier to navigate and faster to type in, hide PCC for the open-source surface, and show available reasoning context in results.
 - Scope: existing SwiftUI view/data flow, provider visibility and migration, response transcript/usage traces, focused tests, and real-interface validation.
 - Current: implementation and scoring-page correction complete and validated; ready to merge into local `main`.
