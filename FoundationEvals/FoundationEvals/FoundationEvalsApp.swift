@@ -34,9 +34,10 @@ struct FoundationEvalsApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(store: store)
-                .task {
+                .task(id: mcpSettings.installationState) {
                     appDelegate.runtime = mcpRuntime
                     guard !ProcessInfo.processInfo.arguments.contains("--disable-mcp-autostart") else { return }
+                    guard mcpSettings.installationState == .installed else { return }
                     await mcpSettings.startServer()
                 }
         }

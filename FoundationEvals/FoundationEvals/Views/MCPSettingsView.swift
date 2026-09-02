@@ -85,6 +85,7 @@ struct MCPSettingsView: View {
                         Task { await controller.installOrUpdateCodex() }
                     }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("Codex install or update")
 
                     Button("Copy Manual Configuration") {
                         Task { await controller.copyManualConfiguration() }

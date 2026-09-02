@@ -20,6 +20,12 @@ final class FoundationEvalsUITests: XCTestCase {
                 || app.staticTexts["Needs attention"].exists
         )
 
+        let connector = app.descendants(matching: .any)["Open MCP Connector"]
+        XCTAssertTrue(connector.waitForExistence(timeout: 2))
+        connector.click()
+        XCTAssertTrue(app.buttons["Codex install or update"].waitForExistence(timeout: 2))
+        app.typeKey("w", modifierFlags: .command)
+
         app.radioButtons["Instructions"].click()
         XCTAssertTrue(app.buttons["Add Files"].exists)
 

@@ -78,6 +78,13 @@ private struct RunHistorySidebar: View {
                 .tag(SidebarSelection.suite)
             }
 
+            Section("Connector") {
+                SettingsLink {
+                    Label("MCP Connector", systemImage: "network")
+                }
+                .accessibilityIdentifier("Open MCP Connector")
+            }
+
             Section("Run History") {
                 if visibleRuns.isEmpty {
                     EmptyRunHistoryRow(isSearching: !searchText.isEmpty)
