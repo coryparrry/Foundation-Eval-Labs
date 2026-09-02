@@ -160,7 +160,7 @@ actor MCPProtocolHandler {
                 ]),
                 modern: false
             )
-        case "ping":
+        case "ping" where !modern:
             return rpcResult(id: request.id!, value: .object([:]), modern: modern)
         case "tools/list":
             guard request.parameter("cursor") == nil else {

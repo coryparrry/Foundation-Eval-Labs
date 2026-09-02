@@ -31,8 +31,8 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 920, minHeight: 640)
-        .onChange(of: store.suite) {
-            store.scheduleSuiteSave()
+        .onChange(of: store.draftSuite) {
+            store.saveSuite()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
@@ -72,8 +72,8 @@ private struct RunHistorySidebar: View {
         List(selection: $store.selection) {
             Section {
                 SuiteSidebarRow(
-                    caseCount: store.suite.cases.count,
-                    repetitions: store.suite.repetitions
+                    caseCount: store.draftSuite.cases.count,
+                    repetitions: store.draftSuite.repetitions
                 )
                 .tag(SidebarSelection.suite)
             }

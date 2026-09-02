@@ -29,6 +29,9 @@ struct MCPStoreAuthorityTests {
         #expect(attachments.count == 1)
         #expect(attachments[0].objectValue?["text"] == nil)
         #expect(attachments[0].objectValue?["storedFilename"] == nil)
+        let stateText = try MCPJSONValue.object(state).jsonText()
+        #expect(!stateText.contains("private body"))
+        #expect(!stateText.contains(directory.path))
 
         let resource = await authority.readResource(.attachment(attachmentID))
         #expect(resource.text == "private body")
@@ -81,6 +84,61 @@ struct MCPStoreAuthorityTests {
             .structuredContent.objectValue!
         #expect(historySecond["runs"]!.arrayValue?.count == 1)
         #expect(historySecond["nextCursor"] == .null)
+    }
+
+    @MainActor
+    @Test func cancellationRequestedUsesTheAgentFacingStatusSpelling() throws {
+        let operation = EvaluationRunOperation(
+            id: UUID(),
+            suiteRevision: "revision",
+            phase: .cancellationRequested,
+            completedSamples: 1,
+            totalSamples: 2,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            completedAt: nil
+        )
+
+        let committed = try MCPStoreAuthority.cancellationPayload(previousPhase: .running, operation: operation)
+        #expect(outcome(committed) == "committed")
+        #expect(committed.structuredContent.objectValue?["status"] == .string("cancellation_requested"))
+        #expect(committed.structuredContent.objectValue?["run"]?.objectValue?["phase"] == .string("cancellation_requested"))
+
+        let duplicate = try MCPStoreAuthority.cancellationPayload(
+            previousPhase: .cancellationRequested,
+            operation: operation
+        )
+        #expect(outcome(duplicate) == "duplicate")
+    }
+
+    @MainActor
+    @Test func runResourceIsCanonicalAndDeletionIsDurablyIdempotent() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let run = makeRun(
+            case: EvaluationCase(name: "Case", prompt: "Prompt", expected: ""),
+            resultCount: 1,
+            plannedCount: 1
+        )
+        let canonicalData = try CanonicalJSON.data(for: run)
+        let runURL = directory.appending(path: "Runs/\(run.id.uuidString).json")
+        try canonicalData.write(to: runURL, options: .atomic)
+        store.runs = [run]
+        let authority = MCPStoreAuthority.make(store: store)
+
+        let resource = await authority.readResource(.run(run.id))
+        #expect(!resource.isError)
+        #expect(resource.mimeType == "application/json")
+        #expect(resource.text == String(data: canonicalData, encoding: .utf8))
+        #expect(resource.blob == nil)
+
+        let deleted = await authority.call(.deleteRun(.init(runID: run.id, confirm: true)))
+        #expect(outcome(deleted) == "committed")
+        #expect(store.run(with: run.id) == nil)
+        #expect(!FileManager.default.fileExists(atPath: runURL.path))
+
+        let duplicate = await authority.call(.deleteRun(.init(runID: run.id, confirm: true)))
+        #expect(outcome(duplicate) == "duplicate")
     }
 
     private func makeRun(case evaluationCase: EvaluationCase, resultCount: Int, plannedCount: Int) -> EvaluationRun {

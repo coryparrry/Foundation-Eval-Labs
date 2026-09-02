@@ -21,7 +21,8 @@ final class EvaluationStore {
     nonisolated static let maximumTextFileBytes = 5_000_000
     nonisolated static let maximumImageBytes = 10_000_000
 
-    var suite: EvaluationSuite
+    private(set) var suite: EvaluationSuite
+    var draftSuite: EvaluationSuite
     var runs: [EvaluationRun]
     var selection = SidebarSelection.suite
     var isRunning = false
@@ -38,8 +39,8 @@ final class EvaluationStore {
     private let runsDirectory: URL
     private let activeRunURL: URL
     private var runTask: Task<Void, Never>?
-    private var suiteSaveTask: Task<Void, Never>?
     private var activeRunSuite: EvaluationSuite?
+    private var activeRunResults: [EvaluationSampleResult] = []
 
     init(supportDirectory customSupportDirectory: URL? = nil) {
         let base = customSupportDirectory
@@ -88,15 +89,17 @@ final class EvaluationStore {
             .compactMap { $0 }
             .joined(separator: "\n")
         suite = initialSuite
+        draftSuite = initialSuite
         runs = loadedRuns.runs
         activeRun = nil
         activeRunSuite = nil
+        activeRunResults = []
         notice = initialNotice.isEmpty ? nil : initialNotice
         if migratedRubric || migratedProvider { saveSuite() }
     }
 
     var modelStatus: ModelStatus {
-        switch suite.modelConfiguration.provider {
+        switch draftSuite.modelConfiguration.provider {
         case .onDevice:
             return switch SystemLanguageModel.default.availability {
             case .available:
@@ -145,28 +148,28 @@ final class EvaluationStore {
     }
 
     var selectedModelCapabilities: LanguageModelCapabilities {
-        switch suite.modelConfiguration.provider {
+        switch draftSuite.modelConfiguration.provider {
         case .onDevice: SystemLanguageModel.default.capabilities
         case .privateCloudCompute: PrivateCloudComputeLanguageModel().capabilities
         }
     }
 
     var plannedSampleCount: Int {
-        suite.cases.count * suite.repetitions
+        draftSuite.cases.count * draftSuite.repetitions
     }
 
     var plannedRequestCount: Int {
-        plannedSampleCount * (suite.scoringMode == .modelJudge ? 2 : 1)
+        plannedSampleCount * (draftSuite.scoringMode == .modelJudge ? 2 : 1)
     }
 
     var plannedToolCallLimit: Int {
-        suite.modelConfiguration.referenceMode == .lookupTool
-            ? plannedSampleCount * suite.modelConfiguration.maximumToolCalls
+        draftSuite.modelConfiguration.referenceMode == .lookupTool
+            ? plannedSampleCount * draftSuite.modelConfiguration.maximumToolCalls
             : 0
     }
 
     var runBlocker: String? {
-        validationIssue(for: suite)
+        validationIssue(for: draftSuite)
     }
 
     var suiteRevision: String {
@@ -178,31 +181,44 @@ final class EvaluationStore {
     }
 
     func addCase() {
-        suite.cases.append(
+        guard draftSuite.cases.count < Self.maximumCases,
+              draftSuite.cases.count < Self.maximumPlannedSamples / max(draftSuite.repetitions, 1) else {
+            notice = "This suite has reached its planned-sample limit."
+            return
+        }
+        draftSuite.cases.append(
             EvaluationCase(
-                name: "Case \(suite.cases.count + 1)",
+                name: "Case \(draftSuite.cases.count + 1)",
                 prompt: "",
                 expected: ""
             )
         )
+        _ = saveSuite()
     }
 
     func duplicateCase(id: UUID) {
-        guard let index = suite.cases.firstIndex(where: { $0.id == id }) else { return }
-        var copy = suite.cases[index]
+        guard draftSuite.cases.count < Self.maximumCases,
+              draftSuite.cases.count < Self.maximumPlannedSamples / max(draftSuite.repetitions, 1) else {
+            notice = "This suite has reached its planned-sample limit."
+            return
+        }
+        guard let index = draftSuite.cases.firstIndex(where: { $0.id == id }) else { return }
+        var copy = draftSuite.cases[index]
         copy.id = UUID()
         copy.name = copy.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Copied case"
             : "\(copy.name) copy"
-        suite.cases.insert(copy, at: index + 1)
+        draftSuite.cases.insert(copy, at: index + 1)
+        _ = saveSuite()
     }
 
     func removeCase(id: UUID) {
-        guard suite.cases.count > 1 else {
+        guard draftSuite.cases.count > 1 else {
             notice = "An evaluation suite needs at least one case."
             return
         }
-        suite.cases.removeAll { $0.id == id }
+        draftSuite.cases.removeAll { $0.id == id }
+        _ = saveSuite()
     }
 
     func replaceSuite(
@@ -227,6 +243,7 @@ final class EvaluationStore {
             throw EvaluationStoreError.invalidSuite(issue)
         }
         try commitSuite(candidate)
+        draftSuite = candidate
         return try currentSuiteRevision()
     }
 
@@ -342,6 +359,7 @@ final class EvaluationStore {
         var candidate = suite
         candidate.attachments.removeAll { $0.id == id }
         try commitSuite(candidate)
+        draftSuite.attachments.removeAll { $0.id == id }
 
         if let storedFilename = attachment.storedFilename {
             do {
@@ -357,28 +375,19 @@ final class EvaluationStore {
 
     @discardableResult
     func saveSuite() -> Bool {
-        suiteSaveTask?.cancel()
-        suiteSaveTask = nil
         do {
-            try commitSuite(suite)
+            try commitSuite(draftSuite)
             return true
+        } catch EvaluationStoreError.invalidSuite {
+            return false
         } catch {
             notice = "Could not save the suite: \(error.localizedDescription)"
             return false
         }
     }
 
-    func scheduleSuiteSave() {
-        suiteSaveTask?.cancel()
-        suiteSaveTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled, let self else { return }
-            suiteSaveTask = nil
-            _ = saveSuite()
-        }
-    }
-
     func startRun() {
+        guard saveSuite() else { return }
         do {
             _ = try startRun(id: UUID(), expectedRevision: suiteRevision)
         } catch {
@@ -421,12 +430,13 @@ final class EvaluationStore {
                 totalSamples: total,
                 cancellationRequested: false
             )
-            let record = ActiveRunRecord(summary: active, suite: suiteSnapshot)
+            let record = ActiveRunRecord(summary: active, suite: suiteSnapshot, results: [])
 
             try commitSuite(suiteSnapshot)
             try persistActiveRun(record)
             activeRun = active
             activeRunSuite = suiteSnapshot
+            activeRunResults = []
             isRunning = true
             completedSamples = 0
             totalSamples = total
@@ -440,8 +450,8 @@ final class EvaluationStore {
                     startedAt: startedAt,
                     suite: suiteSnapshot,
                     images: images
-                ) { [weak self] completed, total in
-                    await self?.updateProgress(runID: id, completed: completed, total: total)
+                ) { [weak self] result, completed, total in
+                    await self?.updateProgress(runID: id, result: result, completed: completed, total: total)
                 }
                 finish(run)
             }
@@ -487,7 +497,7 @@ final class EvaluationStore {
             guard let activeRunSuite else {
                 throw EvaluationStoreError.persistence("The active run snapshot is unavailable.")
             }
-            try persistActiveRun(ActiveRunRecord(summary: active, suite: activeRunSuite))
+            try persistActiveRun(ActiveRunRecord(summary: active, suite: activeRunSuite, results: activeRunResults))
             activeRun = active
             runTask?.cancel()
         }
@@ -497,6 +507,10 @@ final class EvaluationStore {
     func canonicalRunData(id: UUID) throws -> Data {
         guard let run = run(with: id) else { throw EvaluationStoreError.resourceNotFound("Run") }
         return try CanonicalJSON.data(for: run)
+    }
+
+    func partialResults(runID: UUID) -> [EvaluationSampleResult] {
+        activeRun?.id == runID ? activeRunResults : []
     }
 
     func attachmentData(id: UUID) throws -> (attachment: EvaluationAttachment, data: Data) {
@@ -524,6 +538,7 @@ final class EvaluationStore {
             try? FileManager.default.removeItem(at: activeRunURL)
         } catch {
             notice = "The run finished, but its trace could not be saved: \(error.localizedDescription)"
+            activeRunResults = run.results
             if var active = activeRun {
                 active.completedSamples = run.results.count
                 activeRun = active
@@ -534,12 +549,19 @@ final class EvaluationStore {
         }
         activeRun = nil
         activeRunSuite = nil
+        activeRunResults = []
         isRunning = false
         runTask = nil
     }
 
-    private func updateProgress(runID: UUID, completed: Int, total: Int) {
+    private func updateProgress(
+        runID: UUID,
+        result: EvaluationSampleResult,
+        completed: Int,
+        total: Int
+    ) {
         guard var active = activeRun, active.id == runID else { return }
+        activeRunResults.append(result)
         completedSamples = completed
         totalSamples = total
         active.completedSamples = completed
@@ -547,7 +569,9 @@ final class EvaluationStore {
         activeRun = active
         if let activeRunSuite {
             do {
-                try persistActiveRun(ActiveRunRecord(summary: active, suite: activeRunSuite))
+                try persistActiveRun(
+                    ActiveRunRecord(summary: active, suite: activeRunSuite, results: activeRunResults)
+                )
             } catch {
                 notice = "Run progress could not be checkpointed: \(error.localizedDescription)"
             }
@@ -821,6 +845,7 @@ final class EvaluationStore {
             var candidate = suite
             candidate.attachments.append(contentsOf: newItems.map(\.attachment))
             try commitSuite(candidate)
+            draftSuite.attachments = candidate.attachments
         } catch {
             for url in writtenURLs { try? FileManager.default.removeItem(at: url) }
             if let storeError = error as? EvaluationStoreError { throw storeError }
@@ -839,6 +864,9 @@ final class EvaluationStore {
     }
 
     private func commitSuite(_ candidate: EvaluationSuite) throws {
+        if let issue = validationIssue(for: candidate, includeModelReadiness: false) {
+            throw EvaluationStoreError.invalidSuite(issue)
+        }
         do {
             let data = try CanonicalJSON.data(for: candidate)
             try data.write(to: supportDirectory.appending(path: "suite.json"), options: .atomic)
@@ -1011,7 +1039,7 @@ final class EvaluationStore {
                     sha256: $0.sha256
                 )
             },
-            results: []
+            results: record.results ?? []
         )
         do {
             try CanonicalJSON.data(for: run).write(
@@ -1094,6 +1122,7 @@ private struct PreparedAttachment: Sendable {
 private struct ActiveRunRecord: Codable, Sendable {
     var summary: EvaluationActiveRun
     var suite: EvaluationSuite
+    var results: [EvaluationSampleResult]?
 }
 
 private struct SuiteRevisionPayload: Codable {

@@ -76,7 +76,7 @@ actor EvaluationRunner {
         startedAt: Date,
         suite: EvaluationSuite,
         images: [ImageEvaluationInput],
-        progress: @Sendable (Int, Int) async -> Void
+        progress: @Sendable (EvaluationSampleResult, Int, Int) async -> Void
     ) async -> EvaluationRun {
         switch suite.modelConfiguration.provider {
         case .onDevice:
@@ -144,7 +144,7 @@ actor EvaluationRunner {
         contextSize: Int,
         modelName: String,
         admissionError: (category: String, message: String)?,
-        progress: @Sendable (Int, Int) async -> Void
+        progress: @Sendable (EvaluationSampleResult, Int, Int) async -> Void
     ) async -> EvaluationRun {
         let total = suite.cases.count * suite.repetitions
         var completed = 0
@@ -189,7 +189,7 @@ actor EvaluationRunner {
 
                 results.append(result)
                 completed += 1
-                await progress(completed, total)
+                await progress(result, completed, total)
 
                 if admissionError != nil {
                     terminationReason = result.errorCategory

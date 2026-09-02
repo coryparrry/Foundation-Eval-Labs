@@ -113,7 +113,7 @@ struct CodexMCPInstallerTests {
         #expect(try Data(contentsOf: installed.backupURL!) == original)
         let backupMode = try fileMode(at: installed.backupURL!)
         #expect(backupMode == 0o600)
-        #expect(try fileMode(at: configURL) == 0o600)
+        #expect(try fileMode(at: configURL) == 0o640)
 
         let unchanged = try installer.installOrUpdate(in: directory, configuration: configuration)
         #expect(unchanged.change == .unchanged)

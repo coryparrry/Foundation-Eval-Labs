@@ -146,7 +146,7 @@ private struct SuiteOverviewHeader: View {
                 .tracking(0.6)
 
             HStack(alignment: .firstTextBaseline, spacing: 16) {
-                TextField("Suite name", text: $store.suite.name)
+                TextField("Suite name", text: $store.draftSuite.name)
                     .textFieldStyle(.plain)
                     .font(.title.bold())
                     .accessibilityLabel("Suite name")
@@ -157,7 +157,7 @@ private struct SuiteOverviewHeader: View {
 
             HStack(spacing: 16) {
                 LabeledContent("Suite version") {
-                    TextField("v1", text: $store.suite.version)
+                    TextField("v1", text: $store.draftSuite.version)
                         .frame(width: 110)
                         .multilineTextAlignment(.trailing)
                 }
@@ -248,8 +248,8 @@ private struct RunReadinessPanel: View {
         if let blocker {
             return blocker
         }
-        if store.suite.scoringMode == .modelJudge {
-            let quotaNote = store.suite.modelConfiguration.provider == .privateCloudCompute
+        if store.draftSuite.scoringMode == .modelJudge {
+            let quotaNote = store.draftSuite.modelConfiguration.provider == .privateCloudCompute
                 ? " It uses an additional cloud request and quota for each response."
                 : ""
             return requestSummary + " The AI rubric uses the selected provider with fixed greedy decoding and tools off." + quotaNote
@@ -258,7 +258,7 @@ private struct RunReadinessPanel: View {
     }
 
     private var requestSummary: String {
-        let provider = store.suite.modelConfiguration.provider.title
+        let provider = store.draftSuite.modelConfiguration.provider.title
         let toolSuffix = store.plannedToolCallLimit > 0
             ? " · up to \(store.plannedToolCallLimit) local reference-tool calls"
             : ""
@@ -320,7 +320,7 @@ private struct ModelInstructionsSection: View {
             systemImage: "text.quote",
             description: "Shared guidance applied to every test case."
         ) {
-            TextEditor(text: $store.suite.instructions)
+            TextEditor(text: $store.draftSuite.instructions)
                 .accessibilityLabel("Model instructions")
                 .font(.body)
                 .frame(minHeight: 118)
@@ -350,14 +350,14 @@ private struct ScoringSection: View {
             description: "Choose how responses are judged and how many times each case runs."
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                Picker("Scoring method", selection: $store.suite.scoringMode) {
+                Picker("Scoring method", selection: $store.draftSuite.scoringMode) {
                     ForEach(ScoringMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
 
-                Text(store.suite.scoringMode.explanation)
+                Text(store.draftSuite.scoringMode.explanation)
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
@@ -370,13 +370,13 @@ private struct ScoringSection: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Stepper(
-                        "Repetitions: \(store.suite.repetitions)",
-                        value: $store.suite.repetitions,
+                        "Repetitions: \(store.draftSuite.repetitions)",
+                        value: $store.draftSuite.repetitions,
                         in: 1...5
                     )
                 }
 
-                if store.suite.scoringMode != .review, let selectedCaseIndex {
+                if store.draftSuite.scoringMode != .review, let selectedCaseIndex {
                     Divider()
 
                     HStack {
@@ -384,7 +384,7 @@ private struct ScoringSection: View {
                             .font(.headline)
                         Spacer()
                         Picker("Scoring case", selection: $selectedCaseID) {
-                            ForEach(store.suite.cases) { evaluationCase in
+                            ForEach(store.draftSuite.cases) { evaluationCase in
                                 Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
                                     .tag(Optional(evaluationCase.id))
                             }
@@ -398,11 +398,11 @@ private struct ScoringSection: View {
                         Text("Prompt")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
-                        Text(store.suite.cases[selectedCaseIndex].prompt.isEmpty
+                        Text(store.draftSuite.cases[selectedCaseIndex].prompt.isEmpty
                              ? "No prompt entered yet."
-                             : store.suite.cases[selectedCaseIndex].prompt)
+                             : store.draftSuite.cases[selectedCaseIndex].prompt)
                             .font(.callout)
-                            .foregroundStyle(store.suite.cases[selectedCaseIndex].prompt.isEmpty ? .secondary : .primary)
+                            .foregroundStyle(store.draftSuite.cases[selectedCaseIndex].prompt.isEmpty ? .secondary : .primary)
                             .lineLimit(4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(10)
@@ -410,15 +410,15 @@ private struct ScoringSection: View {
                     }
 
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(store.suite.scoringMode.expectedLabel)
+                        Text(store.draftSuite.scoringMode.expectedLabel)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
-                        TextEditor(text: $store.suite.cases[selectedCaseIndex].expected)
+                        TextEditor(text: $store.draftSuite.cases[selectedCaseIndex].expected)
                             .accessibilityLabel(
-                                "\(store.suite.scoringMode.expectedLabel) for \(store.suite.cases[selectedCaseIndex].name.isEmpty ? "Untitled case" : store.suite.cases[selectedCaseIndex].name)"
+                                "\(store.draftSuite.scoringMode.expectedLabel) for \(store.draftSuite.cases[selectedCaseIndex].name.isEmpty ? "Untitled case" : store.draftSuite.cases[selectedCaseIndex].name)"
                             )
                             .accessibilityIdentifier("Scoring expected text")
-                            .font(store.suite.scoringMode == .modelJudge ? .body : .body.monospaced())
+                            .font(store.draftSuite.scoringMode == .modelJudge ? .body : .body.monospaced())
                             .frame(minHeight: 72)
                             .padding(8)
                             .background(.background, in: .rect(cornerRadius: 8))
@@ -426,32 +426,32 @@ private struct ScoringSection: View {
                                 RoundedRectangle(cornerRadius: 8)
                                     .stroke(Color.secondary.opacity(0.2))
                             }
-                        Text(store.suite.scoringMode.expectedHelp)
+                        Text(store.draftSuite.scoringMode.expectedHelp)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                if store.suite.scoringMode == .modelJudge {
+                if store.draftSuite.scoringMode == .modelJudge {
                     ModelRubricEditor(store: store)
                 }
             }
             .disabled(store.isRunning || store.isProcessingFiles)
         }
         .onAppear { selectFirstCaseIfNeeded() }
-        .onChange(of: store.suite.cases.map(\.id)) { _, _ in
+        .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
             selectFirstCaseIfNeeded()
         }
     }
 
     private var selectedCaseIndex: Int? {
         guard let selectedCaseID else { return nil }
-        return store.suite.cases.firstIndex(where: { $0.id == selectedCaseID })
+        return store.draftSuite.cases.firstIndex(where: { $0.id == selectedCaseID })
     }
 
     private func selectFirstCaseIfNeeded() {
-        if selectedCaseID.flatMap({ id in store.suite.cases.firstIndex(where: { $0.id == id }) }) == nil {
-            selectedCaseID = store.suite.cases.first?.id
+        if selectedCaseID.flatMap({ id in store.draftSuite.cases.firstIndex(where: { $0.id == id }) }) == nil {
+            selectedCaseID = store.draftSuite.cases.first?.id
         }
     }
 }
@@ -460,7 +460,7 @@ private struct ModelRubricEditor: View {
     @Bindable var store: EvaluationStore
 
     private var isValid: Bool {
-        (1...4).contains(store.suite.rubricCriteria.count)
+        (1...4).contains(store.draftSuite.rubricCriteria.count)
     }
 
     var body: some View {
@@ -478,13 +478,13 @@ private struct ModelRubricEditor: View {
             Menu("Use Template", systemImage: "wand.and.stars") {
                 ForEach(RubricTemplate.allCases) { template in
                     Button(template.title) {
-                        store.suite.criteria = template.requirements
+                        store.draftSuite.criteria = template.requirements
                     }
                 }
             }
         }
 
-        TextEditor(text: $store.suite.criteria)
+        TextEditor(text: $store.draftSuite.criteria)
             .accessibilityLabel("AI rubric requirements")
             .font(.body)
             .frame(minHeight: 112)
@@ -496,7 +496,7 @@ private struct ModelRubricEditor: View {
             }
 
         Label(
-            "\(store.suite.rubricCriteria.count) of 4 requirements",
+            "\(store.draftSuite.rubricCriteria.count) of 4 requirements",
             systemImage: isValid ? "checkmark.circle" : "exclamationmark.triangle"
         )
         .font(.callout)
@@ -544,12 +544,12 @@ private struct CasesSection: View {
             description: "Each case gets its own fresh model session and produces one result per repetition."
         ) {
             HStack(spacing: 12) {
-                Text("\(store.suite.cases.count) case\(store.suite.cases.count == 1 ? "" : "s")")
+                Text("\(store.draftSuite.cases.count) case\(store.draftSuite.cases.count == 1 ? "" : "s")")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
                 Picker("Editing case", selection: $selectedCaseID) {
-                    ForEach(store.suite.cases) { evaluationCase in
+                    ForEach(store.draftSuite.cases) { evaluationCase in
                         Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
                             .tag(Optional(evaluationCase.id))
                     }
@@ -561,42 +561,42 @@ private struct CasesSection: View {
                 Spacer()
                 Button("Add Case", systemImage: "plus") {
                     store.addCase()
-                    selectedCaseID = store.suite.cases.last?.id
+                    selectedCaseID = store.draftSuite.cases.last?.id
                 }
                     .disabled(store.isRunning || store.isProcessingFiles)
             }
 
             if let selectedCaseIndex {
                 EvaluationCaseEditor(
-                    evaluationCase: $store.suite.cases[selectedCaseIndex],
-                    canDelete: store.suite.cases.count > 1,
+                    evaluationCase: $store.draftSuite.cases[selectedCaseIndex],
+                    canDelete: store.draftSuite.cases.count > 1,
                     isDisabled: store.isRunning || store.isProcessingFiles,
                     duplicate: {
-                        let id = store.suite.cases[selectedCaseIndex].id
+                        let id = store.draftSuite.cases[selectedCaseIndex].id
                         store.duplicateCase(id: id)
-                        selectedCaseID = store.suite.cases[selectedCaseIndex + 1].id
+                        selectedCaseID = store.draftSuite.cases[selectedCaseIndex + 1].id
                     },
                     remove: {
-                        store.removeCase(id: store.suite.cases[selectedCaseIndex].id)
-                        selectedCaseID = store.suite.cases.first?.id
+                        store.removeCase(id: store.draftSuite.cases[selectedCaseIndex].id)
+                        selectedCaseID = store.draftSuite.cases.first?.id
                     }
                 )
             }
         }
         .onAppear { selectFirstCaseIfNeeded() }
-        .onChange(of: store.suite.cases.map(\.id)) { _, _ in
+        .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
             selectFirstCaseIfNeeded()
         }
     }
 
     private var selectedCaseIndex: Int? {
         guard let selectedCaseID else { return nil }
-        return store.suite.cases.firstIndex(where: { $0.id == selectedCaseID })
+        return store.draftSuite.cases.firstIndex(where: { $0.id == selectedCaseID })
     }
 
     private func selectFirstCaseIfNeeded() {
-        if selectedCaseID.flatMap({ id in store.suite.cases.firstIndex(where: { $0.id == id }) }) == nil {
-            selectedCaseID = store.suite.cases.first?.id
+        if selectedCaseID.flatMap({ id in store.draftSuite.cases.firstIndex(where: { $0.id == id }) }) == nil {
+            selectedCaseID = store.draftSuite.cases.first?.id
         }
     }
 }
@@ -670,7 +670,7 @@ private struct SharedReferenceFilesSection: View {
     @State private var isDropTargeted = false
 
     private var imageCount: Int {
-        store.suite.attachments.count(where: { $0.kind == .image })
+        store.draftSuite.attachments.count(where: { $0.kind == .image })
     }
 
     var body: some View {
@@ -680,7 +680,7 @@ private struct SharedReferenceFilesSection: View {
             description: "Applied to every case. Text is extracted; images are attached directly."
         ) {
             HStack {
-                Label("\(store.suite.attachments.count) file\(store.suite.attachments.count == 1 ? "" : "s")", systemImage: "doc.on.doc")
+                Label("\(store.draftSuite.attachments.count) file\(store.draftSuite.attachments.count == 1 ? "" : "s")", systemImage: "doc.on.doc")
                 Text("·")
                 Text("Images \(imageCount) of 4")
                 Spacer()
@@ -691,7 +691,7 @@ private struct SharedReferenceFilesSection: View {
             .font(.callout)
             .foregroundStyle(.secondary)
 
-            if store.suite.attachments.isEmpty {
+            if store.draftSuite.attachments.isEmpty {
                 Button {
                     store.isImportingFiles = true
                 } label: {
@@ -718,12 +718,12 @@ private struct SharedReferenceFilesSection: View {
                 }
             } else {
                 VStack(spacing: 0) {
-                    ForEach(store.suite.attachments) { attachment in
+                    ForEach(store.draftSuite.attachments) { attachment in
                         AttachmentRow(
                             attachment: attachment,
                             remove: { store.removeAttachment(id: attachment.id) }
                         )
-                        if attachment.id != store.suite.attachments.last?.id {
+                        if attachment.id != store.draftSuite.attachments.last?.id {
                             Divider()
                         }
                     }

@@ -352,7 +352,7 @@ struct CodexMCPInstaller {
                         coordinatedURL,
                         withItemAt: temporaryURL,
                         backupItemName: nil,
-                        options: [.usingNewMetadataOnly]
+                        options: []
                     )
                 } else {
                     try fileManager.moveItem(at: temporaryURL, to: coordinatedURL)

@@ -4,7 +4,7 @@ struct ModelControlsSection: View {
     @Bindable var store: EvaluationStore
 
     private var configuration: EvaluationModelConfiguration {
-        store.suite.modelConfiguration
+        store.draftSuite.modelConfiguration
     }
 
     var body: some View {
@@ -47,7 +47,7 @@ struct ModelControlsSection: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 24) {
                 LabeledContent("Sampling") {
-                    Picker("Sampling", selection: $store.suite.modelConfiguration.samplingMode) {
+                    Picker("Sampling", selection: $store.draftSuite.modelConfiguration.samplingMode) {
                         ForEach(EvaluationSamplingMode.allCases) { mode in
                             Text(mode.title).tag(mode)
                         }
@@ -57,7 +57,7 @@ struct ModelControlsSection: View {
                 }
 
                 LabeledContent("Response limit") {
-                    Picker("Response limit", selection: $store.suite.modelConfiguration.maximumResponseTokens) {
+                    Picker("Response limit", selection: $store.draftSuite.modelConfiguration.maximumResponseTokens) {
                         ForEach([256, 512, 1_024, 2_048, 4_096], id: \.self) { limit in
                             Text("\(limit.formatted()) tokens").tag(limit)
                         }
@@ -68,10 +68,10 @@ struct ModelControlsSection: View {
             }
 
             if configuration.samplingMode == .topK {
-                Stepper("Top K: \(configuration.topK)", value: $store.suite.modelConfiguration.topK, in: 1...1_000)
+                Stepper("Top K: \(configuration.topK)", value: $store.draftSuite.modelConfiguration.topK, in: 1...1_000)
             } else if configuration.samplingMode == .probability {
                 LabeledContent("Probability threshold") {
-                    Slider(value: $store.suite.modelConfiguration.probabilityThreshold, in: 0.05...1, step: 0.05)
+                    Slider(value: $store.draftSuite.modelConfiguration.probabilityThreshold, in: 0.05...1, step: 0.05)
                         .frame(width: 180)
                     Text(configuration.probabilityThreshold.formatted(.number.precision(.fractionLength(2))))
                         .monospacedDigit()
@@ -80,18 +80,18 @@ struct ModelControlsSection: View {
             }
 
             if configuration.samplingMode == .topK || configuration.samplingMode == .probability {
-                Toggle("Use a fixed seed", isOn: $store.suite.modelConfiguration.seedEnabled)
+                Toggle("Use a fixed seed", isOn: $store.draftSuite.modelConfiguration.seedEnabled)
                 if configuration.seedEnabled {
-                    TextField("Seed", value: $store.suite.modelConfiguration.seed, format: .number)
+                    TextField("Seed", value: $store.draftSuite.modelConfiguration.seed, format: .number)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 180)
                 }
             }
 
-            Toggle("Set temperature", isOn: $store.suite.modelConfiguration.temperatureEnabled)
+            Toggle("Set temperature", isOn: $store.draftSuite.modelConfiguration.temperatureEnabled)
             if configuration.temperatureEnabled {
                 LabeledContent("Temperature") {
-                    Slider(value: $store.suite.modelConfiguration.temperature, in: 0...1, step: 0.05)
+                    Slider(value: $store.draftSuite.modelConfiguration.temperature, in: 0...1, step: 0.05)
                         .frame(width: 180)
                     Text(configuration.temperature.formatted(.number.precision(.fractionLength(2))))
                         .monospacedDigit()
@@ -112,7 +112,7 @@ struct ModelControlsSection: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 24) {
                 LabeledContent("Requested input ceiling") {
-                    Picker("Requested input ceiling", selection: $store.suite.modelConfiguration.maximumInputTokens) {
+                    Picker("Requested input ceiling", selection: $store.draftSuite.modelConfiguration.maximumInputTokens) {
                         Text("Automatic").tag(Int?.none)
                         ForEach([2_048, 4_096, 8_192, 16_384, 32_768], id: \.self) { limit in
                             Text("\(limit.formatted()) tokens").tag(Int?.some(limit))
@@ -123,7 +123,7 @@ struct ModelControlsSection: View {
                 }
 
                 LabeledContent("When input is too large") {
-                    Picker("Context policy", selection: $store.suite.modelConfiguration.contextPolicy) {
+                    Picker("Context policy", selection: $store.draftSuite.modelConfiguration.contextPolicy) {
                         ForEach(EvaluationContextPolicy.allCases) { policy in
                             Text(policy.title).tag(policy)
                         }
@@ -133,7 +133,7 @@ struct ModelControlsSection: View {
                 }
             }
 
-            Picker("Text references", selection: $store.suite.modelConfiguration.referenceMode) {
+            Picker("Text references", selection: $store.draftSuite.modelConfiguration.referenceMode) {
                 ForEach(EvaluationReferenceMode.allCases) { mode in
                     Text(mode.title).tag(mode)
                 }
@@ -144,7 +144,7 @@ struct ModelControlsSection: View {
             if configuration.referenceMode == .lookupTool {
                 Stepper(
                     "Maximum tool calls per response: \(configuration.maximumToolCalls)",
-                    value: $store.suite.modelConfiguration.maximumToolCalls,
+                    value: $store.draftSuite.modelConfiguration.maximumToolCalls,
                     in: 1...4
                 )
                 Text(referenceToolPrivacyText)

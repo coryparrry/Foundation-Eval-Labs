@@ -42,7 +42,7 @@ enum MCPStoreAuthority {
             case .startRun(let arguments):
                 let duplicate = store.runStatus(id: arguments.runID) != nil
                 let operation = try store.startRun(id: arguments.runID, expectedRevision: arguments.expectedRevision)
-                return mutation(duplicate ? "duplicate" : "committed", ["run": try json(operation)])
+                return mutation(duplicate ? "duplicate" : "committed", ["run": try operationJSON(operation)])
             case .getRun(let arguments):
                 return try getRun(arguments, store: store)
             case .listRuns(let arguments):
@@ -50,8 +50,7 @@ enum MCPStoreAuthority {
             case .cancelRun(let arguments):
                 let previous = store.runStatus(id: arguments.runID)
                 let operation = try store.cancelRun(id: arguments.runID)
-                let duplicate = previous?.phase != .running
-                return mutation(duplicate ? "duplicate" : "committed", ["run": try json(operation)])
+                return try cancellationPayload(previousPhase: previous?.phase, operation: operation)
             case .deleteRun(let arguments):
                 let deleted = try store.deleteRunDurably(id: arguments.runID)
                 return mutation(deleted ? "committed" : "duplicate", ["runID": .string(arguments.runID.uuidString)])
@@ -94,7 +93,7 @@ enum MCPStoreAuthority {
     }
 
     private static func state(_ store: EvaluationStore) throws -> MCPToolPayload {
-        let active = try store.activeRun.map { try json(store.runStatus(id: $0.id)!) } ?? .null
+        let active = try store.activeRun.map { try operationJSON(store.runStatus(id: $0.id)!) } ?? .null
         return readPayload([
             "revision": .string(try store.currentSuiteRevision()),
             "suite": suiteJSON(store.suite),
@@ -134,31 +133,29 @@ enum MCPStoreAuthority {
             throw EvaluationStoreError.resourceNotFound("Run")
         }
         if let run = store.run(with: arguments.runID) {
-            let limit = arguments.limit ?? 50
-            let offset = try pageOffset(arguments.cursor, count: run.results.count)
-            let end = min(offset + limit, run.results.count)
+            let page = try resultPage(run.results, arguments: arguments)
             var object = try json(run).objectValue!
-            object["phase"] = .string(operation.phase.rawValue)
-            object["results"] = try json(Array(run.results[offset..<end]))
+            object["phase"] = .string(phaseName(operation.phase))
+            object["results"] = page.results
             object["skipped"] = try json(skippedSamples(in: run))
-            object["nextCursor"] = end < run.results.count ? .string(cursor(end)) : .null
+            object["nextCursor"] = page.nextCursor
             return readPayload(["run": .object(object)])
         }
 
-        _ = try pageOffset(arguments.cursor, count: 0)
         let active = store.activeRun!
+        let page = try resultPage(store.partialResults(runID: active.id), arguments: arguments)
         return readPayload(["run": .object([
             "id": .string(active.id.uuidString),
             "suiteRevision": .string(active.suiteRevision),
-            "phase": .string(operation.phase.rawValue),
+            "phase": .string(phaseName(operation.phase)),
             "startedAt": .string(active.startedAt.ISO8601Format()),
             "completedAt": .null,
             "completedSamples": .integer(Int64(active.completedSamples)),
             "plannedSampleCount": .integer(Int64(active.totalSamples)),
             "plannedCases": try json(store.suite.cases),
-            "results": .array([]),
+            "results": page.results,
             "skipped": .array([]),
-            "nextCursor": .null
+            "nextCursor": page.nextCursor
         ])])
     }
 
@@ -169,7 +166,7 @@ enum MCPStoreAuthority {
                 "id": .string(active.id.uuidString),
                 "suiteName": .string(store.suite.name),
                 "suiteVersion": .string(store.suite.version),
-                "phase": .string(operation.phase.rawValue),
+                "phase": .string(phaseName(operation.phase)),
                 "startedAt": .string(active.startedAt.ISO8601Format()),
                 "completedAt": .null,
                 "completedSamples": .integer(Int64(active.completedSamples)),
@@ -182,7 +179,7 @@ enum MCPStoreAuthority {
                 "id": .string(run.id.uuidString),
                 "suiteName": .string(run.suiteName),
                 "suiteVersion": .string(run.suiteVersion),
-                "phase": .string(phase.rawValue),
+                "phase": .string(phaseName(phase)),
                 "startedAt": .string(run.startedAt.ISO8601Format()),
                 "completedAt": .string(run.completedAt.ISO8601Format()),
                 "completedSamples": .integer(Int64(run.results.count)),
@@ -201,7 +198,7 @@ enum MCPStoreAuthority {
             }
         }
         if let status = arguments.status, !status.isEmpty {
-            guard EvaluationRunPhase(rawValue: status) != nil else {
+            guard status == "cancellation_requested" || EvaluationRunPhase(rawValue: status) != nil else {
                 return .failure(code: "invalid_status", message: "Status must be a run phase returned by this tool.")
             }
             summaries = summaries.filter { $0.objectValue?["phase"]?.stringValue == status }
@@ -359,6 +356,38 @@ enum MCPStoreAuthority {
 
     private static func json<T: Encodable>(_ value: T) throws -> MCPJSONValue {
         try JSONDecoder().decode(MCPJSONValue.self, from: CanonicalJSON.data(for: value, prettyPrinted: false))
+    }
+
+    static func operationJSON(_ operation: EvaluationRunOperation) throws -> MCPJSONValue {
+        var object = try json(operation).objectValue!
+        object["phase"] = .string(phaseName(operation.phase))
+        return .object(object)
+    }
+
+    static func cancellationPayload(
+        previousPhase: EvaluationRunPhase?,
+        operation: EvaluationRunOperation
+    ) throws -> MCPToolPayload {
+        mutation(previousPhase == .running ? "committed" : "duplicate", [
+            "status": .string(phaseName(operation.phase)),
+            "run": try operationJSON(operation)
+        ])
+    }
+
+    private static func phaseName(_ phase: EvaluationRunPhase) -> String {
+        phase == .cancellationRequested ? "cancellation_requested" : phase.rawValue
+    }
+
+    private static func resultPage(
+        _ results: [EvaluationSampleResult],
+        arguments: MCPGetRunArguments
+    ) throws -> (results: MCPJSONValue, nextCursor: MCPJSONValue) {
+        let offset = try pageOffset(arguments.cursor, count: results.count)
+        let end = min(offset + (arguments.limit ?? 50), results.count)
+        return (
+            try json(Array(results[offset..<end])),
+            end < results.count ? .string(cursor(end)) : .null
+        )
     }
 
     private static func cursor(_ offset: Int) -> String {

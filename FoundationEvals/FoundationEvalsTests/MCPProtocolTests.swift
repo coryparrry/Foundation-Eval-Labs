@@ -33,6 +33,23 @@ struct MCPProtocolTests {
         #expect(result["ttlMs"] == nil)
     }
 
+    @Test func pingIsLegacyOnly() async throws {
+        let handler = makeHandler()
+        let modern = await handler.handle(try modernRequest(method: "ping"))
+        var legacyHeaders = baseHeaders
+        legacyHeaders["MCP-Protocol-Version"] = "2025-11-25"
+        let legacy = await handler.handle(MCPHTTPRequest(
+            method: "POST",
+            headers: legacyHeaders,
+            body: try rpcBody(id: 2, method: "ping", params: [:])
+        ))
+
+        #expect(modern.status == 404)
+        #expect(try responseJSON(modern)["error"]?["code"] == .integer(-32_601))
+        #expect(legacy.status == 200)
+        #expect(try responseJSON(legacy)["result"] == .object([:]))
+    }
+
     @Test func modernMetadataErrorsAreDistinctFromHeaderMismatch() async throws {
         let handler = makeHandler()
         var missingMetadata = try modernRequest(method: "tools/list")
@@ -116,9 +133,28 @@ struct MCPProtocolTests {
         }
         #expect(replacement.suite.modelConfiguration.seed == UInt64.max)
 
+        var root = try #require(arguments().objectValue)
+        var suite = try #require(root["suite"]?.objectValue)
+        suite["undeclared"] = .bool(true)
+        root["suite"] = .object(suite)
+        #expect(throws: MCPToolInputError.self) {
+            try MCPToolCatalog.parse(name: "eval_replace_suite", arguments: .object(root))
+        }
+
         configuration.temperature = 1.01
         #expect(throws: MCPToolInputError.self) {
             try MCPToolCatalog.parse(name: "eval_replace_suite", arguments: arguments())
+        }
+    }
+
+    @Test func closedToolArgumentsRejectUndeclaredTopLevelProperties() throws {
+        let arguments = MCPJSONValue.object([
+            "runID": .string(UUID().uuidString),
+            "unexpected": .bool(true)
+        ])
+
+        #expect(throws: MCPToolInputError.self) {
+            try MCPToolCatalog.parse(name: "eval_cancel_run", arguments: arguments)
         }
     }
 

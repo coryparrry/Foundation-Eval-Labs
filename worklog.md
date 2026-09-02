@@ -1,7 +1,7 @@
 # Worklog
 
 - Goal: add a Swift-native MCP connector so agents can configure suites, upload context, run/cancel evals, and read durable results without UI control.
-- Current: finishing protocol hardening and acceptance on `codex/swift-mcp-eval-control`; no Git remote is configured, so the branch cannot be pushed or opened as a PR.
+- Current: correcting the final acceptance mismatches on `codex/swift-mcp-eval-control`; no Git remote is configured, so the branch cannot be pushed or opened as a PR.
 - Steering: never launch the installed and DerivedData builds together; fix the broken Suite Editor at its source, not with window-size workarounds.
 - Contract: loopback HTTP on fixed port 17873; MCP 2026-07-28 plus Codex-compatible 2025-11-25; bearer auth; one active run; on-device model only.
 - Integrity: durable writes before success, revision/resource-based idempotency, bounded requests/workloads, no caller file paths, cooperative cancellation, interrupted-run recovery.
@@ -10,6 +10,7 @@
 - Boundaries: the follow-up signed run and UI test hit Xcode 27 beta worker/automation stalls, although the live UI geometry was verified directly. The official conformance CLI has no bearer-header option, so it cannot drive this authenticated endpoint without weakening the production contract. Guided Codex acceptance still requires the one-time folder picker, Keychain authorization for a newly signed build, and restart.
 - Signing: this checkout produces an ad-hoc development build. A stable distribution signature is required before treating Keychain identity across app rebuilds as release evidence.
 - UI repair: commit `d501878` introduced `VStack { header; ScrollView { page } }`, causing a `1180×780` window to host a vertically centred `1180×1830` split view. Restoring one outer `ScrollView` preserves the tabbed editor and now produces matching `1180×780` window/split-view geometry with the MCP runtime connected.
+- Acceptance fixes: existing Codex config modes are preserved; modern `ping` and undeclared tool arguments are rejected; editable UI drafts cannot replace the durable suite until validated and written; active result bodies are checkpointed for MCP polling and crash recovery. Final build-for-testing passes; signed unit lane is 50 passed/1 intentional socket skip, focused persistence/authority lane is 10/10, and the unsigned real-socket protocol lane is 17/17.
 
 ## Previous completed work
 

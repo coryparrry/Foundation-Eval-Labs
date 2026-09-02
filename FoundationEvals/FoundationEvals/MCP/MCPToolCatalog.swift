@@ -308,8 +308,11 @@ enum MCPToolCatalog {
     ]
 
     static func parse(name: String, arguments: MCPJSONValue) throws -> MCPToolCall {
-        guard definitions.contains(where: { $0.name == name }) else { throw MCPToolInputError.unknownTool }
+        guard let definition = definitions.first(where: { $0.name == name }) else {
+            throw MCPToolInputError.unknownTool
+        }
         do {
+            try rejectUndeclaredProperties(in: arguments, schema: definition.inputSchema)
             switch name {
             case "eval_get_state":
                 let object = try requireObject(arguments)
@@ -399,6 +402,32 @@ enum MCPToolCatalog {
     private static func requireObject(_ value: MCPJSONValue) throws -> [String: MCPJSONValue] {
         guard let object = value.objectValue else { throw MCPToolInputError.invalidArguments }
         return object
+    }
+
+    private static func rejectUndeclaredProperties(
+        in value: MCPJSONValue,
+        schema: MCPJSONValue
+    ) throws {
+        guard let schema = schema.objectValue else { return }
+
+        if schema["type"]?.stringValue == "object",
+           let object = value.objectValue,
+           let properties = schema["properties"]?.objectValue {
+            guard object.keys.allSatisfy({ properties[$0] != nil }) else {
+                throw MCPToolInputError.invalidArguments
+            }
+            for (name, propertyValue) in object {
+                if let propertySchema = properties[name] {
+                    try rejectUndeclaredProperties(in: propertyValue, schema: propertySchema)
+                }
+            }
+        } else if schema["type"]?.stringValue == "array",
+                  case .array(let values) = value,
+                  let itemSchema = schema["items"] {
+            for item in values {
+                try rejectUndeclaredProperties(in: item, schema: itemSchema)
+            }
+        }
     }
 
     private static func tool(
