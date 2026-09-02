@@ -1,34 +1,28 @@
 import Foundation
 
 actor MCPProtocolHandler {
-    static let modernVersion = "2026-07-28"
-    static let legacyVersion = "2025-11-25"
-    static let supportedVersions = [modernVersion, legacyVersion]
+    static let protocolVersion = "2025-06-18"
 
     private let port: Int
-    private let bearerToken: String
     private let authority: MCPAuthority
-    private let onAuthenticatedRequest: (@Sendable (Date) async -> Void)?
+    private let onRequest: (@Sendable (Date) async -> Void)?
     private let maximumBodyBytes: Int
     private let maximumConcurrentRequests: Int
     private var activeAdmissions: Set<UUID> = []
 
     init(
         port: Int = 17_873,
-        bearerToken: String,
         authority: MCPAuthority,
         maximumBodyBytes: Int = 16 * 1_024 * 1_024,
         maximumConcurrentRequests: Int = 8,
-        onAuthenticatedRequest: (@Sendable (Date) async -> Void)? = nil
+        onRequest: (@Sendable (Date) async -> Void)? = nil
     ) {
         precondition((1...65_535).contains(port))
-        precondition(!bearerToken.isEmpty)
         precondition(maximumBodyBytes > 0)
         precondition(maximumConcurrentRequests > 0)
         self.port = port
-        self.bearerToken = bearerToken
         self.authority = authority
-        self.onAuthenticatedRequest = onAuthenticatedRequest
+        self.onRequest = onRequest
         self.maximumBodyBytes = maximumBodyBytes
         self.maximumConcurrentRequests = maximumConcurrentRequests
     }
@@ -48,11 +42,6 @@ actor MCPProtocolHandler {
         guard hostIsAllowed(request[header: "host"]), originIsAllowed(request[header: "origin"]) else {
             return .rejected(.empty(403))
         }
-        guard authenticated(request[header: "authorization"]) else {
-            var response = MCPHTTPResponse.empty(401)
-            response.headers["WWW-Authenticate"] = #"Bearer realm="Foundation Evals""#
-            return .rejected(response)
-        }
         guard isJSONContentType(request[header: "content-type"]) else {
             return .rejected(.empty(415))
         }
@@ -64,7 +53,7 @@ actor MCPProtocolHandler {
 
         let admission = MCPRequestAdmission()
         activeAdmissions.insert(admission.id)
-        await onAuthenticatedRequest?(Date())
+        await onRequest?(Date())
         return .admitted(admission)
     }
 
@@ -104,25 +93,19 @@ actor MCPProtocolHandler {
             return rpcError(status: 400, id: request.id ?? .null, code: -32_600, message: "Invalid Request.")
         }
 
-        let versionHeader = httpRequest[header: "mcp-protocol-version"]
-        let inferredLegacyInitialize = versionHeader == nil && request.method == "initialize"
-        let version = versionHeader ?? (inferredLegacyInitialize ? Self.legacyVersion : "")
-        guard Self.supportedVersions.contains(version) else {
-            return unsupportedVersion(requested: version, id: request.id ?? .null)
-        }
-
-        if version == Self.modernVersion {
-            if let validationResponse = validateModernHeaders(httpRequest, request: request) {
-                return validationResponse
-            }
-        } else if request.method == "initialize" {
-            guard request.stringParameter("protocolVersion") == Self.legacyVersion else {
+        if request.method == "initialize" {
+            guard request.stringParameter("protocolVersion") != nil else {
                 return rpcError(
                     status: 400,
                     id: request.id ?? .null,
                     code: -32_602,
-                    message: "Unsupported initialize protocolVersion."
+                    message: "Initialize protocolVersion is required."
                 )
+            }
+        } else {
+            let version = httpRequest[header: "mcp-protocol-version"] ?? ""
+            guard version == Self.protocolVersion else {
+                return unsupportedVersion(requested: version, id: request.id ?? .null)
             }
         }
 
@@ -130,38 +113,23 @@ actor MCPProtocolHandler {
             return .empty(202)
         }
 
-        return await route(request, version: version)
+        return await route(request)
     }
 
-    private func route(_ request: MCPRPCRequest, version: String) async -> MCPHTTPResponse {
-        let modern = version == Self.modernVersion
+    private func route(_ request: MCPRPCRequest) async -> MCPHTTPResponse {
         switch request.method {
-        case "server/discover" where modern:
+        case "initialize":
             return rpcResult(
                 id: request.id!,
                 value: .object([
-                    "supportedVersions": .array(Self.supportedVersions.map(MCPJSONValue.string)),
-                    "capabilities": capabilities(modern: true),
-                    "serverInfo": serverInfo,
-                    "instructions": .string(Self.instructions),
-                    "ttlMs": .integer(300_000),
-                    "cacheScope": .string("private")
-                ]),
-                modern: true
-            )
-        case "initialize" where !modern:
-            return rpcResult(
-                id: request.id!,
-                value: .object([
-                    "protocolVersion": .string(Self.legacyVersion),
-                    "capabilities": capabilities(modern: false),
+                    "protocolVersion": .string(Self.protocolVersion),
+                    "capabilities": capabilities,
                     "serverInfo": serverInfo,
                     "instructions": .string(Self.instructions)
-                ]),
-                modern: false
+                ])
             )
-        case "ping" where !modern:
-            return rpcResult(id: request.id!, value: .object([:]), modern: modern)
+        case "ping":
+            return rpcResult(id: request.id!, value: .object([:]))
         case "tools/list":
             guard request.parameter("cursor") == nil else {
                 return rpcError(id: request.id!, code: -32_602, message: "Tool list cursor is invalid.")
@@ -169,34 +137,25 @@ actor MCPProtocolHandler {
             guard let tools = try? MCPJSONValue.encode(MCPToolCatalog.definitions) else {
                 return rpcError(id: request.id!, code: -32_603, message: "Internal error.")
             }
-            var result: [String: MCPJSONValue] = [
-                "tools": tools
-            ]
-            addCacheFields(to: &result, modern: modern, ttl: 300_000)
-            return rpcResult(id: request.id!, value: .object(result), modern: modern)
+            return rpcResult(id: request.id!, value: .object(["tools": tools]))
         case "tools/call":
-            return await callTool(request, modern: modern)
+            return await callTool(request)
         case "resources/list":
             guard request.parameter("cursor") == nil else {
                 return rpcError(id: request.id!, code: -32_602, message: "Resource list cursor is invalid.")
             }
-            var result: [String: MCPJSONValue] = ["resources": .array([])]
-            addCacheFields(to: &result, modern: modern, ttl: 0)
-            return rpcResult(id: request.id!, value: .object(result), modern: modern)
+            return rpcResult(id: request.id!, value: .object(["resources": .array([])]))
         case "resources/templates/list":
             guard request.parameter("cursor") == nil else {
                 return rpcError(id: request.id!, code: -32_602, message: "Resource template cursor is invalid.")
             }
-            var result: [String: MCPJSONValue] = [
+            return rpcResult(id: request.id!, value: .object([
                 "resourceTemplates": .array(MCPToolCatalog.resourceTemplates)
-            ]
-            addCacheFields(to: &result, modern: modern, ttl: 300_000)
-            return rpcResult(id: request.id!, value: .object(result), modern: modern)
+            ]))
         case "resources/read":
-            return await readResource(request, modern: modern)
+            return await readResource(request)
         default:
             return rpcError(
-                status: modern ? 404 : 200,
                 id: request.id!,
                 code: -32_601,
                 message: "Method not found."
@@ -204,7 +163,7 @@ actor MCPProtocolHandler {
         }
     }
 
-    private func callTool(_ request: MCPRPCRequest, modern: Bool) async -> MCPHTTPResponse {
+    private func callTool(_ request: MCPRPCRequest) async -> MCPHTTPResponse {
         guard let name = request.stringParameter("name") else {
             return rpcError(id: request.id!, code: -32_602, message: "Tool name is required.")
         }
@@ -241,10 +200,10 @@ actor MCPProtocolHandler {
             "structuredContent": payload.structuredContent
         ]
         if payload.isError { result["isError"] = .bool(true) }
-        return rpcResult(id: request.id!, value: .object(result), modern: modern)
+        return rpcResult(id: request.id!, value: .object(result))
     }
 
-    private func readResource(_ request: MCPRPCRequest, modern: Bool) async -> MCPHTTPResponse {
+    private func readResource(_ request: MCPRPCRequest) async -> MCPHTTPResponse {
         guard let uri = request.stringParameter("uri"), let resource = MCPResourceRequest(uri: uri) else {
             return rpcError(id: request.id!, code: -32_602, message: "Resource URI is invalid or unavailable.")
         }
@@ -262,53 +221,7 @@ actor MCPProtocolHandler {
         } else if let blob = payload.blob {
             content["blob"] = .string(blob.base64EncodedString())
         }
-        var result: [String: MCPJSONValue] = ["contents": .array([.object(content)])]
-        addCacheFields(to: &result, modern: modern, ttl: 0)
-        return rpcResult(id: request.id!, value: .object(result), modern: modern)
-    }
-
-    private func validateModernHeaders(_ httpRequest: MCPHTTPRequest, request: MCPRPCRequest) -> MCPHTTPResponse? {
-        guard let meta = request.objectParameter("_meta"),
-              let metadataVersion = meta["io.modelcontextprotocol/protocolVersion"]?.stringValue,
-              meta["io.modelcontextprotocol/clientCapabilities"]?.objectValue != nil
-        else {
-            return rpcError(
-                status: 400,
-                id: request.id ?? .null,
-                code: -32_602,
-                message: "Required MCP request metadata is invalid."
-            )
-        }
-        guard metadataVersion == httpRequest[header: "mcp-protocol-version"],
-              httpRequest[header: "mcp-method"] == request.method
-        else {
-            return rpcError(
-                status: 400,
-                id: request.id ?? .null,
-                code: -32_020,
-                message: "Required MCP headers do not match the request body."
-            )
-        }
-
-        let expectedName: String?
-        switch request.method {
-        case "tools/call": expectedName = request.stringParameter("name")
-        case "resources/read": expectedName = request.stringParameter("uri")
-        default: expectedName = nil
-        }
-        if let expectedName {
-            guard let encodedName = httpRequest[header: "mcp-name"],
-                  decodeHeaderValue(encodedName) == expectedName
-            else {
-                return rpcError(
-                    status: 400,
-                    id: request.id ?? .null,
-                    code: -32_020,
-                    message: "Required MCP headers do not match the request body."
-                )
-            }
-        }
-        return nil
+        return rpcResult(id: request.id!, value: .object(["contents": .array([.object(content)])]))
     }
 
     private func unsupportedVersion(requested: String, id: MCPJSONValue) -> MCPHTTPResponse {
@@ -319,17 +232,13 @@ actor MCPProtocolHandler {
             message: "Unsupported protocol version.",
             data: .object([
                 "requested": .string(requested),
-                "supported": .array(Self.supportedVersions.map(MCPJSONValue.string))
+                "supported": .array([.string(Self.protocolVersion)])
             ])
         )
     }
 
-    private func rpcResult(id: MCPJSONValue, value: MCPJSONValue, modern: Bool) -> MCPHTTPResponse {
-        var result = value.objectValue ?? ["value": value]
-        if modern {
-            result["resultType"] = .string("complete")
-            result["_meta"] = .object(["io.modelcontextprotocol/serverInfo": serverInfo])
-        }
+    private func rpcResult(id: MCPJSONValue, value: MCPJSONValue) -> MCPHTTPResponse {
+        let result = value.objectValue ?? ["value": value]
         return jsonResponse(
             status: 200,
             value: .object(["jsonrpc": .string("2.0"), "id": id, "result": .object(result)])
@@ -366,12 +275,6 @@ actor MCPProtocolHandler {
         return MCPHTTPResponse(status: status, headers: headers, body: body)
     }
 
-    private func addCacheFields(to result: inout [String: MCPJSONValue], modern: Bool, ttl: Int) {
-        guard modern else { return }
-        result["ttlMs"] = .integer(Int64(ttl))
-        result["cacheScope"] = .string("private")
-    }
-
     private func hostIsAllowed(_ host: String?) -> Bool {
         guard let host = host?.lowercased() else { return false }
         return host == "127.0.0.1:\(port)" || host == "localhost:\(port)"
@@ -392,21 +295,6 @@ actor MCPProtocolHandler {
         return host == "127.0.0.1" || host == "localhost"
     }
 
-    private func authenticated(_ authorization: String?) -> Bool {
-        guard let authorization, authorization.hasPrefix("Bearer ") else { return false }
-        let supplied = Array(authorization.dropFirst("Bearer ".count).utf8)
-        let expected = Array(bearerToken.utf8)
-        let count = max(supplied.count, expected.count)
-        var difference = supplied.count ^ expected.count
-        for index in 0..<count {
-            difference |= Int(
-                (index < supplied.count ? supplied[index] : 0)
-                    ^ (index < expected.count ? expected[index] : 0)
-            )
-        }
-        return difference == 0
-    }
-
     private func isJSONContentType(_ header: String?) -> Bool {
         guard let header else { return false }
         let components = header.split(separator: ";", omittingEmptySubsequences: false)
@@ -423,29 +311,14 @@ actor MCPProtocolHandler {
         }
     }
 
-    private func decodeHeaderValue(_ value: String) -> String? {
-        if value.hasPrefix("=?base64?") && value.hasSuffix("?=") {
-            let start = value.index(value.startIndex, offsetBy: "=?base64?".count)
-            let end = value.index(value.endIndex, offsetBy: -2)
-            guard let data = Data(base64Encoded: String(value[start..<end]), options: []) else { return nil }
-            return String(data: data, encoding: .utf8)
-        }
-        guard value == value.trimmingCharacters(in: .whitespacesAndNewlines),
-              value.unicodeScalars.allSatisfy({ (0x20...0x7E).contains($0.value) })
-        else { return nil }
-        return value
-    }
-
     private var serverInfo: MCPJSONValue {
         .object(["name": .string("foundation-evals"), "version": .string("1.0.0")])
     }
 
-    private func capabilities(modern: Bool) -> MCPJSONValue {
+    private var capabilities: MCPJSONValue {
         .object([
-            "tools": modern ? .object([:]) : .object(["listChanged": .bool(false)]),
-            "resources": modern
-                ? .object([:])
-                : .object(["subscribe": .bool(false), "listChanged": .bool(false)])
+            "tools": .object(["listChanged": .bool(false)]),
+            "resources": .object(["subscribe": .bool(false), "listChanged": .bool(false)])
         ])
     }
 

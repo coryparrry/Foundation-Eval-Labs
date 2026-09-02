@@ -5,20 +5,11 @@ struct CodexMCPConfiguration: Equatable, Sendable {
     static let defaultPort = 17_873
 
     let port: Int
-    let bearerToken: String
-
-    init(port: Int = Self.defaultPort, bearerToken: String) throws {
+    init(port: Int = Self.defaultPort) throws {
         guard (1_024...65_535).contains(port) else {
             throw CodexMCPInstallerError.invalidPort
         }
-        guard bearerToken.count == 64,
-              bearerToken.utf8.allSatisfy({ byte in
-                  (48...57).contains(byte) || (65...70).contains(byte) || (97...102).contains(byte)
-              }) else {
-            throw CodexMCPInstallerError.invalidToken
-        }
         self.port = port
-        self.bearerToken = bearerToken
     }
 
     var endpoint: URL {
@@ -30,8 +21,6 @@ struct CodexMCPConfiguration: Equatable, Sendable {
         \(CodexMCPInstaller.beginMarker)
         [mcp_servers.foundation-evals]
         url = "\(endpoint.absoluteString)"
-        http_headers = { Authorization = "Bearer \(bearerToken)" }
-        default_tools_approval_mode = "approve"
         \(CodexMCPInstaller.endMarker)
         """
     }
@@ -43,7 +32,6 @@ struct CodexMCPConfiguration: Equatable, Sendable {
 
 enum CodexMCPInstallerError: Error, Equatable, LocalizedError {
     case invalidPort
-    case invalidToken
     case invalidDirectory
     case invalidUTF8
     case configurationTooLarge
@@ -60,8 +48,6 @@ enum CodexMCPInstallerError: Error, Equatable, LocalizedError {
         switch self {
         case .invalidPort:
             "The MCP server port is invalid."
-        case .invalidToken:
-            "The MCP credential is invalid. Rotate it and try again."
         case .invalidDirectory:
             "The ~/.codex configuration path is not a directory."
         case .invalidUTF8:

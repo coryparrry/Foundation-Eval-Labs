@@ -49,17 +49,6 @@ enum CodexMCPInstallationState: Equatable, Sendable {
     }
 }
 
-private enum MCPSettingsError: Error, LocalizedError {
-    case rollbackFailed
-
-    var errorDescription: String? {
-        switch self {
-        case .rollbackFailed:
-            "The previous MCP configuration could not be restored completely. Review the Codex backup before retrying."
-        }
-    }
-}
-
 @MainActor
 @Observable
 final class MCPSettingsController {
@@ -68,9 +57,7 @@ final class MCPSettingsController {
 
     private let serverControl: MCPServerControl
     private let installer: CodexMCPInstaller
-    private let tokenStore: MCPBearerTokenStore
     private let userDefaults: UserDefaults
-    private var bearerToken: String?
     private var needsFixedPortMigration: Bool
 
     private(set) var serverState: MCPConnectorServerState = .stopped
@@ -82,13 +69,11 @@ final class MCPSettingsController {
     init(
         serverControl: MCPServerControl,
         userDefaults: UserDefaults = .standard,
-        installer: CodexMCPInstaller = CodexMCPInstaller(),
-        tokenStore: MCPBearerTokenStore = MCPBearerTokenStore()
+        installer: CodexMCPInstaller = CodexMCPInstaller()
     ) {
         self.serverControl = serverControl
         self.userDefaults = userDefaults
         self.installer = installer
-        self.tokenStore = tokenStore
         let legacyPort = userDefaults.integer(forKey: Self.legacyPortKey)
         needsFixedPortMigration = (1_024...65_535).contains(legacyPort)
             && legacyPort != CodexMCPConfiguration.defaultPort
@@ -108,22 +93,9 @@ final class MCPSettingsController {
         isBusy = true
         defer { isBusy = false }
         do {
-            let configuration = try await currentConfiguration()
+            let configuration = try currentConfiguration()
             try await startServer(using: configuration)
             notice = nil
-        } catch {
-            notice = safeDescription(for: error)
-        }
-    }
-
-    func rotateToken() async {
-        guard !isBusy else { return }
-        do {
-            let token = try tokenStore.generate()
-            try await reconfigure(token: token)
-            notice = serverState == .running
-                ? "The MCP credential was rotated. Restart Codex to reconnect."
-                : "The MCP credential was rotated. Use the Codex connection button, then restart Codex."
         } catch {
             notice = safeDescription(for: error)
         }
@@ -134,7 +106,7 @@ final class MCPSettingsController {
         isBusy = true
         defer { isBusy = false }
         do {
-            let configuration = try await currentConfiguration()
+            let configuration = try currentConfiguration()
             let receipt = try installer.installOrUpdate(
                 in: codexConfigurationDirectory,
                 configuration: configuration
@@ -185,8 +157,8 @@ final class MCPSettingsController {
 
     func copyManualConfiguration() async {
         do {
-            copyToPasteboard(try await currentConfiguration().manualSnippet)
-            notice = "Codex configuration copied. Treat it like a password because it contains the MCP credential."
+            copyToPasteboard(try currentConfiguration().manualSnippet)
+            notice = "Codex configuration copied."
         } catch {
             notice = safeDescription(for: error)
         }
@@ -209,87 +181,8 @@ final class MCPSettingsController {
         }
     }
 
-    private func reconfigure(token newToken: String) async throws {
-        isBusy = true
-        let oldToken = try await loadToken()
-        let oldConfiguration = try CodexMCPConfiguration(bearerToken: oldToken)
-        let newConfiguration = try CodexMCPConfiguration(bearerToken: newToken)
-        let wasRunning = serverState == .running
-        var updatedCodex = false
-        defer { isBusy = false }
-
-        if wasRunning {
-            serverState = .stopping
-            do {
-                try await serverControl.stop()
-                serverState = .stopped
-            } catch {
-                serverState = .failed
-                throw error
-            }
-        }
-
-        do {
-            try await tokenStore.save(newToken)
-            bearerToken = newToken
-
-            if installationState == .installed {
-                _ = try installer.installOrUpdate(
-                    in: codexConfigurationDirectory,
-                    configuration: newConfiguration
-                )
-                updatedCodex = true
-            }
-
-            if wasRunning {
-                serverState = .starting
-                try await serverControl.start(newConfiguration)
-                serverState = .running
-            } else {
-                serverState = .stopped
-            }
-        } catch {
-            var rollbackFailed = false
-            do {
-                try await tokenStore.save(oldToken)
-            } catch {
-                rollbackFailed = true
-            }
-            bearerToken = oldToken
-            if updatedCodex {
-                do {
-                    _ = try installer.installOrUpdate(
-                        in: codexConfigurationDirectory,
-                        configuration: oldConfiguration
-                    )
-                } catch {
-                    rollbackFailed = true
-                }
-            }
-            if wasRunning {
-                do {
-                    try await serverControl.start(oldConfiguration)
-                    serverState = .running
-                } catch {
-                    serverState = .failed
-                    rollbackFailed = true
-                }
-            } else {
-                serverState = .stopped
-            }
-            if rollbackFailed {
-                serverState = .failed
-                throw MCPSettingsError.rollbackFailed
-            }
-            throw error
-        }
-    }
-
-    private func currentConfiguration() async throws -> CodexMCPConfiguration {
-        try await CodexMCPConfiguration(
-            port: CodexMCPConfiguration.defaultPort,
-            bearerToken: loadToken()
-        )
+    private func currentConfiguration() throws -> CodexMCPConfiguration {
+        try CodexMCPConfiguration(port: CodexMCPConfiguration.defaultPort)
     }
 
     private func startServer(using configuration: CodexMCPConfiguration) async throws {
@@ -302,13 +195,6 @@ final class MCPSettingsController {
             serverState = .failed
             throw error
         }
-    }
-
-    private func loadToken() async throws -> String {
-        if let bearerToken { return bearerToken }
-        let token = try await tokenStore.loadOrCreate()
-        bearerToken = token
-        return token
     }
 
     private var codexConfigurationDirectory: URL {
@@ -325,10 +211,6 @@ final class MCPSettingsController {
     private func safeDescription(for error: Error) -> String {
         switch error {
         case let error as CodexMCPInstallerError:
-            error.localizedDescription
-        case let error as MCPBearerTokenStoreError:
-            error.localizedDescription
-        case let error as MCPSettingsError:
             error.localizedDescription
         case let error as MCPServerError:
             error.localizedDescription

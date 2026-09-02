@@ -14,9 +14,8 @@ final class FoundationEvalsMCPRuntime {
         guard server == nil else { throw MCPServerError.alreadyRunning }
         let server = MCPServer(
             port: configuration.port,
-            bearerToken: configuration.bearerToken,
             authority: MCPStoreAuthority.make(store: store),
-            onAuthenticatedRequest: { [weak self] date in
+            onRequest: { [weak self] date in
                 await self?.settingsController?.recordConnection(at: date)
             }
         )

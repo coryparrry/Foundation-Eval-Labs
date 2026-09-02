@@ -3,7 +3,6 @@ import SwiftUI
 struct MCPSettingsView: View {
     @Bindable var controller: MCPSettingsController
     @State private var isConfirmingRemoval = false
-    @State private var isConfirmingRotation = false
 
     var body: some View {
         Form {
@@ -55,10 +54,6 @@ struct MCPSettingsView: View {
                         Task { await controller.copyManualConfiguration() }
                     }
 
-                    Button("Rotate Credential…") {
-                        isConfirmingRotation = true
-                    }
-
                     Button("Remove from Codex", role: .destructive) {
                         isConfirmingRemoval = true
                     }
@@ -81,18 +76,6 @@ struct MCPSettingsView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Only the managed Foundation Evals block is removed. Restart Codex afterward.")
-        }
-        .confirmationDialog(
-            "Rotate the MCP credential?",
-            isPresented: $isConfirmingRotation,
-            titleVisibility: .visible
-        ) {
-            Button("Rotate Credential", role: .destructive) {
-                Task { await controller.rotateToken() }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("The server and managed Codex configuration will be updated together. Restart Codex afterward.")
         }
         .alert(
             "MCP Connector",

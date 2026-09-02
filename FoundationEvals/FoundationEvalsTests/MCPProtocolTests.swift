@@ -3,67 +3,28 @@ import Testing
 @testable import FoundationEvals
 
 struct MCPProtocolTests {
-    private let token = "test-bearer-token"
-
-    @Test func modernDiscoveryIncludesIdentityVersionsAndCacheContract() async throws {
-        let handler = makeHandler()
-        let response = await handler.handle(try modernRequest(method: "server/discover"))
-        let json = try responseJSON(response)
-
-        #expect(response.status == 200)
-        #expect(json["result"]?["resultType"] == .string("complete"))
-        #expect(json["result"]?["supportedVersions"] == .array([
-            .string("2026-07-28"), .string("2025-11-25")
-        ]))
-        #expect(json["result"]?["ttlMs"] == .integer(300_000))
-        #expect(json["result"]?["cacheScope"] == .string("private"))
-        #expect(json["result"]?["serverInfo"]?["name"] == .string("foundation-evals"))
-        #expect(json["result"]?["_meta"]?["io.modelcontextprotocol/serverInfo"]?["name"] == .string("foundation-evals"))
-    }
-
-    @Test func legacyInitializeUsesStableLifecycleShape() async throws {
-        let handler = makeHandler()
-        let response = await handler.handle(try legacyInitializeRequest())
+    @Test func initializeNegotiatesCodexStandardVersion() async throws {
+        let response = await makeHandler().handle(try initializeRequest())
         let result = try #require(responseJSON(response)["result"])
 
         #expect(response.status == 200)
-        #expect(result["protocolVersion"] == .string("2025-11-25"))
+        #expect(result["protocolVersion"] == .string("2025-06-18"))
         #expect(result["serverInfo"]?["name"] == .string("foundation-evals"))
-        #expect(result["resultType"] == nil)
-        #expect(result["ttlMs"] == nil)
     }
 
-    @Test func pingIsLegacyOnly() async throws {
-        let handler = makeHandler()
-        let modern = await handler.handle(try modernRequest(method: "ping"))
-        var legacyHeaders = baseHeaders
-        legacyHeaders["MCP-Protocol-Version"] = "2025-11-25"
-        let legacy = await handler.handle(MCPHTTPRequest(
-            method: "POST",
-            headers: legacyHeaders,
-            body: try rpcBody(id: 2, method: "ping", params: [:])
-        ))
+    @Test func initializeReturnsSupportedVersionWhenClientRequestsAnotherVersion() async throws {
+        let response = await makeHandler().handle(try initializeRequest(protocolVersion: "2099-01-01"))
+        let result = try #require(responseJSON(response)["result"])
 
-        #expect(modern.status == 404)
-        #expect(try responseJSON(modern)["error"]?["code"] == .integer(-32_601))
-        #expect(legacy.status == 200)
-        #expect(try responseJSON(legacy)["result"] == .object([:]))
+        #expect(response.status == 200)
+        #expect(result["protocolVersion"] == .string("2025-06-18"))
     }
 
-    @Test func modernMetadataErrorsAreDistinctFromHeaderMismatch() async throws {
-        let handler = makeHandler()
-        var missingMetadata = try modernRequest(method: "tools/list")
-        missingMetadata.body = try rpcBody(id: 1, method: "tools/list", params: [:])
-        let metadataResponse = await handler.handle(missingMetadata)
+    @Test func pingUsesStandardProtocol() async throws {
+        let response = await makeHandler().handle(try standardRequest(method: "ping"))
 
-        var mismatchedHeader = try modernRequest(method: "tools/list")
-        mismatchedHeader.headers["mcp-method"] = "resources/list"
-        let mismatchResponse = await handler.handle(mismatchedHeader)
-
-        #expect(metadataResponse.status == 400)
-        #expect(try responseJSON(metadataResponse)["error"]?["code"] == .integer(-32_602))
-        #expect(mismatchResponse.status == 400)
-        #expect(try responseJSON(mismatchResponse)["error"]?["code"] == .integer(-32_020))
+        #expect(response.status == 200)
+        #expect(try responseJSON(response)["result"] == .object([:]))
     }
 
     @Test func malformedJSONAndInvalidEnvelopeUseDistinctJSONRPCErrors() async throws {
@@ -168,22 +129,18 @@ struct MCPProtocolTests {
             readResource: { _ in .failure(uri: "", code: "missing", message: "Missing") }
         )
         let handler = MCPProtocolHandler(
-            bearerToken: token,
             authority: authority,
             maximumBodyBytes: 32
         )
 
         let methodResponse = await handler.handle(MCPHTTPRequest(method: "GET"))
-        var hostRequest = try legacyInitializeRequest()
+        var hostRequest = try initializeRequest()
         hostRequest.headers["host"] = "example.com"
         let hostResponse = await handler.handle(hostRequest)
-        var originRequest = try legacyInitializeRequest()
+        var originRequest = try initializeRequest()
         originRequest.headers["origin"] = "https://example.com"
         let originResponse = await handler.handle(originRequest)
-        var authenticationRequest = try legacyInitializeRequest()
-        authenticationRequest.headers["authorization"] = "Bearer wrong"
-        let authenticationResponse = await handler.handle(authenticationRequest)
-        var oversizedRequest = try legacyInitializeRequest()
+        var oversizedRequest = try initializeRequest()
         oversizedRequest.body = Data(repeating: 0x41, count: 33)
         let oversizedResponse = await handler.handle(oversizedRequest)
 
@@ -191,16 +148,15 @@ struct MCPProtocolTests {
         #expect(methodResponse.headers["Allow"] == "POST")
         #expect(hostResponse.status == 403)
         #expect(originResponse.status == 403)
-        #expect(authenticationResponse.status == 401)
         #expect(oversizedResponse.status == 413)
         #expect(await recorder.count == 0)
     }
 
     @Test func contentTypeRequiresJSONMediaTypeAndAllowsParameters() async throws {
         let handler = makeHandler()
-        var invalid = try legacyInitializeRequest()
+        var invalid = try initializeRequest()
         invalid.headers["content-type"] = "application/jsonx"
-        var parameterized = try legacyInitializeRequest()
+        var parameterized = try initializeRequest()
         parameterized.headers["content-type"] = "application/json; charset=utf-8"
 
         let invalidResponse = await handler.handle(invalid)
@@ -220,13 +176,11 @@ struct MCPProtocolTests {
             readResource: { _ in .failure(uri: "", code: "missing", message: "Missing") }
         )
         let handler = MCPProtocolHandler(
-            bearerToken: token,
             authority: authority,
             maximumConcurrentRequests: 1
         )
-        let request = try modernRequest(
+        let request = try standardRequest(
             method: "tools/call",
-            name: "eval_get_state",
             parameters: ["name": .string("eval_get_state"), "arguments": .object([:])]
         )
 
@@ -243,8 +197,8 @@ struct MCPProtocolTests {
 
     @Test func toolCatalogIsDeterministicTypedAndComplete() async throws {
         let handler = makeHandler()
-        let first = await handler.handle(try modernRequest(method: "tools/list"))
-        let second = await handler.handle(try modernRequest(method: "tools/list"))
+        let first = await handler.handle(try standardRequest(method: "tools/list"))
+        let second = await handler.handle(try standardRequest(method: "tools/list"))
         let tools = try #require(responseJSON(first)["result"]?["tools"]?.arrayValue)
 
         #expect(first.body == second.body)
@@ -276,11 +230,10 @@ struct MCPProtocolTests {
             },
             readResource: { _ in .failure(uri: "", code: "missing", message: "Missing") }
         )
-        let handler = MCPProtocolHandler(bearerToken: token, authority: authority)
+        let handler = MCPProtocolHandler(authority: authority)
         let response = await handler.handle(
-            try modernRequest(
+            try standardRequest(
                 method: "tools/call",
-                name: "eval_get_state",
                 parameters: ["name": .string("eval_get_state"), "arguments": .object([:])]
             )
         )
@@ -302,11 +255,10 @@ struct MCPProtocolTests {
             },
             readResource: { _ in .failure(uri: "", code: "missing", message: "Missing") }
         )
-        let handler = MCPProtocolHandler(bearerToken: token, authority: authority)
+        let handler = MCPProtocolHandler(authority: authority)
         let response = await handler.handle(
-            try modernRequest(
+            try standardRequest(
                 method: "tools/call",
-                name: "eval_delete_run",
                 parameters: [
                     "name": .string("eval_delete_run"),
                     "arguments": .object([
@@ -322,7 +274,7 @@ struct MCPProtocolTests {
         #expect(await recorder.count == 0)
     }
 
-    @Test func resourceReadAcceptsEncodedRoutingNameAndOpaqueUUID() async throws {
+    @Test func resourceReadAcceptsOpaqueUUID() async throws {
         let id = UUID()
         let uri = "foundation-evals://runs/\(id.uuidString)"
         let authority = MCPAuthority(
@@ -332,12 +284,10 @@ struct MCPProtocolTests {
                 return .text(uri: uri, mimeType: "application/json", text: #"{"id":"run"}"#)
             }
         )
-        let handler = MCPProtocolHandler(bearerToken: token, authority: authority)
-        let encodedName = "=?base64?\(Data(uri.utf8).base64EncodedString())?="
+        let handler = MCPProtocolHandler(authority: authority)
         let response = await handler.handle(
-            try modernRequest(
+            try standardRequest(
                 method: "resources/read",
-                name: encodedName,
                 parameters: ["uri": .string(uri)]
             )
         )
@@ -346,17 +296,15 @@ struct MCPProtocolTests {
         #expect(try responseJSON(response)["result"]?["contents"]?.arrayValue?.first?["uri"] == .string(uri))
     }
 
-    @Test func unsupportedProtocolAdvertisesBothImplementedVersions() async throws {
-        var request = try modernRequest(method: "server/discover")
+    @Test func unsupportedProtocolAdvertisesImplementedVersion() async throws {
+        var request = try standardRequest(method: "tools/list")
         request.headers["mcp-protocol-version"] = "2099-01-01"
         let response = await makeHandler().handle(request)
         let error = try #require(responseJSON(response)["error"])
 
         #expect(response.status == 400)
         #expect(error["code"] == .integer(-32_022))
-        #expect(error["data"]?["supported"] == .array([
-            .string("2026-07-28"), .string("2025-11-25")
-        ]))
+        #expect(error["data"]?["supported"] == .array([.string("2025-06-18")]))
     }
 
     @Test(.enabled(
@@ -375,7 +323,6 @@ struct MCPProtocolTests {
         )
         let server = MCPServer(
             port: port,
-            bearerToken: token,
             authority: authority,
             maximumConcurrentRequests: 1
         )
@@ -388,13 +335,11 @@ struct MCPProtocolTests {
                 id: 1,
                 method: "initialize",
                 params: [
-                    "protocolVersion": .string("2025-11-25"),
+                    "protocolVersion": .string("2025-06-18"),
                     "capabilities": .object([:]),
                     "clientInfo": .object(["name": .string("test"), "version": .string("1")])
                 ]
             )
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue("2025-11-25", forHTTPHeaderField: "MCP-Protocol-Version")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = try #require((response as? HTTPURLResponse)?.statusCode)
@@ -404,36 +349,7 @@ struct MCPProtocolTests {
                 return
             }
             let json = try JSONDecoder().decode(MCPJSONValue.self, from: data)
-            #expect(json["result"]?["protocolVersion"] == .string("2025-11-25"))
-
-            var discovery = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/mcp")!)
-            discovery.httpMethod = "POST"
-            discovery.httpBody = try rpcBody(
-                id: 2,
-                method: "server/discover",
-                params: [
-                    "_meta": .object([
-                        "io.modelcontextprotocol/protocolVersion": .string("2026-07-28"),
-                        "io.modelcontextprotocol/clientCapabilities": .object([:]),
-                        "io.modelcontextprotocol/clientInfo": .object([
-                            "name": .string("FoundationEvalsTests"), "version": .string("1")
-                        ])
-                    ])
-                ]
-            )
-            discovery.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            discovery.setValue("2026-07-28", forHTTPHeaderField: "MCP-Protocol-Version")
-            discovery.setValue("server/discover", forHTTPHeaderField: "Mcp-Method")
-            discovery.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            let (discoveryData, discoveryResponse) = try await URLSession.shared.data(for: discovery)
-            #expect((discoveryResponse as? HTTPURLResponse)?.statusCode == 200)
-            let discoveryJSON = try JSONDecoder().decode(MCPJSONValue.self, from: discoveryData)
-            #expect(discoveryJSON["result"]?["resultType"] == .string("complete"))
-
-            var hostile = request
-            hostile.setValue("Bearer wrong", forHTTPHeaderField: "Authorization")
-            let (_, hostileResponse) = try await URLSession.shared.data(for: hostile)
-            #expect((hostileResponse as? HTTPURLResponse)?.statusCode == 401)
+            #expect(json["result"]?["protocolVersion"] == .string("2025-06-18"))
 
             var invalidMediaType = request
             invalidMediaType.setValue("application/jsonx", forHTTPHeaderField: "Content-Type")
@@ -448,17 +364,10 @@ struct MCPProtocolTests {
                     method: "tools/call",
                     params: [
                         "name": .string("eval_get_state"),
-                        "arguments": .object([:]),
-                        "_meta": .object([
-                            "io.modelcontextprotocol/protocolVersion": .string("2026-07-28"),
-                            "io.modelcontextprotocol/clientCapabilities": .object([:])
-                        ])
+                        "arguments": .object([:])
                     ]
                 )
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                request.setValue("2026-07-28", forHTTPHeaderField: "MCP-Protocol-Version")
-                request.setValue("tools/call", forHTTPHeaderField: "Mcp-Method")
-                request.setValue("eval_get_state", forHTTPHeaderField: "Mcp-Name")
+                request.setValue("2025-06-18", forHTTPHeaderField: "MCP-Protocol-Version")
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 return request
             }
@@ -477,7 +386,7 @@ struct MCPProtocolTests {
                 throw error
             }
 
-            let duplicate = MCPServer(port: port, bearerToken: token, authority: authority)
+            let duplicate = MCPServer(port: port, authority: authority)
             do {
                 try await duplicate.start()
                 await duplicate.stop()
@@ -491,7 +400,7 @@ struct MCPProtocolTests {
             }
             await server.stop()
 
-            let rebound = MCPServer(port: port, bearerToken: token, authority: authority)
+            let rebound = MCPServer(port: port, authority: authority)
             try await rebound.start()
             await rebound.stop()
         } catch {
@@ -502,7 +411,6 @@ struct MCPProtocolTests {
 
     private func makeHandler() -> MCPProtocolHandler {
         MCPProtocolHandler(
-            bearerToken: token,
             authority: MCPAuthority(
                 call: { _ in MCPToolPayload(structuredContent: .object(["outcome": .string("committed")])) },
                 readResource: { _ in .failure(uri: "", code: "missing", message: "Missing") }
@@ -510,39 +418,28 @@ struct MCPProtocolTests {
         )
     }
 
-    private func modernRequest(
+    private func standardRequest(
         method: String,
-        name: String? = nil,
         parameters: [String: MCPJSONValue] = [:]
     ) throws -> MCPHTTPRequest {
-        var params = parameters
-        params["_meta"] = .object([
-            "io.modelcontextprotocol/protocolVersion": .string("2026-07-28"),
-            "io.modelcontextprotocol/clientCapabilities": .object([:]),
-            "io.modelcontextprotocol/clientInfo": .object([
-                "name": .string("FoundationEvalsTests"), "version": .string("1")
-            ])
-        ])
         var headers = baseHeaders
-        headers["MCP-Protocol-Version"] = "2026-07-28"
-        headers["Mcp-Method"] = method
-        if let name { headers["Mcp-Name"] = name }
+        headers["MCP-Protocol-Version"] = "2025-06-18"
         return MCPHTTPRequest(
             method: "POST",
             headers: headers,
-            body: try rpcBody(id: 1, method: method, params: params)
+            body: try rpcBody(id: 1, method: method, params: parameters)
         )
     }
 
-    private func legacyInitializeRequest() throws -> MCPHTTPRequest {
+    private func initializeRequest(protocolVersion: String = "2025-06-18") throws -> MCPHTTPRequest {
         MCPHTTPRequest(
             method: "POST",
-            headers: baseHeaders.merging(["MCP-Protocol-Version": "2025-11-25"]) { _, new in new },
+            headers: baseHeaders,
             body: try rpcBody(
                 id: 1,
                 method: "initialize",
                 params: [
-                    "protocolVersion": .string("2025-11-25"),
+                    "protocolVersion": .string(protocolVersion),
                     "capabilities": .object([:]),
                     "clientInfo": .object(["name": .string("test"), "version": .string("1")])
                 ]
@@ -553,7 +450,6 @@ struct MCPProtocolTests {
     private var baseHeaders: [String: String] {
         [
             "Host": "127.0.0.1:17873",
-            "Authorization": "Bearer \(token)",
             "Content-Type": "application/json"
         ]
     }

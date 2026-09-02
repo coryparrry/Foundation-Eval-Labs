@@ -1,14 +1,14 @@
 # Worklog
 
-- Current task: finish the live Codex connector installer fix. Root causes found: valid multiline strings were rejected outright, then repeated array-of-table keys were incorrectly treated as duplicates across distinct entries. Preserve all existing configuration and verify the rebuilt UI flow.
-- Evidence: the real `~/.codex/config.toml` validates without modification (`accepted=true appended=true`); all 11 installer tests pass; the rebuilt app installed and started the connector without the former TOML-layout alert. Authenticated legacy and modern MCP handshakes, `tools/list`, and `eval_get_state` returned HTTP 200. Sending the identical live suite through `eval_replace_suite` returned `duplicate`; the post-read revision and suite were unchanged. This already-running Codex task needs a restart to load the new native tool palette.
+- Current task: completed the requested simple local MCP contract. Bearer authentication, Keychain storage, credential rotation, custom protocol dialects, and generated authorization headers are removed; loopback-only binding and host/origin checks remain.
+- Evidence: 27 focused MCP/installer tests pass, including version negotiation and real loopback socket coverage. The final build launched as the sole `127.0.0.1:17873` listener. A fresh `codex exec` discovered `foundation-evals` and successfully called `eval_get_state`, returning “My Foundation Model Eval” at revision `e3b66ec47bf4dae6a2d159cfe9fc9ea194a3aac2e94d91a2fc51be4c70e62231`.
 
 - Goal: add a Swift-native MCP connector so agents can configure suites, upload context, run/cancel evals, and read durable results without UI control.
 - Current: App Sandbox and the folder picker are removed; Connect to Codex writes the managed block directly under `~/.codex`.
 - Steering: never launch the installed and DerivedData builds together; fix the broken Suite Editor at its source, not with window-size workarounds.
-- Contract: loopback HTTP on fixed port 17873; MCP 2026-07-28 plus Codex-compatible 2025-11-25; bearer auth; one active run; on-device model only.
+- Contract: unauthenticated loopback HTTP on fixed port 17873; standard MCP `2025-06-18`; one active run; on-device model only.
 - Integrity: durable writes before success, revision/resource-based idempotency, bounded requests/workloads, no caller file paths, cooperative cancellation, interrupted-run recovery.
-- Installation: direct `~/.codex/config.toml` managed-block update, plaintext token disclosure, per-server approval mode, reconnect required after changes; no folder picker.
+- Installation: direct `~/.codex/config.toml` managed-block update containing only the loopback URL; reconnect required after changes; no folder picker.
 - Evidence: the official Xcode build and build-for-testing both pass; all 53 unit tests pass, including the real-socket protocol test and new missing/symlinked `.codex` coverage. The rebuilt app has no App Sandbox, bookmark, user-selected-file, or network sandbox entitlement.
 - Boundaries: the follow-up signed run and UI test hit Xcode 27 beta worker/automation stalls, although the live UI geometry was verified directly. The official conformance CLI has no bearer-header option, so it cannot drive this authenticated endpoint without weakening the production contract. Guided Codex acceptance still requires Keychain authorization for a newly signed build and a Codex restart.
 - Signing: hardened runtime is enabled for both app configurations, but Xcode disables it for this checkout's ad-hoc “Sign to Run Locally” build. A Developer ID signature is required to verify the runtime flag and stable Keychain identity as distribution evidence.
