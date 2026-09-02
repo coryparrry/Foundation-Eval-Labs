@@ -63,7 +63,7 @@ enum CodexMCPInstallerError: Error, Equatable, LocalizedError {
         case .invalidToken:
             "The MCP credential is invalid. Rotate it and try again."
         case .invalidDirectory:
-            "Choose the Codex configuration directory."
+            "The ~/.codex configuration path is not a directory."
         case .invalidUTF8:
             "Codex config.toml is not valid UTF-8. No changes were made."
         case .configurationTooLarge:
@@ -118,6 +118,7 @@ struct CodexMCPInstaller {
     }
 
     func isInstalled(in directory: URL) throws -> Bool {
+        guard try prepare(directory, createIfMissing: false) else { return false }
         let snapshot = try readConfig(in: directory)
         guard let text = String(data: snapshot.data, encoding: .utf8) else {
             throw CodexMCPInstallerError.invalidUTF8
@@ -129,6 +130,7 @@ struct CodexMCPInstaller {
         in directory: URL,
         configuration: CodexMCPConfiguration
     ) throws -> CodexMCPInstallReceipt {
+        _ = try prepare(directory, createIfMissing: true)
         let before = try readConfig(in: directory)
         guard let text = String(data: before.data, encoding: .utf8) else {
             throw CodexMCPInstallerError.invalidUTF8
@@ -154,6 +156,13 @@ struct CodexMCPInstaller {
     }
 
     func remove(from directory: URL) throws -> CodexMCPInstallReceipt {
+        guard try prepare(directory, createIfMissing: false) else {
+            return CodexMCPInstallReceipt(
+                change: .unchanged,
+                configURL: directory.appending(path: "config.toml", directoryHint: .notDirectory),
+                backupURL: nil
+            )
+        }
         let before = try readConfig(in: directory)
         guard let text = String(data: before.data, encoding: .utf8) else {
             throw CodexMCPInstallerError.invalidUTF8
@@ -233,10 +242,7 @@ struct CodexMCPInstaller {
     }
 
     private func readConfig(in directory: URL) throws -> ConfigSnapshot {
-        var isDirectory: ObjCBool = false
-        guard directory.isFileURL,
-              fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else {
+        guard try prepare(directory, createIfMissing: false) else {
             throw CodexMCPInstallerError.invalidDirectory
         }
 
@@ -258,6 +264,34 @@ struct CodexMCPInstaller {
             data: try Data(contentsOf: url, options: .mappedIfSafe),
             permissions: permissions
         )
+    }
+
+    private func prepare(_ directory: URL, createIfMissing: Bool) throws -> Bool {
+        guard directory.isFileURL else {
+            throw CodexMCPInstallerError.invalidDirectory
+        }
+        try rejectSymbolicLinkIfPresent(at: directory)
+
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else {
+                throw CodexMCPInstallerError.invalidDirectory
+            }
+            return true
+        }
+
+        guard createIfMissing else { return false }
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try rejectSymbolicLinkIfPresent(at: directory)
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw CodexMCPInstallerError.invalidDirectory
+        }
+        return true
     }
 
     private func commit(_ data: Data, replacing before: ConfigSnapshot) throws -> URL? {

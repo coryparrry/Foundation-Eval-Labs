@@ -55,10 +55,6 @@ struct MCPSettingsView: View {
                         Task { await controller.copyManualConfiguration() }
                     }
 
-                    Button("Change Folder…") {
-                        controller.chooseDifferentCodexFolder()
-                    }
-
                     Button("Rotate Credential…") {
                         isConfirmingRotation = true
                     }

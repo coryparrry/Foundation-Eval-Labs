@@ -126,8 +126,9 @@ struct CodexMCPInstallerTests {
     }
 
     @Test func newConfigurationUsesOwnerOnlyPermissions() throws {
-        let directory = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let parent = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let directory = parent.appending(path: ".codex", directoryHint: .isDirectory)
 
         let receipt = try CodexMCPInstaller().installOrUpdate(
             in: directory,
@@ -136,7 +137,27 @@ struct CodexMCPInstallerTests {
 
         #expect(receipt.change == .installed)
         #expect(receipt.backupURL == nil)
+        #expect(try fileMode(at: directory) == 0o700)
         #expect(try fileMode(at: receipt.configURL) == 0o600)
+    }
+
+    @Test func symbolicConfigurationDirectoryIsRefused() throws {
+        let parent = try temporaryDirectory()
+        let outsideDirectory = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: parent)
+            try? FileManager.default.removeItem(at: outsideDirectory)
+        }
+        let directory = parent.appending(path: ".codex", directoryHint: .isDirectory)
+        try FileManager.default.createSymbolicLink(at: directory, withDestinationURL: outsideDirectory)
+
+        #expect(throws: CodexMCPInstallerError.unsafeFile) {
+            try CodexMCPInstaller().installOrUpdate(
+                in: directory,
+                configuration: CodexMCPConfiguration(bearerToken: token)
+            )
+        }
+        #expect(!FileManager.default.fileExists(atPath: outsideDirectory.appending(path: "config.toml").path))
     }
 
     @Test func symbolicConfigTargetIsRefused() throws {

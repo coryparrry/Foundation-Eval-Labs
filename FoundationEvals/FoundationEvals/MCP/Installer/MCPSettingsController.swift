@@ -50,16 +50,10 @@ enum CodexMCPInstallationState: Equatable, Sendable {
 }
 
 private enum MCPSettingsError: Error, LocalizedError {
-    case noConfigurationDirectory
-    case configurationPermissionUnavailable
     case rollbackFailed
 
     var errorDescription: String? {
         switch self {
-        case .noConfigurationDirectory:
-            "Choose the Codex configuration directory."
-        case .configurationPermissionUnavailable:
-            "Access to the Codex configuration folder is no longer available. Choose the folder again."
         case .rollbackFailed:
             "The previous MCP configuration could not be restored completely. Review the Codex backup before retrying."
         }
@@ -70,7 +64,7 @@ private enum MCPSettingsError: Error, LocalizedError {
 @Observable
 final class MCPSettingsController {
     private static let legacyPortKey = "mcp.server.port"
-    private static let bookmarkKey = "mcp.codex.configuration-directory-bookmark"
+    private static let legacyBookmarkKey = "mcp.codex.configuration-directory-bookmark"
 
     private let serverControl: MCPServerControl
     private let installer: CodexMCPInstaller
@@ -101,15 +95,12 @@ final class MCPSettingsController {
         if !needsFixedPortMigration {
             userDefaults.removeObject(forKey: Self.legacyPortKey)
         }
+        userDefaults.removeObject(forKey: Self.legacyBookmarkKey)
         refreshInstallationState()
     }
 
     var endpoint: URL {
         URL(string: "http://127.0.0.1:\(CodexMCPConfiguration.defaultPort)/mcp")!
-    }
-
-    var hasStoredCodexDirectory: Bool {
-        userDefaults.data(forKey: Self.bookmarkKey) != nil
     }
 
     func startServer() async {
@@ -143,13 +134,11 @@ final class MCPSettingsController {
         isBusy = true
         defer { isBusy = false }
         do {
-            if !hasStoredCodexDirectory {
-                guard chooseCodexConfigurationDirectory() else { return }
-            }
             let configuration = try await currentConfiguration()
-            let receipt = try withCodexDirectory { directory in
-                try installer.installOrUpdate(in: directory, configuration: configuration)
-            }
+            let receipt = try installer.installOrUpdate(
+                in: codexConfigurationDirectory,
+                configuration: configuration
+            )
             needsFixedPortMigration = false
             userDefaults.removeObject(forKey: Self.legacyPortKey)
             installationState = .installed
@@ -176,13 +165,7 @@ final class MCPSettingsController {
         isBusy = true
         defer { isBusy = false }
         do {
-            guard hasStoredCodexDirectory else {
-                installationState = .notConfigured
-                return
-            }
-            let receipt = try withCodexDirectory { directory in
-                try installer.remove(from: directory)
-            }
+            let receipt = try installer.remove(from: codexConfigurationDirectory)
             needsFixedPortMigration = false
             userDefaults.removeObject(forKey: Self.legacyPortKey)
             installationState = .notConfigured
@@ -192,14 +175,6 @@ final class MCPSettingsController {
         } catch {
             installationState = .needsAttention
             notice = safeDescription(for: error)
-        }
-    }
-
-    func chooseDifferentCodexFolder() {
-        guard !isBusy else { return }
-        if chooseCodexConfigurationDirectory() {
-            refreshInstallationState()
-            notice = "The Codex configuration folder was updated."
         }
     }
 
@@ -222,14 +197,10 @@ final class MCPSettingsController {
     }
 
     func refreshInstallationState() {
-        guard hasStoredCodexDirectory else {
-            installationState = .notConfigured
-            return
-        }
         do {
-            let detectedState: CodexMCPInstallationState = try withCodexDirectory { directory in
-                try installer.isInstalled(in: directory) ? .installed : .notConfigured
-            }
+            let detectedState: CodexMCPInstallationState = try installer.isInstalled(
+                in: codexConfigurationDirectory
+            ) ? .installed : .notConfigured
             installationState = needsFixedPortMigration && detectedState == .installed
                 ? .needsAttention
                 : detectedState
@@ -262,10 +233,11 @@ final class MCPSettingsController {
             try await tokenStore.save(newToken)
             bearerToken = newToken
 
-            if installationState == .installed, hasStoredCodexDirectory {
-                _ = try withCodexDirectory { directory in
-                    try installer.installOrUpdate(in: directory, configuration: newConfiguration)
-                }
+            if installationState == .installed {
+                _ = try installer.installOrUpdate(
+                    in: codexConfigurationDirectory,
+                    configuration: newConfiguration
+                )
                 updatedCodex = true
             }
 
@@ -286,9 +258,10 @@ final class MCPSettingsController {
             bearerToken = oldToken
             if updatedCodex {
                 do {
-                    _ = try withCodexDirectory { directory in
-                        try installer.installOrUpdate(in: directory, configuration: oldConfiguration)
-                    }
+                    _ = try installer.installOrUpdate(
+                        in: codexConfigurationDirectory,
+                        configuration: oldConfiguration
+                    )
                 } catch {
                     rollbackFailed = true
                 }
@@ -338,59 +311,9 @@ final class MCPSettingsController {
         return token
     }
 
-    private func chooseCodexConfigurationDirectory() -> Bool {
-        let panel = NSOpenPanel()
-        panel.title = "Choose the Codex Configuration Folder"
-        panel.message = "Foundation Evals will manage only its marked block in config.toml."
-        panel.prompt = "Choose Folder"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        let suggested = FileManager.default.homeDirectoryForCurrentUser
+    private var codexConfigurationDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
             .appending(path: ".codex", directoryHint: .isDirectory)
-        if FileManager.default.fileExists(atPath: suggested.path) {
-            panel.directoryURL = suggested
-        } else {
-            panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
-        }
-        guard panel.runModal() == .OK, let directory = panel.url else { return false }
-        do {
-            let bookmark = try directory.bookmarkData(
-                options: [.withSecurityScope],
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-            userDefaults.set(bookmark, forKey: Self.bookmarkKey)
-            return true
-        } catch {
-            notice = "The Codex folder permission could not be saved."
-            return false
-        }
-    }
-
-    private func withCodexDirectory<T>(_ action: (URL) throws -> T) throws -> T {
-        guard let bookmark = userDefaults.data(forKey: Self.bookmarkKey) else {
-            throw MCPSettingsError.noConfigurationDirectory
-        }
-        var isStale = false
-        let directory = try URL(
-            resolvingBookmarkData: bookmark,
-            options: [.withSecurityScope, .withoutUI],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        )
-        let didStart = directory.startAccessingSecurityScopedResource()
-        guard didStart else { throw MCPSettingsError.configurationPermissionUnavailable }
-        defer { directory.stopAccessingSecurityScopedResource() }
-        if isStale {
-            let refreshed = try directory.bookmarkData(
-                options: [.withSecurityScope],
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-            userDefaults.set(refreshed, forKey: Self.bookmarkKey)
-        }
-        return try action(directory)
     }
 
     private func copyToPasteboard(_ value: String) {
