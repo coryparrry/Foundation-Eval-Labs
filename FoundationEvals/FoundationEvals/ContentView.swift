@@ -78,13 +78,6 @@ private struct RunHistorySidebar: View {
                 .tag(SidebarSelection.suite)
             }
 
-            Section("Connector") {
-                SettingsLink {
-                    Label("MCP Connector", systemImage: "network")
-                }
-                .accessibilityIdentifier("Open MCP Connector")
-            }
-
             Section("Run History") {
                 if visibleRuns.isEmpty {
                     EmptyRunHistoryRow(isSearching: !searchText.isEmpty)
@@ -104,8 +97,24 @@ private struct RunHistorySidebar: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Foundation Evals")
-        .navigationSplitViewColumnWidth(min: 220, ideal: 270, max: 340)
+        .frame(minWidth: 240)
+        .navigationSplitViewColumnWidth(min: 240, ideal: 270, max: 340)
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search runs")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            SettingsLink {
+                Label("MCP Connector", systemImage: "network")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("Open MCP Connector")
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.bar)
+            .overlay(alignment: .top) {
+                Divider()
+            }
+        }
         .confirmationDialog(
             "Delete this run?",
             isPresented: $isConfirmingDeletion,
