@@ -20,6 +20,12 @@ That creates `dist/Foundation Evals.app`. Quit the app before rebuilding; the sc
 
 The app itself uses the system `FoundationModels` framework. It does not link the Xcode-only `Evaluations` developer framework, so a built app has no evaluation-runtime dependency on Xcode.
 
+## Agent control with MCP
+
+Open the app's **Settings**, choose **Install in Codex**, authorize your Codex configuration folder (normally `~/.codex`), then restart Codex. Keep Foundation Evals running while an agent uses the connector.
+
+The authenticated loopback endpoint supports MCP `2025-11-25` and `2026-07-28`. Agents can replace the ordered suite, upload and remove bounded references, start/poll/cancel runs, list or delete saved runs, and read attachment or canonical run resources. The port defaults to `17873`; a conflict stops the connector and is shown in Settings instead of changing the installed URL.
+
 ## What it does
 
 - Gives every case a fresh `LanguageModelSession` with shared instructions.
