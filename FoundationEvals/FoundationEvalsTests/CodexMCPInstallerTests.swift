@@ -15,28 +15,29 @@ struct CodexMCPInstallerTests {
         shell_tool = true
         """ + "\n"
         let first = try CodexMCPInstaller.installing(
-            configuration: CodexMCPConfiguration(bearerToken: token),
+            configuration: CodexMCPConfiguration(port: 19_001, bearerToken: token),
             into: original
         )
 
         #expect(first.hasPrefix(original))
         #expect(first.components(separatedBy: CodexMCPInstaller.beginMarker).count == 2)
-        #expect(first.contains("http://127.0.0.1:17873/mcp"))
+        #expect(first.contains("http://127.0.0.1:19001/mcp"))
         #expect(first.contains("Bearer \(token)"))
 
         let identical = try CodexMCPInstaller.installing(
-            configuration: CodexMCPConfiguration(bearerToken: token),
+            configuration: CodexMCPConfiguration(port: 19_001, bearerToken: token),
             into: first
         )
         #expect(identical == first)
 
         let updated = try CodexMCPInstaller.installing(
-            configuration: CodexMCPConfiguration(port: 19_001, bearerToken: replacementToken),
+            configuration: CodexMCPConfiguration(bearerToken: replacementToken),
             into: first
         )
         #expect(updated.hasPrefix(original))
         #expect(!updated.contains(token))
-        #expect(updated.contains("http://127.0.0.1:19001/mcp"))
+        #expect(updated.contains("http://127.0.0.1:17873/mcp"))
+        #expect(!updated.contains("http://127.0.0.1:19001/mcp"))
 
         let removed = try CodexMCPInstaller.removingManagedBlock(from: updated)
         #expect(removed == original)

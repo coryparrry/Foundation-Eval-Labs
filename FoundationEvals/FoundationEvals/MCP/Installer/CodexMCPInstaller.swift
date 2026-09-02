@@ -59,7 +59,7 @@ enum CodexMCPInstallerError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidPort:
-            "Choose a port from 1024 through 65535."
+            "The MCP server port is invalid."
         case .invalidToken:
             "The MCP credential is invalid. Rotate it and try again."
         case .invalidDirectory:

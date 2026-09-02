@@ -24,6 +24,8 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertTrue(connector.waitForExistence(timeout: 2))
         connector.click()
         XCTAssertTrue(app.buttons["Codex install or update"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.textFields["Port"].exists)
+        XCTAssertFalse(app.buttons["Start Server"].exists)
         app.typeKey("w", modifierFlags: .command)
 
         app.radioButtons["Instructions"].click()

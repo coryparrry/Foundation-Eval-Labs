@@ -2,14 +2,8 @@ import SwiftUI
 
 struct MCPSettingsView: View {
     @Bindable var controller: MCPSettingsController
-    @State private var portText: String
     @State private var isConfirmingRemoval = false
     @State private var isConfirmingRotation = false
-
-    init(controller: MCPSettingsController) {
-        self.controller = controller
-        _portText = State(initialValue: String(controller.port))
-    }
 
     var body: some View {
         Form {
@@ -19,32 +13,9 @@ struct MCPSettingsView: View {
                         .foregroundStyle(statusColor)
                 }
 
-                LabeledContent("Endpoint") {
-                    HStack(spacing: 8) {
-                        Text(controller.endpoint.absoluteString)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                        Button("Copy", systemImage: "doc.on.doc") {
-                            controller.copyEndpoint()
-                        }
-                        .labelStyle(.iconOnly)
-                        .help("Copy endpoint")
-                    }
-                }
-
-                LabeledContent("Port") {
-                    HStack(spacing: 8) {
-                        TextField("Port", text: $portText)
-                            .frame(width: 84)
-                            .multilineTextAlignment(.trailing)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit(applyPort)
-                        Button(controller.serverState == .running ? "Apply and Restart" : "Apply") {
-                            applyPort()
-                        }
-                        .disabled(controller.isBusy || parsedPort == nil || parsedPort == controller.port)
-                    }
-                }
+                Text("Foundation Evals uses one fixed local address and starts the connector automatically after Codex setup.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
 
                 if let lastConnection = controller.lastConnection {
                     LabeledContent("Last connection") {
@@ -52,21 +23,9 @@ struct MCPSettingsView: View {
                     }
                 }
 
-                HStack {
-                    if controller.serverState == .running {
-                        Button("Stop Server") {
-                            Task { await controller.stopServer() }
-                        }
-                    } else {
-                        Button("Start Server") {
-                            Task { await controller.startServer() }
-                        }
-                    }
-                    Spacer()
+                if controller.isBusy {
                     ProgressView()
                         .controlSize(.small)
-                        .opacity(controller.isBusy ? 1 : 0)
-                        .accessibilityHidden(!controller.isBusy)
                 }
             }
 
@@ -76,16 +35,21 @@ struct MCPSettingsView: View {
                         .foregroundStyle(controller.installationState == .needsAttention ? .orange : .secondary)
                 }
 
-                Text("Installation updates only the marked Foundation Evals block in Codex config.toml. The first install asks you to choose the Codex configuration folder.")
+                Text("Choose Connect once. Foundation Evals updates Codex, starts the local connector, and starts it automatically whenever the app is open.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                HStack {
-                    Button(controller.installationState == .installed ? "Update Codex" : "Install in Codex") {
-                        Task { await controller.installOrUpdateCodex() }
+                Button(codexActionTitle) {
+                    Task { await controller.installOrUpdateCodex() }
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("Codex install or update")
+                .disabled(controller.isBusy)
+
+                DisclosureGroup("Advanced") {
+                    Button("Copy Endpoint") {
+                        controller.copyEndpoint()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("Codex install or update")
 
                     Button("Copy Manual Configuration") {
                         Task { await controller.copyManualConfiguration() }
@@ -95,7 +59,9 @@ struct MCPSettingsView: View {
                         controller.chooseDifferentCodexFolder()
                     }
 
-                    Spacer()
+                    Button("Rotate Credential…") {
+                        isConfirmingRotation = true
+                    }
 
                     Button("Remove from Codex", role: .destructive) {
                         isConfirmingRemoval = true
@@ -104,24 +70,10 @@ struct MCPSettingsView: View {
                 }
                 .disabled(controller.isBusy)
             }
-
-            Section("Credential") {
-                Text("A local bearer credential protects the loopback server. Codex stores a copy in its configuration, so treat copied configuration as a password.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-
-                Button("Rotate Credential…") {
-                    isConfirmingRotation = true
-                }
-                .disabled(controller.isBusy)
-            }
         }
         .formStyle(.grouped)
-        .frame(width: 620, height: 540)
+        .frame(width: 620, height: 440)
         .navigationTitle("MCP Connector")
-        .onChange(of: controller.port) { _, newPort in
-            portText = String(newPort)
-        }
         .confirmationDialog(
             "Remove Foundation Evals from Codex?",
             isPresented: $isConfirmingRemoval,
@@ -159,9 +111,13 @@ struct MCPSettingsView: View {
         }
     }
 
-    private var parsedPort: Int? {
-        guard let port = Int(portText), (1_024...65_535).contains(port) else { return nil }
-        return port
+    private var codexActionTitle: String {
+        switch controller.installationState {
+        case .notConfigured: "Connect to Codex"
+        case .installed:
+            controller.serverState == .running ? "Update Codex" : "Reconnect to Codex"
+        case .needsAttention: "Repair Connection"
+        }
     }
 
     private var statusSymbol: String {
@@ -180,11 +136,6 @@ struct MCPSettingsView: View {
         case .stopped: .secondary
         case .failed: .orange
         }
-    }
-
-    private func applyPort() {
-        guard let parsedPort else { return }
-        Task { await controller.applyPort(parsedPort) }
     }
 }
 

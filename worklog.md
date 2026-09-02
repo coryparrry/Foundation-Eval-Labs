@@ -1,7 +1,7 @@
 # Worklog
 
 - Goal: add a Swift-native MCP connector so agents can configure suites, upload context, run/cancel evals, and read durable results without UI control.
-- Current: restoring a readable sidebar width and presenting the MCP connector as a bottom settings utility instead of primary navigation; final external Codex acceptance remains.
+- Current: reducing MCP setup to a fixed local endpoint and one primary Codex action; final external Codex acceptance remains.
 - Steering: never launch the installed and DerivedData builds together; fix the broken Suite Editor at its source, not with window-size workarounds.
 - Contract: loopback HTTP on fixed port 17873; MCP 2026-07-28 plus Codex-compatible 2025-11-25; bearer auth; one active run; on-device model only.
 - Integrity: durable writes before success, revision/resource-based idempotency, bounded requests/workloads, no caller file paths, cooperative cancellation, interrupted-run recovery.
@@ -11,9 +11,10 @@
 - Signing: this checkout produces an ad-hoc development build. A stable distribution signature is required before treating Keychain identity across app rebuilds as release evidence.
 - UI repair: commit `d501878` introduced `VStack { header; ScrollView { page } }`, causing a `1180×780` window to host a vertically centred `1180×1830` split view. Restoring one outer `ScrollView` preserves the tabbed editor and now produces matching `1180×780` window/split-view geometry with the MCP runtime connected.
 - Launch diagnosis: LLDB reported `stop reason = breakpoint 1.1`; the breakpoint resolved to five async locations at the `startServer()` catch line even though `serverState` was `running` and the error payload was nil. Removing the persisted breakpoint restored normal execution; Xcode then reported the process running with no breakpoints set.
-- Settings discovery: the complete MCP connector form remains in the macOS Settings scene. A native bottom-sidebar `SettingsLink` opens the existing Install in Codex workflow without competing with primary navigation.
-- Startup UX: MCP autostart runs only after the managed connector is installed; the keyed task starts it immediately when first-time installation succeeds, without blocking initial launch behind a Keychain dialog.
+- Settings discovery: the MCP connector form remains in the macOS Settings scene. A native bottom-sidebar `SettingsLink` opens the one-action Connect to Codex workflow without competing with primary navigation.
+- Startup UX: existing installations autostart from the app scene; Connect to Codex starts the server directly after committing configuration, avoiding the installation-state task race without blocking initial launch behind Keychain.
 - Sidebar UX: the split view now has a real 250-point content floor and 280-point preferred width; MCP setup lives in a separated bottom utility row rather than a competing navigation section.
+- Connector UX: port selection and its persisted reconfiguration path are removed; the app always uses `127.0.0.1:17873`, starts automatically after installation, and keeps manual recovery controls under Advanced.
 - Acceptance fixes: existing Codex config modes are preserved; modern `ping` and undeclared tool arguments are rejected; editable UI drafts cannot replace the durable suite until validated and written; MCP state always rereads that one durable suite; active result bodies are checkpointed for MCP polling and crash recovery. Final build-for-testing passes; signed unit lane is 51 passed/1 intentional socket skip, and the unsigned real-socket protocol lane is 17/17.
 
 ## Previous completed work
