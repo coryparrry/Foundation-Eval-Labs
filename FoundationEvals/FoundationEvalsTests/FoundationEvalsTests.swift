@@ -357,3 +357,175 @@ struct ModelConfigurationTests {
         )
     }
 }
+
+struct EvaluationStorePersistenceTests {
+    @MainActor
+    @Test func suiteReplacementIsAtomicPreservesAttachmentsAndReplaysBySemanticRevision() throws {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.suite.scoringMode = .review
+        store.suite.attachments = [Self.textAttachment(id: UUID(), name: "Reference.txt", text: "evidence")]
+        #expect(store.saveSuite())
+        let originalRevision = store.suiteRevision
+
+        var replacement = store.suite
+        replacement.id = UUID()
+        replacement.name = "Agent suite"
+        replacement.attachments = []
+        let committedRevision = try store.replaceSuite(
+            replacement,
+            expectedRevision: originalRevision,
+            confirmDeletes: false
+        )
+
+        #expect(store.suite.id != replacement.id)
+        #expect(store.suite.name == "Agent suite")
+        #expect(store.suite.attachments.count == 1)
+        #expect(store.suite.attachments[0].name == "Reference.txt")
+        #expect(committedRevision != originalRevision)
+
+        let replayedRevision = try store.replaceSuite(
+            replacement,
+            expectedRevision: originalRevision,
+            confirmDeletes: false
+        )
+        #expect(replayedRevision == committedRevision)
+        #expect(EvaluationStore(supportDirectory: directory).suite == store.suite)
+    }
+
+    @MainActor
+    @Test func attachmentUploadIsBoundedDurableAndIdempotent() async throws {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.suite.scoringMode = .review
+        #expect(store.saveSuite())
+        let expectedRevision = store.suiteRevision
+        let attachmentID = UUID()
+        let data = Data("hello".utf8)
+
+        let committed = try await store.importAttachment(
+            id: attachmentID,
+            name: "Reference.txt",
+            mediaType: "text/plain",
+            data: data,
+            expectedRevision: expectedRevision
+        )
+        let replayed = try await store.importAttachment(
+            id: attachmentID,
+            name: "Reference.txt",
+            mediaType: "text/plain",
+            data: data,
+            expectedRevision: expectedRevision
+        )
+
+        #expect(!committed.duplicate)
+        #expect(replayed.duplicate)
+        #expect(committed.revision == replayed.revision)
+        #expect(store.suite.attachments.count == 1)
+        #expect(try store.attachmentData(id: attachmentID).data == data)
+        #expect(EvaluationStore(supportDirectory: directory).suite.attachments.count == 1)
+
+        #expect(try store.removeAttachment(id: attachmentID, expectedRevision: committed.revision))
+        #expect(try !store.removeAttachment(id: attachmentID, expectedRevision: committed.revision))
+    }
+
+    @MainActor
+    @Test func validationEnforcesWorkloadAndIdentityBounds() {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+
+        var suite = store.suite
+        suite.scoringMode = .review
+        suite.repetitions = 6
+        #expect(store.validationIssue(for: suite, includeModelReadiness: false) == "Choose between one and five repetitions.")
+
+        suite.repetitions = 2
+        let repeatedCase = suite.cases[0]
+        suite.cases = Array(repeating: repeatedCase, count: 51)
+        #expect(store.validationIssue(for: suite, includeModelReadiness: false) == "Keep the run to 100 planned samples or fewer.")
+
+        suite.repetitions = 1
+        suite.cases = [repeatedCase, repeatedCase]
+        #expect(store.validationIssue(for: suite, includeModelReadiness: false) == "Every case needs a unique ID.")
+    }
+
+    @MainActor
+    @Test func suiteReplacementRequiresDeletionConfirmationAndCurrentRevision() throws {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.suite.scoringMode = .review
+        store.addCase()
+        store.suite.cases[1].prompt = "Second prompt"
+        #expect(store.saveSuite())
+        let revision = store.suiteRevision
+        var replacement = store.suite
+        replacement.cases.removeLast()
+
+        #expect(throws: EvaluationStoreError.self) {
+            _ = try store.replaceSuite(replacement, expectedRevision: revision, confirmDeletes: false)
+        }
+        #expect(throws: EvaluationStoreError.self) {
+            _ = try store.replaceSuite(replacement, expectedRevision: "stale", confirmDeletes: true)
+        }
+        _ = try store.replaceSuite(replacement, expectedRevision: revision, confirmDeletes: true)
+        #expect(store.suite.cases.count == 1)
+    }
+
+    @MainActor
+    @Test func unfinishedActiveRunRecoversAsInterruptedHistory() throws {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = EvaluationSuite()
+        let summary = EvaluationActiveRun(
+            id: UUID(),
+            suiteRevision: "revision",
+            startedAt: Date(timeIntervalSince1970: 10),
+            completedSamples: 0,
+            totalSamples: 1,
+            cancellationRequested: false
+        )
+        let fixture = ActiveRunFixture(summary: summary, suite: suite)
+        try CanonicalJSON.data(for: fixture).write(
+            to: directory.appending(path: "active-run.json"),
+            options: .atomic
+        )
+
+        let store = EvaluationStore(supportDirectory: directory)
+
+        #expect(store.runs.first?.id == summary.id)
+        #expect(store.runs.first?.terminationReason == "interrupted")
+        #expect(store.runs.first?.plannedCases == suite.cases)
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "active-run.json").path))
+        #expect(FileManager.default.fileExists(
+            atPath: directory.appending(path: "Runs/\(summary.id.uuidString).json").path
+        ))
+    }
+
+    private struct ActiveRunFixture: Codable {
+        var summary: EvaluationActiveRun
+        var suite: EvaluationSuite
+    }
+
+    private static func temporaryDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "FoundationEvalsTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func textAttachment(id: UUID, name: String, text: String) -> EvaluationAttachment {
+        EvaluationAttachment(
+            id: id,
+            name: name,
+            kind: .text,
+            text: text,
+            storedFilename: nil,
+            byteCount: text.utf8.count,
+            sha256: "fixture"
+        )
+    }
+}

@@ -71,6 +71,9 @@ actor EvaluationRunner {
     )
 
     func run(
+        id: UUID,
+        suiteRevision: String,
+        startedAt: Date,
         suite: EvaluationSuite,
         images: [ImageEvaluationInput],
         progress: @Sendable (Int, Int) async -> Void
@@ -79,6 +82,9 @@ actor EvaluationRunner {
         case .onDevice:
             let model = SystemLanguageModel.default
             return await run(
+                id: id,
+                suiteRevision: suiteRevision,
+                startedAt: startedAt,
                 suite: suite,
                 images: images,
                 model: model,
@@ -95,6 +101,9 @@ actor EvaluationRunner {
             do {
                 let contextSize = try await model.contextSize
                 return await run(
+                    id: id,
+                    suiteRevision: suiteRevision,
+                    startedAt: startedAt,
                     suite: suite,
                     images: images,
                     model: model,
@@ -108,6 +117,9 @@ actor EvaluationRunner {
             } catch {
                 let traceError = Self.traceError(error)
                 return await run(
+                    id: id,
+                    suiteRevision: suiteRevision,
+                    startedAt: startedAt,
                     suite: suite,
                     images: images,
                     model: model,
@@ -123,6 +135,9 @@ actor EvaluationRunner {
     }
 
     private func run<Model: LanguageModel>(
+        id runID: UUID,
+        suiteRevision: String,
+        startedAt: Date,
         suite: EvaluationSuite,
         images: [ImageEvaluationInput],
         model: Model,
@@ -131,8 +146,6 @@ actor EvaluationRunner {
         admissionError: (category: String, message: String)?,
         progress: @Sendable (Int, Int) async -> Void
     ) async -> EvaluationRun {
-        let runID = UUID()
-        let startedAt = Date()
         let total = suite.cases.count * suite.repetitions
         var completed = 0
         var results: [EvaluationSampleResult] = []
@@ -220,6 +233,8 @@ actor EvaluationRunner {
             judgePromptVersion: suite.scoringMode == .modelJudge ? Self.judgePromptVersion : nil,
             judgePassingScore: suite.scoringMode == .modelJudge ? EvaluationSuite.judgePassingScore : nil,
             plannedSampleCount: total,
+            suiteRevision: suiteRevision,
+            plannedCases: suite.cases,
             startedAt: startedAt,
             completedAt: Date(),
             cancelled: cancelled,

@@ -75,6 +75,13 @@ struct EvaluationAttachment: Identifiable, Codable, Hashable, Sendable {
     var sha256: String
 }
 
+struct EvaluationAttachmentImportResult: Codable, Sendable {
+    var attachment: EvaluationAttachment
+    var truncated: Bool
+    var duplicate: Bool
+    var revision: String
+}
+
 enum EvaluationModelProvider: String, Codable, CaseIterable, Identifiable, Sendable {
     case onDevice
     case privateCloudCompute
@@ -331,6 +338,8 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var judgePromptVersion: String?
     var judgePassingScore: Int?
     var plannedSampleCount: Int?
+    var suiteRevision: String? = nil
+    var plannedCases: [EvaluationCase]? = nil
     var startedAt: Date
     var completedAt: Date
     var cancelled: Bool
@@ -359,6 +368,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
         case "serviceUnavailable": "Service unavailable"
         case "modelUnavailable": "Model unavailable"
         case "modelAssetsUnavailable": "Model assets unavailable"
+        case "interrupted": "Interrupted by app exit"
         case .some(let reason): reason
         case nil: nil
         }
@@ -384,6 +394,34 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var totalTokens: Int {
         results.reduce(0) { $0 + $1.usage.totalTokens + ($1.judgeUsage?.totalTokens ?? 0) }
     }
+}
+
+enum EvaluationRunPhase: String, Codable, Sendable {
+    case running
+    case cancellationRequested
+    case completed
+    case cancelled
+    case interrupted
+    case stopped
+}
+
+struct EvaluationActiveRun: Codable, Equatable, Sendable {
+    var id: UUID
+    var suiteRevision: String
+    var startedAt: Date
+    var completedSamples: Int
+    var totalSamples: Int
+    var cancellationRequested: Bool
+}
+
+struct EvaluationRunOperation: Codable, Sendable {
+    var id: UUID
+    var suiteRevision: String?
+    var phase: EvaluationRunPhase
+    var completedSamples: Int
+    var totalSamples: Int
+    var startedAt: Date
+    var completedAt: Date?
 }
 
 enum SidebarSelection: Hashable {

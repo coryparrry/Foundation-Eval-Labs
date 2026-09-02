@@ -53,8 +53,12 @@ struct RunDetailView: View {
         .navigationTitle("Run Results")
         .toolbar {
             Button("Export Run as JSON", systemImage: "square.and.arrow.up") {
-                exportDocument = JSONDocument(run: run)
-                isExporting = true
+                do {
+                    exportDocument = try JSONDocument(run: run)
+                    isExporting = true
+                } catch {
+                    exportError = error.localizedDescription
+                }
             }
         }
         .fileExporter(

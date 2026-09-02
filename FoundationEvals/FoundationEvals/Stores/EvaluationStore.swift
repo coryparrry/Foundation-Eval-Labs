@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import FoundationModels
+import ImageIO
 import Observation
 import PDFKit
 import Security
@@ -9,6 +10,17 @@ import UniformTypeIdentifiers
 @MainActor
 @Observable
 final class EvaluationStore {
+    nonisolated static let maximumCases = 100
+    nonisolated static let maximumPlannedSamples = 100
+    nonisolated static let maximumAttachments = 20
+    nonisolated static let maximumImages = 4
+    nonisolated static let maximumFieldCharacters = 32_000
+    nonisolated static let maximumCombinedSuiteCharacters = 256_000
+    nonisolated static let maximumRubricRequirementCharacters = 4_000
+    nonisolated static let maximumExtractedTextCharacters = 16_000
+    nonisolated static let maximumTextFileBytes = 5_000_000
+    nonisolated static let maximumImageBytes = 10_000_000
+
     var suite: EvaluationSuite
     var runs: [EvaluationRun]
     var selection = SidebarSelection.suite
@@ -18,13 +30,16 @@ final class EvaluationStore {
     var notice: String?
     var isImportingFiles = false
     var isProcessingFiles = false
+    private(set) var activeRun: EvaluationActiveRun?
 
     private let runner = EvaluationRunner()
     private let supportDirectory: URL
     private let attachmentsDirectory: URL
     private let runsDirectory: URL
+    private let activeRunURL: URL
     private var runTask: Task<Void, Never>?
     private var suiteSaveTask: Task<Void, Never>?
+    private var activeRunSuite: EvaluationSuite?
 
     init(supportDirectory customSupportDirectory: URL? = nil) {
         let base = customSupportDirectory
@@ -33,6 +48,7 @@ final class EvaluationStore {
         supportDirectory = base
         attachmentsDirectory = base.appending(path: "Attachments", directoryHint: .isDirectory)
         runsDirectory = base.appending(path: "Runs", directoryHint: .isDirectory)
+        activeRunURL = base.appending(path: "active-run.json")
 
         var startupNotice: String?
         do {
@@ -58,12 +74,23 @@ final class EvaluationStore {
             initialSuite.modelConfiguration.provider = .onDevice
             initialSuite.modelConfiguration.reasoningLevel = .automatic
         }
-        let loadedRuns = Self.loadRuns(from: runsDirectory)
-        let initialNotice = [startupNotice, loadedSuite.notice, loadedRuns.notice]
+        var loadedRuns = Self.loadRuns(from: runsDirectory)
+        let recovery = Self.recoverInterruptedRun(
+            from: activeRunURL,
+            runsDirectory: runsDirectory,
+            existingRuns: loadedRuns.runs
+        )
+        if let recoveredRun = recovery.run {
+            loadedRuns.runs.append(recoveredRun)
+            loadedRuns.runs.sort { $0.startedAt > $1.startedAt }
+        }
+        let initialNotice = [startupNotice, loadedSuite.notice, loadedRuns.notice, recovery.notice]
             .compactMap { $0 }
             .joined(separator: "\n")
         suite = initialSuite
         runs = loadedRuns.runs
+        activeRun = nil
+        activeRunSuite = nil
         notice = initialNotice.isEmpty ? nil : initialNotice
         if migratedRubric || migratedProvider { saveSuite() }
     }
@@ -139,7 +166,15 @@ final class EvaluationStore {
     }
 
     var runBlocker: String? {
-        validationError()
+        validationIssue(for: suite)
+    }
+
+    var suiteRevision: String {
+        (try? currentSuiteRevision()) ?? ""
+    }
+
+    func currentSuiteRevision() throws -> String {
+        try Self.revision(for: suite)
     }
 
     func addCase() {
@@ -170,21 +205,54 @@ final class EvaluationStore {
         suite.cases.removeAll { $0.id == id }
     }
 
+    func replaceSuite(
+        _ replacement: EvaluationSuite,
+        expectedRevision: String,
+        confirmDeletes: Bool
+    ) throws -> String {
+        var candidate = replacement
+        candidate.id = suite.id
+        candidate.attachments = suite.attachments
+        let candidateRevision = try Self.revision(for: candidate)
+        let currentRevision = try currentSuiteRevision()
+        if candidateRevision == currentRevision { return candidateRevision }
+
+        try requireIdle()
+        try requireRevision(expectedRevision)
+        let removedCases = Set(suite.cases.map(\.id)).subtracting(replacement.cases.map(\.id))
+        guard removedCases.isEmpty || confirmDeletes else {
+            throw EvaluationStoreError.deletionConfirmationRequired
+        }
+        if let issue = validationIssue(for: candidate, includeModelReadiness: false) {
+            throw EvaluationStoreError.invalidSuite(issue)
+        }
+        try commitSuite(candidate)
+        return try currentSuiteRevision()
+    }
+
     func deleteRun(id: UUID) {
-        guard runs.contains(where: { $0.id == id }) else { return }
+        do {
+            _ = try deleteRunDurably(id: id)
+        } catch {
+            notice = "Could not delete the saved run: \(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    func deleteRunDurably(id: UUID) throws -> Bool {
+        if activeRun?.id == id { throw EvaluationStoreError.runBusy }
+        guard runs.contains(where: { $0.id == id }) else { return false }
         do {
             try FileManager.default.removeItem(at: runsDirectory.appending(path: "\(id.uuidString).json"))
         } catch CocoaError.fileNoSuchFile {
-            // Remove the history entry even if its backing file is already gone.
+            // Missing backing data is already the requested durable state.
         } catch {
-            notice = "Could not delete the saved run: \(error.localizedDescription)"
-            return
+            throw EvaluationStoreError.persistence(error.localizedDescription)
         }
 
         runs.removeAll { $0.id == id }
-        if selection == .run(id) {
-            selection = .suite
-        }
+        if selection == .run(id) { selection = .suite }
+        return true
     }
 
     func importFiles(_ urls: [URL]) {
@@ -193,47 +261,111 @@ final class EvaluationStore {
             return
         }
         isProcessingFiles = true
-        let destination = attachmentsDirectory
-        let imageSlots = 4 - suite.attachments.count(where: { $0.kind == .image })
+        let expectedRevision = suiteRevision
 
         Task {
+            defer { isProcessingFiles = false }
             do {
-                let imported = try await Task.detached(priority: .userInitiated) {
-                    try Self.importFiles(urls, to: destination, imageSlots: imageSlots)
+                let inputs = try await Task.detached(priority: .userInitiated) {
+                    try urls.map { url -> AttachmentInput in
+                        let accessed = url.startAccessingSecurityScopedResource()
+                        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                        let type = UTType(filenameExtension: url.pathExtension)
+                        let isImage = type?.conforms(to: .image) == true
+                        guard let byteCount = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+                            throw ImportError.unknownFileSize
+                        }
+                        guard byteCount <= (isImage ? Self.maximumImageBytes : Self.maximumTextFileBytes) else {
+                            throw isImage ? ImportError.imageTooLarge : ImportError.fileTooLarge
+                        }
+                        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                        return AttachmentInput(
+                            id: UUID(),
+                            name: url.lastPathComponent,
+                            mediaType: type?.preferredMIMEType ?? "application/octet-stream",
+                            data: data
+                        )
+                    }
                 }.value
-                suite.attachments.append(contentsOf: imported)
-                saveSuite()
+                try await importAttachments(inputs, expectedRevision: expectedRevision)
             } catch {
                 notice = "Could not import files: \(error.localizedDescription)"
             }
-            isProcessingFiles = false
         }
     }
 
-    func removeAttachment(id: UUID) {
-        guard !isRunning else {
-            notice = "Cancel or finish the current run before removing files."
-            return
+    func importAttachment(
+        id: UUID,
+        name: String,
+        mediaType: String,
+        data: Data,
+        expectedRevision: String
+    ) async throws -> EvaluationAttachmentImportResult {
+        if let existing = suite.attachments.first(where: { $0.id == id }) {
+            let digest = Self.sha256(data)
+            guard existing.sha256 == digest, existing.name == name else {
+                throw EvaluationStoreError.resourceConflict("Attachment ID already exists with different content.")
+            }
+            return EvaluationAttachmentImportResult(
+                attachment: existing,
+                truncated: existing.text?.hasSuffix("\n[File truncated during import.]") == true,
+                duplicate: true,
+                revision: try currentSuiteRevision()
+            )
         }
-        guard let attachment = suite.attachments.first(where: { $0.id == id }) else { return }
+        try requireIdle()
+        try requireRevision(expectedRevision)
+
+        let prepared = try await Task.detached(priority: .userInitiated) {
+            try Self.prepareAttachment(id: id, name: name, mediaType: mediaType, data: data)
+        }.value
+
+        try requireIdle()
+        try requireRevision(expectedRevision)
+        return try commitPreparedAttachments([prepared]).first!
+    }
+
+    func removeAttachment(id: UUID) {
+        do {
+            _ = try removeAttachment(id: id, expectedRevision: suiteRevision)
+        } catch {
+            notice = "Could not remove the imported file: \(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    func removeAttachment(id: UUID, expectedRevision: String) throws -> Bool {
+        try requireIdle()
+        guard let attachment = suite.attachments.first(where: { $0.id == id }) else { return false }
+        try requireRevision(expectedRevision)
+
+        var candidate = suite
+        candidate.attachments.removeAll { $0.id == id }
+        try commitSuite(candidate)
+
         if let storedFilename = attachment.storedFilename {
             do {
                 try FileManager.default.removeItem(at: attachmentsDirectory.appending(path: storedFilename))
             } catch CocoaError.fileNoSuchFile {
-                // The suite entry still needs removing if its private copy is already gone.
+                // Missing content is already unreferenced.
             } catch {
-                notice = "Could not remove the imported image: \(error.localizedDescription)"
-                return
+                notice = "The attachment was removed, but its private file could not be cleaned up: \(error.localizedDescription)"
             }
         }
-        suite.attachments.removeAll { $0.id == id }
-        saveSuite()
+        return true
     }
 
-    func saveSuite() {
+    @discardableResult
+    func saveSuite() -> Bool {
         suiteSaveTask?.cancel()
         suiteSaveTask = nil
-        writeSuite()
+        do {
+            try commitSuite(suite)
+            return true
+        } catch {
+            notice = "Could not save the suite: \(error.localizedDescription)"
+            return false
+        }
     }
 
     func scheduleSuiteSave() {
@@ -242,92 +374,242 @@ final class EvaluationStore {
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, let self else { return }
             suiteSaveTask = nil
-            writeSuite()
-        }
-    }
-
-    private func writeSuite() {
-        do {
-            let data = try Self.encoder.encode(suite)
-            try data.write(to: supportDirectory.appending(path: "suite.json"), options: .atomic)
-        } catch {
-            notice = "Could not save the suite: \(error.localizedDescription)"
+            _ = saveSuite()
         }
     }
 
     func startRun() {
-        guard !isRunning else { return }
-        guard !isProcessingFiles else {
-            notice = "Wait for file import to finish before running the suite."
-            return
+        do {
+            _ = try startRun(id: UUID(), expectedRevision: suiteRevision)
+        } catch {
+            notice = error.localizedDescription
         }
-        guard let validationError = runBlocker else {
-            let suiteSnapshot = suite
-            let images = imageInputs(for: suiteSnapshot)
-            isRunning = true
-            completedSamples = 0
-            totalSamples = suiteSnapshot.cases.count * suiteSnapshot.repetitions
-            saveSuite()
-
-            runTask = Task { [weak self] in
-                guard let self else { return }
-                let run = await runner.run(suite: suiteSnapshot, images: images) { [weak self] completed, total in
-                    await self?.updateProgress(completed: completed, total: total)
-                }
-                finish(run)
-            }
-            return
-        }
-        notice = validationError
     }
 
     func cancelRun() {
-        runTask?.cancel()
+        guard let id = activeRun?.id else { return }
+        do {
+            _ = try cancelRun(id: id)
+        } catch {
+            notice = error.localizedDescription
+        }
     }
 
     func run(with id: UUID) -> EvaluationRun? {
         runs.first { $0.id == id }
     }
 
-    private func finish(_ run: EvaluationRun) {
-        isRunning = false
-        runTask = nil
-        runs.insert(run, at: 0)
-        selection = .run(run.id)
+    @discardableResult
+    func startRun(id: UUID, expectedRevision: String) throws -> EvaluationRunOperation {
+        if let existing = runStatus(id: id) {
+            guard existing.suiteRevision == expectedRevision else {
+                throw EvaluationStoreError.resourceConflict("Run ID already belongs to another suite revision.")
+            }
+            return existing
+        }
+        try requireIdle()
+        try requireRevision(expectedRevision)
+        guard let issue = validationIssue(for: suite) else {
+            let suiteSnapshot = suite
+            let startedAt = Date()
+            let total = suiteSnapshot.cases.count * suiteSnapshot.repetitions
+            let active = EvaluationActiveRun(
+                id: id,
+                suiteRevision: expectedRevision,
+                startedAt: startedAt,
+                completedSamples: 0,
+                totalSamples: total,
+                cancellationRequested: false
+            )
+            let record = ActiveRunRecord(summary: active, suite: suiteSnapshot)
 
+            try commitSuite(suiteSnapshot)
+            try persistActiveRun(record)
+            activeRun = active
+            activeRunSuite = suiteSnapshot
+            isRunning = true
+            completedSamples = 0
+            totalSamples = total
+            let images = imageInputs(for: suiteSnapshot)
+
+            runTask = Task { [weak self] in
+                guard let self else { return }
+                let run = await runner.run(
+                    id: id,
+                    suiteRevision: expectedRevision,
+                    startedAt: startedAt,
+                    suite: suiteSnapshot,
+                    images: images
+                ) { [weak self] completed, total in
+                    await self?.updateProgress(runID: id, completed: completed, total: total)
+                }
+                finish(run)
+            }
+            return operation(for: active)
+        }
+        throw EvaluationStoreError.invalidSuite(issue)
+    }
+
+    func runStatus(id: UUID) -> EvaluationRunOperation? {
+        if let activeRun, activeRun.id == id { return operation(for: activeRun) }
+        guard let run = run(with: id) else { return nil }
+        let phase: EvaluationRunPhase
+        if run.cancelled {
+            phase = .cancelled
+        } else if run.terminationReason == "interrupted" {
+            phase = .interrupted
+        } else if run.stoppedEarly {
+            phase = .stopped
+        } else {
+            phase = .completed
+        }
+        return EvaluationRunOperation(
+            id: run.id,
+            suiteRevision: run.suiteRevision,
+            phase: phase,
+            completedSamples: run.results.count,
+            totalSamples: run.plannedResultCount,
+            startedAt: run.startedAt,
+            completedAt: run.completedAt
+        )
+    }
+
+    @discardableResult
+    func cancelRun(id: UUID) throws -> EvaluationRunOperation {
+        if let finished = runStatus(id: id), finished.phase != .running, finished.phase != .cancellationRequested {
+            return finished
+        }
+        guard var active = activeRun, active.id == id else {
+            throw EvaluationStoreError.resourceNotFound("Run")
+        }
+        if !active.cancellationRequested {
+            active.cancellationRequested = true
+            guard let activeRunSuite else {
+                throw EvaluationStoreError.persistence("The active run snapshot is unavailable.")
+            }
+            try persistActiveRun(ActiveRunRecord(summary: active, suite: activeRunSuite))
+            activeRun = active
+            runTask?.cancel()
+        }
+        return operation(for: active)
+    }
+
+    func canonicalRunData(id: UUID) throws -> Data {
+        guard let run = run(with: id) else { throw EvaluationStoreError.resourceNotFound("Run") }
+        return try CanonicalJSON.data(for: run)
+    }
+
+    func attachmentData(id: UUID) throws -> (attachment: EvaluationAttachment, data: Data) {
+        guard let attachment = suite.attachments.first(where: { $0.id == id }) else {
+            throw EvaluationStoreError.resourceNotFound("Attachment")
+        }
+        if let text = attachment.text { return (attachment, Data(text.utf8)) }
+        guard let storedFilename = attachment.storedFilename else {
+            throw EvaluationStoreError.persistence("The attachment has no stored content.")
+        }
         do {
-            let data = try Self.encoder.encode(run)
-            try data.write(to: runsDirectory.appending(path: "\(run.id.uuidString).json"), options: .atomic)
+            return (attachment, try Data(contentsOf: attachmentsDirectory.appending(path: storedFilename)))
+        } catch {
+            throw EvaluationStoreError.persistence(error.localizedDescription)
+        }
+    }
+
+    private func finish(_ run: EvaluationRun) {
+        guard activeRun?.id == run.id else { return }
+        do {
+            try persistRun(run)
+            runs.removeAll { $0.id == run.id }
+            runs.insert(run, at: 0)
+            selection = .run(run.id)
+            try? FileManager.default.removeItem(at: activeRunURL)
         } catch {
             notice = "The run finished, but its trace could not be saved: \(error.localizedDescription)"
+            if var active = activeRun {
+                active.completedSamples = run.results.count
+                activeRun = active
+            }
+            isRunning = false
+            runTask = nil
+            return
         }
+        activeRun = nil
+        activeRunSuite = nil
+        isRunning = false
+        runTask = nil
     }
 
-    private func updateProgress(completed: Int, total: Int) {
+    private func updateProgress(runID: UUID, completed: Int, total: Int) {
+        guard var active = activeRun, active.id == runID else { return }
         completedSamples = completed
         totalSamples = total
+        active.completedSamples = completed
+        active.totalSamples = total
+        activeRun = active
+        if let activeRunSuite {
+            do {
+                try persistActiveRun(ActiveRunRecord(summary: active, suite: activeRunSuite))
+            } catch {
+                notice = "Run progress could not be checkpointed: \(error.localizedDescription)"
+            }
+        }
     }
 
-    private func validationError() -> String? {
-        let configuration = suite.modelConfiguration
-        if suite.cases.isEmpty {
+    func validationIssue(
+        for candidate: EvaluationSuite,
+        includeModelReadiness: Bool = true
+    ) -> String? {
+        let configuration = candidate.modelConfiguration
+        if candidate.modelConfiguration.provider != .onDevice {
+            return "Only the on-device model is available for evaluation runs."
+        }
+        if candidate.cases.isEmpty {
             return "Add at least one evaluation case."
         }
-        if suite.cases.contains(where: { $0.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+        if candidate.cases.count > Self.maximumCases {
+            return "Keep the suite to \(Self.maximumCases) cases or fewer."
+        }
+        if !(1...5).contains(candidate.repetitions) {
+            return "Choose between one and five repetitions."
+        }
+        let (plannedSamples, overflowed) = candidate.cases.count.multipliedReportingOverflow(by: candidate.repetitions)
+        if overflowed || plannedSamples > Self.maximumPlannedSamples {
+            return "Keep the run to \(Self.maximumPlannedSamples) planned samples or fewer."
+        }
+        if Set(candidate.cases.map(\.id)).count != candidate.cases.count {
+            return "Every case needs a unique ID."
+        }
+        if candidate.cases.contains(where: { $0.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             return "Every case needs a prompt."
         }
-        if suite.scoringMode.needsExpected,
-           suite.cases.contains(where: { $0.expected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+        if candidate.instructions.count > Self.maximumFieldCharacters
+            || candidate.cases.contains(where: {
+                $0.prompt.count > Self.maximumFieldCharacters || $0.expected.count > Self.maximumFieldCharacters
+            }) {
+            return "Instructions, prompts, and expected responses must each contain \(Self.maximumFieldCharacters) characters or fewer."
+        }
+        let suiteCharacterCount = candidate.name.count
+            + candidate.version.count
+            + candidate.instructions.count
+            + candidate.criteria.count
+            + candidate.cases.reduce(0) { $0 + $1.name.count + $1.prompt.count + $1.expected.count }
+        if suiteCharacterCount > Self.maximumCombinedSuiteCharacters {
+            return "Keep the suite text to \(Self.maximumCombinedSuiteCharacters) characters or fewer."
+        }
+        if candidate.scoringMode.needsExpected,
+           candidate.cases.contains(where: { $0.expected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             return "Every case needs expected text for the selected deterministic metric."
         }
-        if suite.scoringMode == .modelJudge {
-            if suite.rubricCriteria.isEmpty {
+        if candidate.scoringMode == .modelJudge {
+            if candidate.rubricCriteria.isEmpty {
                 return "Add at least one requirement for the AI rubric."
             }
-            if suite.rubricCriteria.count > 4 {
+            if candidate.rubricCriteria.count > 4 {
                 return "Keep the AI rubric to four requirements or fewer so the judge can evaluate each one reliably."
             }
-            if !selectedModelCapabilities.contains(.guidedGeneration) {
+            if candidate.rubricCriteria.contains(where: { $0.count > Self.maximumRubricRequirementCharacters }) {
+                return "Keep each rubric requirement to \(Self.maximumRubricRequirementCharacters) characters or fewer."
+            }
+            if !SystemLanguageModel.default.capabilities.contains(.guidedGeneration) {
                 return "The selected model does not support the guided output required by the AI judge."
             }
         }
@@ -338,45 +620,53 @@ final class EvaluationStore {
            !(512...32_768).contains(maximumInputTokens) {
             return "Choose an input ceiling between 512 and 32,768 tokens."
         }
-        if configuration.temperatureEnabled, !(0...1).contains(configuration.temperature) {
+        if configuration.temperatureEnabled,
+           !configuration.temperature.isFinite || !(0...1).contains(configuration.temperature) {
             return "Temperature must be between 0 and 1."
         }
         if configuration.samplingMode == .topK, !(1...1_000).contains(configuration.topK) {
             return "Top K must be between 1 and 1,000."
         }
         if configuration.samplingMode == .probability,
-           !(0.01...1).contains(configuration.probabilityThreshold) {
+           !configuration.probabilityThreshold.isFinite || !(0.01...1).contains(configuration.probabilityThreshold) {
             return "Probability threshold must be between 0.01 and 1."
         }
         if configuration.reasoningLevel != .automatic,
-           !selectedModelCapabilities.contains(.reasoning) {
+           !SystemLanguageModel.default.capabilities.contains(.reasoning) {
             return "The on-device model does not support explicit reasoning levels. Choose Automatic."
         }
         if configuration.referenceMode == .lookupTool {
-            if !selectedModelCapabilities.contains(.toolCalling) {
+            if !SystemLanguageModel.default.capabilities.contains(.toolCalling) {
                 return "The selected model does not support tool calling."
             }
-            if !suite.attachments.contains(where: { $0.kind == .text }) {
+            if !candidate.attachments.contains(where: { $0.kind == .text }) {
                 return "Import at least one text reference before enabling reference search."
             }
             if !(1...4).contains(configuration.maximumToolCalls) {
                 return "The reference tool limit must be between one and four calls per response."
             }
         }
-        if configuration.provider == .onDevice {
-            let allocation = configuration.contextAllocation(
-                contextSize: SystemLanguageModel.default.contextSize,
-                includesModelJudge: suite.scoringMode == .modelJudge
-            )
-            if allocation.effectiveInputLimit < 512 {
-                return "Reduce the response limit or reference-tool call limit so at least 512 input tokens remain."
-            }
+        let allocation = configuration.contextAllocation(
+            contextSize: SystemLanguageModel.default.contextSize,
+            includesModelJudge: candidate.scoringMode == .modelJudge
+        )
+        if allocation.effectiveInputLimit < 512 {
+            return "Reduce the response limit or reference-tool call limit so at least 512 input tokens remain."
         }
-        if suite.attachments.contains(where: { $0.kind == .image }),
-           !selectedModelCapabilities.contains(.vision) {
+        if candidate.attachments.count > Self.maximumAttachments {
+            return "A suite can attach up to \(Self.maximumAttachments) files."
+        }
+        if candidate.attachments.count(where: { $0.kind == .image }) > Self.maximumImages {
+            return "A suite can attach up to \(Self.maximumImages) images."
+        }
+        if Set(candidate.attachments.map(\.id)).count != candidate.attachments.count {
+            return "Every attachment needs a unique ID."
+        }
+        if candidate.attachments.contains(where: { $0.kind == .image }),
+           !SystemLanguageModel.default.capabilities.contains(.vision) {
             return "The selected model does not support image input."
         }
-        return modelStatus.isAvailable ? nil : modelStatus.detail
+        return includeModelReadiness && !modelStatus.isAvailable ? modelStatus.detail : nil
     }
 
     private func imageInputs(for suite: EvaluationSuite) -> [ImageEvaluationInput] {
@@ -392,86 +682,243 @@ final class EvaluationStore {
             }
     }
 
-    private nonisolated static func importFiles(
-        _ urls: [URL],
-        to directory: URL,
-        imageSlots: Int
-    ) throws -> [EvaluationAttachment] {
-        var imported: [EvaluationAttachment] = []
-        var remainingImages = imageSlots
+    private func importAttachments(
+        _ inputs: [AttachmentInput],
+        expectedRevision: String
+    ) async throws {
+        guard !isRunning else { throw EvaluationStoreError.runBusy }
+        try requireRevision(expectedRevision)
+        let prepared = try await Task.detached(priority: .userInitiated) {
+            try inputs.map {
+                try Self.prepareAttachment(id: $0.id, name: $0.name, mediaType: $0.mediaType, data: $0.data)
+            }
+        }.value
+        guard !isRunning else { throw EvaluationStoreError.runBusy }
+        try requireRevision(expectedRevision)
+        _ = try commitPreparedAttachments(prepared)
+    }
 
+    private nonisolated static func prepareAttachment(
+        id: UUID,
+        name: String,
+        mediaType: String,
+        data: Data
+    ) throws -> PreparedAttachment {
+        let basename = (name as NSString).lastPathComponent
+        guard !basename.isEmpty, basename == name, !name.contains("\\") else {
+            throw ImportError.invalidFilename
+        }
+        guard let declaredType = UTType(mimeType: mediaType) else {
+            throw ImportError.unsupportedType
+        }
+        let filenameType = UTType(filenameExtension: (name as NSString).pathExtension)
+        let isImage = declaredType.conforms(to: .image)
+        let isPDF = declaredType.conforms(to: .pdf)
+        let isText = declaredType.conforms(to: .text)
+            || declaredType.conforms(to: .json)
+            || declaredType.conforms(to: .commaSeparatedText)
+        guard isImage || isPDF || isText else { throw ImportError.unsupportedType }
+
+        if let filenameType {
+            let filenameCategoryMatches = (isImage && filenameType.conforms(to: .image))
+                || (isPDF && filenameType.conforms(to: .pdf))
+                || (isText && (filenameType.conforms(to: .text)
+                    || filenameType.conforms(to: .json)
+                    || filenameType.conforms(to: .commaSeparatedText)))
+            guard filenameCategoryMatches else { throw ImportError.typeMismatch }
+        }
+
+        let digest = sha256(data)
+        if isImage {
+            guard data.count <= maximumImageBytes else { throw ImportError.imageTooLarge }
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  CGImageSourceGetCount(source) > 0,
+                  CGImageSourceCreateImageAtIndex(source, 0, nil) != nil else {
+                throw ImportError.unreadableImage
+            }
+            let fileExtension = declaredType.preferredFilenameExtension
+                ?? (name as NSString).pathExtension.lowercased()
+            let storedFilename = "\(id.uuidString).\(fileExtension)"
+            return PreparedAttachment(
+                attachment: EvaluationAttachment(
+                    id: id,
+                    name: name,
+                    kind: .image,
+                    text: nil,
+                    storedFilename: storedFilename,
+                    byteCount: data.count,
+                    sha256: digest
+                ),
+                imageData: data,
+                truncated: false
+            )
+        }
+
+        guard data.count <= maximumTextFileBytes else { throw ImportError.fileTooLarge }
+        let text: String
+        if isPDF {
+            guard let document = PDFDocument(data: data),
+                  let extracted = document.string,
+                  !extracted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ImportError.unreadablePDF
+            }
+            text = extracted
+        } else {
+            guard let decoded = String(data: data, encoding: .utf8) else { throw ImportError.notUTF8 }
+            text = decoded
+        }
+        let truncated = text.count > maximumExtractedTextCharacters
+        return PreparedAttachment(
+            attachment: EvaluationAttachment(
+                id: id,
+                name: name,
+                kind: .text,
+                text: truncated
+                    ? String(text.prefix(maximumExtractedTextCharacters)) + "\n[File truncated during import.]"
+                    : text,
+                storedFilename: nil,
+                byteCount: data.count,
+                sha256: digest
+            ),
+            imageData: nil,
+            truncated: truncated
+        )
+    }
+
+    private func commitPreparedAttachments(
+        _ prepared: [PreparedAttachment]
+    ) throws -> [EvaluationAttachmentImportResult] {
+        guard Set(prepared.map(\.attachment.id)).count == prepared.count else {
+            throw EvaluationStoreError.resourceConflict("Attachment IDs must be unique.")
+        }
+        for item in prepared {
+            if let existing = suite.attachments.first(where: { $0.id == item.attachment.id }) {
+                guard existing.sha256 == item.attachment.sha256, existing.name == item.attachment.name else {
+                    throw EvaluationStoreError.resourceConflict("Attachment ID already exists with different content.")
+                }
+            }
+        }
+        let newItems = prepared.filter { item in
+            !suite.attachments.contains(where: { $0.id == item.attachment.id })
+        }
+        guard suite.attachments.count + newItems.count <= Self.maximumAttachments else {
+            throw ImportError.tooManyFiles
+        }
+        let newImageCount = newItems.count(where: { $0.attachment.kind == .image })
+        guard suite.attachments.count(where: { $0.kind == .image }) + newImageCount <= Self.maximumImages else {
+            throw ImportError.tooManyImages
+        }
+
+        var writtenURLs: [URL] = []
         do {
-            for url in urls {
-                let accessed = url.startAccessingSecurityScopedResource()
-                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            for item in newItems {
+                guard let data = item.imageData,
+                      let storedFilename = item.attachment.storedFilename else { continue }
+                let url = attachmentsDirectory.appending(path: storedFilename)
+                try data.write(to: url, options: .atomic)
+                writtenURLs.append(url)
+            }
+            var candidate = suite
+            candidate.attachments.append(contentsOf: newItems.map(\.attachment))
+            try commitSuite(candidate)
+        } catch {
+            for url in writtenURLs { try? FileManager.default.removeItem(at: url) }
+            if let storeError = error as? EvaluationStoreError { throw storeError }
+            throw EvaluationStoreError.persistence(error.localizedDescription)
+        }
 
-                let type = UTType(filenameExtension: url.pathExtension)
-                let isImage = type?.conforms(to: .image) == true
-                if isImage {
-                    guard remainingImages > 0 else { throw ImportError.tooManyImages }
-                }
-                guard let byteCount = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
-                    throw ImportError.unknownFileSize
-                }
-                guard byteCount <= (isImage ? 10_000_000 : 5_000_000) else {
-                    throw isImage ? ImportError.imageTooLarge : ImportError.fileTooLarge
-                }
+        let revision = try currentSuiteRevision()
+        return prepared.map { item in
+            EvaluationAttachmentImportResult(
+                attachment: item.attachment,
+                truncated: item.truncated,
+                duplicate: !newItems.contains(where: { $0.attachment.id == item.attachment.id }),
+                revision: revision
+            )
+        }
+    }
 
-                let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                let id = UUID()
+    private func commitSuite(_ candidate: EvaluationSuite) throws {
+        do {
+            let data = try CanonicalJSON.data(for: candidate)
+            try data.write(to: supportDirectory.appending(path: "suite.json"), options: .atomic)
+            suite = candidate
+        } catch {
+            throw EvaluationStoreError.persistence(error.localizedDescription)
+        }
+    }
 
-                if isImage {
-                    let fileExtension = url.pathExtension.lowercased()
-                    let storedFilename = "\(id.uuidString).\(fileExtension)"
-                    try data.write(to: directory.appending(path: storedFilename), options: .atomic)
-                    imported.append(
-                        EvaluationAttachment(
-                            id: id,
-                            name: url.lastPathComponent,
-                            kind: .image,
-                            text: nil,
-                            storedFilename: storedFilename,
-                            byteCount: data.count,
-                            sha256: digest
-                        )
-                    )
-                    remainingImages -= 1
-                    continue
-                }
+    private func persistRun(_ run: EvaluationRun) throws {
+        do {
+            try CanonicalJSON.data(for: run).write(
+                to: runsDirectory.appending(path: "\(run.id.uuidString).json"),
+                options: .atomic
+            )
+        } catch {
+            throw EvaluationStoreError.persistence(error.localizedDescription)
+        }
+    }
 
-                let text: String
-                if type?.conforms(to: .pdf) == true {
-                    guard let document = PDFDocument(data: data), let extracted = document.string else {
-                        throw ImportError.unreadablePDF
-                    }
-                    text = extracted
-                } else {
-                    guard let decoded = String(data: data, encoding: .utf8) else {
-                        throw ImportError.notUTF8
-                    }
-                    text = decoded
-                }
-                let limit = 16_000
-                imported.append(
-                    EvaluationAttachment(
-                        id: id,
-                        name: url.lastPathComponent,
-                        kind: .text,
-                        text: text.count > limit ? String(text.prefix(limit)) + "\n[File truncated during import.]" : text,
-                        storedFilename: nil,
-                        byteCount: data.count,
-                        sha256: digest
-                    )
+    private func persistActiveRun(_ record: ActiveRunRecord) throws {
+        do {
+            try CanonicalJSON.data(for: record).write(to: activeRunURL, options: .atomic)
+        } catch {
+            throw EvaluationStoreError.persistence(error.localizedDescription)
+        }
+    }
+
+    private func requireIdle() throws {
+        if isRunning || activeRun != nil { throw EvaluationStoreError.runBusy }
+        if isProcessingFiles { throw EvaluationStoreError.fileOperationBusy }
+    }
+
+    private func requireRevision(_ expectedRevision: String) throws {
+        let current = try currentSuiteRevision()
+        guard expectedRevision == current else {
+            throw EvaluationStoreError.staleRevision(current: current)
+        }
+    }
+
+    private func operation(for active: EvaluationActiveRun) -> EvaluationRunOperation {
+        EvaluationRunOperation(
+            id: active.id,
+            suiteRevision: active.suiteRevision,
+            phase: active.cancellationRequested
+                ? .cancellationRequested
+                : (isRunning ? .running : .stopped),
+            completedSamples: active.completedSamples,
+            totalSamples: active.totalSamples,
+            startedAt: active.startedAt,
+            completedAt: nil
+        )
+    }
+
+    private static func revision(for suite: EvaluationSuite) throws -> String {
+        let payload = SuiteRevisionPayload(
+            id: suite.id,
+            name: suite.name,
+            version: suite.version,
+            instructions: suite.instructions,
+            rubricCriteria: suite.rubricCriteria,
+            scoringMode: suite.scoringMode,
+            repetitions: suite.repetitions,
+            modelConfiguration: suite.modelConfiguration,
+            cases: suite.cases,
+            attachments: suite.attachments.map {
+                RevisionAttachment(
+                    id: $0.id,
+                    name: $0.name,
+                    kind: $0.kind,
+                    byteCount: $0.byteCount,
+                    sha256: $0.sha256
                 )
             }
-            return imported
-        } catch {
-            for filename in imported.compactMap(\.storedFilename) {
-                try? FileManager.default.removeItem(at: directory.appending(path: filename))
-            }
-            throw error
-        }
+        )
+        return sha256(try CanonicalJSON.data(for: payload, prettyPrinted: false))
+    }
+
+    private nonisolated static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func loadSuite(from directory: URL) -> (suite: EvaluationSuite?, notice: String?) {
@@ -479,7 +926,7 @@ final class EvaluationStore {
         guard FileManager.default.fileExists(atPath: url.path) else { return (nil, nil) }
         do {
             let data = try Data(contentsOf: url)
-            return (try decoder.decode(EvaluationSuite.self, from: data), nil)
+            return (try CanonicalJSON.decode(EvaluationSuite.self, from: data), nil)
         } catch {
             let backup = directory.appending(path: "suite-unreadable-\(UUID().uuidString).json")
             let preserved = (try? FileManager.default.copyItem(at: url, to: backup)) != nil
@@ -499,7 +946,7 @@ final class EvaluationStore {
             .filter { $0.pathExtension == "json" }
             .compactMap { url -> EvaluationRun? in
                 guard let data = try? Data(contentsOf: url),
-                      let run = try? decoder.decode(EvaluationRun.self, from: data) else {
+                      let run = try? CanonicalJSON.decode(EvaluationRun.self, from: data) else {
                     unreadableCount += 1
                     return nil
                 }
@@ -512,18 +959,75 @@ final class EvaluationStore {
         return (runs, notice)
     }
 
-    private static let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return encoder
-    }()
+    private static func loadActiveRun(from url: URL) -> ActiveRunRecord? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? CanonicalJSON.decode(ActiveRunRecord.self, from: data)
+    }
 
-    private static let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
+    private static func recoverInterruptedRun(
+        from activeRunURL: URL,
+        runsDirectory: URL,
+        existingRuns: [EvaluationRun]
+    ) -> (run: EvaluationRun?, notice: String?) {
+        guard FileManager.default.fileExists(atPath: activeRunURL.path) else { return (nil, nil) }
+        guard let record = loadActiveRun(from: activeRunURL) else {
+            return (nil, "An unreadable active-run record was left unchanged for recovery.")
+        }
+        if existingRuns.contains(where: { $0.id == record.summary.id }) {
+            try? FileManager.default.removeItem(at: activeRunURL)
+            return (nil, nil)
+        }
+
+        let suite = record.suite
+        let run = EvaluationRun(
+            id: record.summary.id,
+            suiteID: suite.id,
+            suiteName: suite.name,
+            suiteVersion: suite.version,
+            instructions: suite.instructions,
+            criteria: suite.criteria,
+            scoringMode: suite.scoringMode,
+            repetitions: suite.repetitions,
+            judgePromptVersion: nil,
+            judgePassingScore: suite.scoringMode == .modelJudge ? EvaluationSuite.judgePassingScore : nil,
+            plannedSampleCount: record.summary.totalSamples,
+            suiteRevision: record.summary.suiteRevision,
+            plannedCases: suite.cases,
+            startedAt: record.summary.startedAt,
+            completedAt: Date(),
+            cancelled: false,
+            terminationReason: "interrupted",
+            environment: EvaluationEnvironment(
+                operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+                locale: Locale.current.identifier,
+                model: "On-device model (interrupted)",
+                modelContextSize: 0
+            ),
+            attachments: suite.attachments.map {
+                EvaluationAttachmentTrace(
+                    name: $0.name,
+                    kind: $0.kind,
+                    byteCount: $0.byteCount,
+                    sha256: $0.sha256
+                )
+            },
+            results: []
+        )
+        do {
+            try CanonicalJSON.data(for: run).write(
+                to: runsDirectory.appending(path: "\(run.id.uuidString).json"),
+                options: .atomic
+            )
+        } catch {
+            return (nil, "The interrupted run could not be preserved: \(error.localizedDescription)")
+        }
+        do {
+            try FileManager.default.removeItem(at: activeRunURL)
+            return (run, "A run interrupted by the previous app exit was preserved in history.")
+        } catch {
+            return (run, "The interrupted run was preserved, but its recovery marker could not be removed: \(error.localizedDescription)")
+        }
+    }
 
     private static var hasAuthorizedPrivateCloudComputeSignature: Bool {
         guard let task = SecTaskCreateFromSelf(nil),
@@ -542,20 +1046,101 @@ final class EvaluationStore {
     }
 }
 
+enum EvaluationStoreError: LocalizedError, Sendable {
+    case staleRevision(current: String)
+    case runBusy
+    case fileOperationBusy
+    case invalidSuite(String)
+    case deletionConfirmationRequired
+    case resourceConflict(String)
+    case resourceNotFound(String)
+    case persistence(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .staleRevision(let current):
+            "The suite changed. Read it again and retry with revision \(current)."
+        case .runBusy:
+            "Cancel or finish the current run before changing the suite."
+        case .fileOperationBusy:
+            "Wait for the current file operation to finish."
+        case .invalidSuite(let issue):
+            issue
+        case .deletionConfirmationRequired:
+            "Confirm case deletion before replacing the suite."
+        case .resourceConflict(let message):
+            message
+        case .resourceNotFound(let resource):
+            "\(resource) was not found."
+        case .persistence(let message):
+            "The change could not be saved: \(message)"
+        }
+    }
+}
+
+private struct AttachmentInput: Sendable {
+    var id: UUID
+    var name: String
+    var mediaType: String
+    var data: Data
+}
+
+private struct PreparedAttachment: Sendable {
+    var attachment: EvaluationAttachment
+    var imageData: Data?
+    var truncated: Bool
+}
+
+private struct ActiveRunRecord: Codable, Sendable {
+    var summary: EvaluationActiveRun
+    var suite: EvaluationSuite
+}
+
+private struct SuiteRevisionPayload: Codable {
+    var id: UUID
+    var name: String
+    var version: String
+    var instructions: String
+    var rubricCriteria: [String]
+    var scoringMode: ScoringMode
+    var repetitions: Int
+    var modelConfiguration: EvaluationModelConfiguration
+    var cases: [EvaluationCase]
+    var attachments: [RevisionAttachment]
+}
+
+private struct RevisionAttachment: Codable {
+    var id: UUID
+    var name: String
+    var kind: EvaluationAttachmentKind
+    var byteCount: Int
+    var sha256: String
+}
+
 private enum ImportError: LocalizedError {
+    case tooManyFiles
     case tooManyImages
     case imageTooLarge
     case fileTooLarge
     case unknownFileSize
+    case invalidFilename
+    case unsupportedType
+    case typeMismatch
+    case unreadableImage
     case unreadablePDF
     case notUTF8
 
     var errorDescription: String? {
         switch self {
+        case .tooManyFiles: "A suite can attach up to 20 files."
         case .tooManyImages: "A suite can attach up to four images."
         case .imageTooLarge: "Images must be 10 MB or smaller."
         case .fileTooLarge: "Text and PDF files must be 5 MB or smaller."
         case .unknownFileSize: "The selected file size could not be determined."
+        case .invalidFilename: "Attachment names must be plain filenames without path components."
+        case .unsupportedType: "Attachments must be UTF-8 text, JSON, CSV, PDF, or an image."
+        case .typeMismatch: "The declared media type does not match the filename extension."
+        case .unreadableImage: "The image data could not be decoded."
         case .unreadablePDF: "The PDF contains no extractable text."
         case .notUTF8: "Text files must use UTF-8 encoding."
         }
