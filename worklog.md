@@ -13,7 +13,7 @@
 - Launch diagnosis: LLDB reported `stop reason = breakpoint 1.1`; the breakpoint resolved to five async locations at the `startServer()` catch line even though `serverState` was `running` and the error payload was nil. Removing the persisted breakpoint restored normal execution; Xcode then reported the process running with no breakpoints set.
 - Settings discovery: the complete MCP connector form remains in the macOS Settings scene. A native bottom-sidebar `SettingsLink` opens the existing Install in Codex workflow without competing with primary navigation.
 - Startup UX: MCP autostart runs only after the managed connector is installed; the keyed task starts it immediately when first-time installation succeeds, without blocking initial launch behind a Keychain dialog.
-- Sidebar UX: the split view now has a real 240-point content floor and 270-point preferred width; MCP setup lives in a separated bottom utility row rather than a competing navigation section.
+- Sidebar UX: the split view now has a real 250-point content floor and 280-point preferred width; MCP setup lives in a separated bottom utility row rather than a competing navigation section.
 - Acceptance fixes: existing Codex config modes are preserved; modern `ping` and undeclared tool arguments are rejected; editable UI drafts cannot replace the durable suite until validated and written; MCP state always rereads that one durable suite; active result bodies are checkpointed for MCP polling and crash recovery. Final build-for-testing passes; signed unit lane is 51 passed/1 intentional socket skip, and the unsigned real-socket protocol lane is 17/17.
 
 ## Previous completed work

@@ -97,8 +97,8 @@ private struct RunHistorySidebar: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Foundation Evals")
-        .frame(minWidth: 240)
-        .navigationSplitViewColumnWidth(min: 240, ideal: 270, max: 340)
+        .frame(minWidth: 250)
+        .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 340)
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search runs")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SettingsLink {
