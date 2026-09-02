@@ -93,22 +93,33 @@ enum MCPStoreAuthority {
     }
 
     private static func state(_ store: EvaluationStore) throws -> MCPToolPayload {
+        let suite = store.suite
+        let modelStatus = store.modelStatus(for: suite)
+        let capabilities = store.selectedModelCapabilities(for: suite)
+        let plannedSamples = saturatedProduct(suite.cases.count, suite.repetitions)
         let active = try store.activeRun.map { try operationJSON(store.runStatus(id: $0.id)!) } ?? .null
         return readPayload([
             "revision": .string(try store.currentSuiteRevision()),
-            "suite": suiteJSON(store.suite),
-            "attachments": .array(store.suite.attachments.map(attachmentMetadata)),
-            "readinessBlocker": store.runBlocker.map(MCPJSONValue.string) ?? .null,
+            "suite": suiteJSON(suite),
+            "attachments": .array(suite.attachments.map(attachmentMetadata)),
+            "readinessBlocker": store.validationIssue(for: suite).map(MCPJSONValue.string) ?? .null,
             "model": .object([
-                "available": .bool(store.modelStatus.isAvailable),
-                "label": .string(store.modelStatus.label),
-                "detail": .string(store.modelStatus.detail),
-                "capabilities": .array(store.selectedModelCapabilities.evaluationNames.map(MCPJSONValue.string))
+                "available": .bool(modelStatus.isAvailable),
+                "label": .string(modelStatus.label),
+                "detail": .string(modelStatus.detail),
+                "capabilities": .array(capabilities.evaluationNames.map(MCPJSONValue.string))
             ]),
             "workload": .object([
-                "plannedSamples": .integer(Int64(store.plannedSampleCount)),
-                "plannedModelRequests": .integer(Int64(store.plannedRequestCount)),
-                "plannedToolCalls": .integer(Int64(store.plannedToolCallLimit))
+                "plannedSamples": .integer(Int64(plannedSamples)),
+                "plannedModelRequests": .integer(Int64(saturatedProduct(
+                    plannedSamples,
+                    suite.scoringMode == .modelJudge ? 2 : 1
+                ))),
+                "plannedToolCalls": .integer(Int64(
+                    suite.modelConfiguration.referenceMode == .lookupTool
+                        ? saturatedProduct(plannedSamples, suite.modelConfiguration.maximumToolCalls)
+                        : 0
+                ))
             ]),
             "limits": .object([
                 "maximumCases": .integer(Int64(EvaluationStore.maximumCases)),
@@ -388,6 +399,12 @@ enum MCPStoreAuthority {
             try json(Array(results[offset..<end])),
             end < results.count ? .string(cursor(end)) : .null
         )
+    }
+
+    private static func saturatedProduct(_ lhs: Int, _ rhs: Int) -> Int {
+        guard lhs >= 0, rhs >= 0 else { return 0 }
+        let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
+        return overflow ? Int.max : value
     }
 
     private static func cursor(_ offset: Int) -> String {

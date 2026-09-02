@@ -99,7 +99,11 @@ final class EvaluationStore {
     }
 
     var modelStatus: ModelStatus {
-        switch draftSuite.modelConfiguration.provider {
+        modelStatus(for: draftSuite)
+    }
+
+    func modelStatus(for candidate: EvaluationSuite) -> ModelStatus {
+        switch candidate.modelConfiguration.provider {
         case .onDevice:
             return switch SystemLanguageModel.default.availability {
             case .available:
@@ -148,7 +152,11 @@ final class EvaluationStore {
     }
 
     var selectedModelCapabilities: LanguageModelCapabilities {
-        switch draftSuite.modelConfiguration.provider {
+        selectedModelCapabilities(for: draftSuite)
+    }
+
+    func selectedModelCapabilities(for candidate: EvaluationSuite) -> LanguageModelCapabilities {
+        switch candidate.modelConfiguration.provider {
         case .onDevice: SystemLanguageModel.default.capabilities
         case .privateCloudCompute: PrivateCloudComputeLanguageModel().capabilities
         }
@@ -690,7 +698,8 @@ final class EvaluationStore {
            !SystemLanguageModel.default.capabilities.contains(.vision) {
             return "The selected model does not support image input."
         }
-        return includeModelReadiness && !modelStatus.isAvailable ? modelStatus.detail : nil
+        let status = modelStatus(for: candidate)
+        return includeModelReadiness && !status.isAvailable ? status.detail : nil
     }
 
     private func imageInputs(for suite: EvaluationSuite) -> [ImageEvaluationInput] {

@@ -4,6 +4,28 @@ import Testing
 
 struct MCPStoreAuthorityTests {
     @MainActor
+    @Test func stateUsesOneAuthoritativeSuiteWhileTheUIDraftIsInvalid() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let committed = store.suite
+        store.addCase()
+        #expect(store.draftSuite.cases.count == 2)
+        #expect(store.suite == committed)
+
+        let authority = MCPStoreAuthority.make(store: store)
+        let state = await authority.call(.getState).structuredContent.objectValue!
+        let reportedSuite = state["suite"]!.objectValue!
+        let workload = state["workload"]!.objectValue!
+
+        #expect(reportedSuite["cases"]?.arrayValue?.count == committed.cases.count)
+        #expect(workload["plannedSamples"] == .integer(Int64(committed.cases.count * committed.repetitions)))
+        #expect(state["readinessBlocker"] == (
+            store.validationIssue(for: committed).map(MCPJSONValue.string) ?? .null
+        ))
+    }
+
+    @MainActor
     @Test func attachmentToolsAreBoundedAndNaturallyIdempotent() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
