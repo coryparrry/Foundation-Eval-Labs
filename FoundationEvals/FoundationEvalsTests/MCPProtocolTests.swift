@@ -10,6 +10,13 @@ struct MCPProtocolTests {
         #expect(response.status == 200)
         #expect(result["protocolVersion"] == .string("2025-06-18"))
         #expect(result["serverInfo"]?["name"] == .string("foundation-evals"))
+
+        let instructions = try #require(result["instructions"]?.stringValue)
+        let referencedTools = Set(instructions.split {
+            !$0.isLetter && !$0.isNumber && $0 != "_"
+        }.filter { $0.hasPrefix("eval_") }.map(String.init))
+        #expect(!referencedTools.isEmpty)
+        #expect(referencedTools.isSubset(of: Set(MCPToolCatalog.definitions.map(\.name))))
     }
 
     @Test func initializeReturnsSupportedVersionWhenClientRequestsAnotherVersion() async throws {
