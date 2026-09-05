@@ -208,8 +208,11 @@ actor MCPProtocolHandler {
             return rpcError(id: request.id!, code: -32_602, message: "Resource URI is invalid or unavailable.")
         }
         let payload = await authority.readResource(resource)
-        guard !payload.isError, payload.uri == uri, (payload.text == nil) != (payload.blob == nil) else {
-            return rpcError(id: request.id!, code: -32_602, message: "Resource URI is invalid or unavailable.")
+        if payload.isError {
+            return resourceError(payload, requestedURI: uri, id: request.id!)
+        }
+        guard payload.uri == uri, (payload.text == nil) != (payload.blob == nil) else {
+            return rpcError(id: request.id!, code: -32_603, message: "Internal error.")
         }
 
         var content: [String: MCPJSONValue] = [
@@ -222,6 +225,31 @@ actor MCPProtocolHandler {
             content["blob"] = .string(blob.base64EncodedString())
         }
         return rpcResult(id: request.id!, value: .object(["contents": .array([.object(content)])]))
+    }
+
+    private func resourceError(
+        _ payload: MCPResourcePayload,
+        requestedURI: String,
+        id: MCPJSONValue
+    ) -> MCPHTTPResponse {
+        guard let text = payload.text,
+              let data = text.data(using: .utf8),
+              let value = try? JSONDecoder().decode(MCPJSONValue.self, from: data),
+              let error = value.objectValue?["error"]?.objectValue,
+              let code = error["code"]?.stringValue
+        else {
+            return rpcError(id: id, code: -32_603, message: "Internal error.")
+        }
+
+        if code == "not_found" {
+            return rpcError(
+                id: id,
+                code: -32_002,
+                message: "Resource not found.",
+                data: .object(["uri": .string(requestedURI)])
+            )
+        }
+        return rpcError(id: id, code: -32_603, message: "Internal error.")
     }
 
     private func unsupportedVersion(requested: String, id: MCPJSONValue) -> MCPHTTPResponse {

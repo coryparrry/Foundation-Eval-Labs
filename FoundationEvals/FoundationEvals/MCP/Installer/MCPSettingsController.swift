@@ -168,6 +168,12 @@ final class MCPSettingsController {
         lastConnection = date
     }
 
+    func recordServerFailure(_ error: MCPServerError) {
+        guard serverState == .starting || serverState == .running else { return }
+        serverState = .failed
+        notice = safeDescription(for: error)
+    }
+
     func refreshInstallationState() {
         do {
             let detectedState: CodexMCPInstallationState = try installer.isInstalled(

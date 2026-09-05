@@ -7,6 +7,7 @@ actor MCPServer {
     private let port: Int
     private let maximumBodyBytes: Int
     private let handler: MCPProtocolHandler
+    private let onUnexpectedStop: (@Sendable (MCPServerError) async -> Void)?
     private var serviceTask: Task<Void, Never>?
     private var generation: UUID?
 
@@ -15,10 +16,12 @@ actor MCPServer {
         authority: MCPAuthority,
         maximumBodyBytes: Int = 16 * 1_024 * 1_024,
         maximumConcurrentRequests: Int = 8,
-        onRequest: (@Sendable (Date) async -> Void)? = nil
+        onRequest: (@Sendable (Date) async -> Void)? = nil,
+        onUnexpectedStop: (@Sendable (MCPServerError) async -> Void)? = nil
     ) {
         self.port = port
         self.maximumBodyBytes = maximumBodyBytes
+        self.onUnexpectedStop = onUnexpectedStop
         self.handler = MCPProtocolHandler(
             port: port,
             authority: authority,
@@ -59,15 +62,27 @@ actor MCPServer {
         let runGeneration = UUID()
         generation = runGeneration
         let task = Task { [weak self] in
+            let terminalError: MCPServerError?
             do {
                 try await application.run()
-                await startup.fail(.stoppedBeforeReady)
+                terminalError = .stoppedAfterReady(nil)
             } catch is CancellationError {
-                await startup.fail(.stoppedBeforeReady)
+                terminalError = .stoppedAfterReady("The listener was cancelled.")
             } catch {
-                await startup.fail(.startFailed(error.localizedDescription))
+                terminalError = .stoppedAfterReady(error.localizedDescription)
             }
-            await self?.didStop(generation: runGeneration)
+
+            if await startup.didSucceed {
+                await self?.didStop(generation: runGeneration, unexpectedError: terminalError)
+            } else {
+                switch terminalError {
+                case .stoppedAfterReady(.some(let message)):
+                    await startup.fail(.startFailed(message))
+                default:
+                    await startup.fail(.stoppedBeforeReady)
+                }
+                await self?.didStop(generation: runGeneration, unexpectedError: nil)
+            }
         }
         serviceTask = task
 
@@ -77,6 +92,7 @@ actor MCPServer {
             task.cancel()
             serviceTask = nil
             generation = nil
+            await task.value
             throw error
         }
     }
@@ -89,10 +105,16 @@ actor MCPServer {
         await task.value
     }
 
-    private func didStop(generation stoppedGeneration: UUID) {
+    private func didStop(
+        generation stoppedGeneration: UUID,
+        unexpectedError: MCPServerError?
+    ) async {
         guard generation == stoppedGeneration else { return }
         generation = nil
         serviceTask = nil
+        if let unexpectedError {
+            await onUnexpectedStop?(unexpectedError)
+        }
     }
 }
 
@@ -100,12 +122,19 @@ enum MCPServerError: LocalizedError, Sendable {
     case alreadyRunning
     case stoppedBeforeReady
     case startFailed(String)
+    case stoppedAfterReady(String?)
 
     var errorDescription: String? {
         switch self {
         case .alreadyRunning: "The MCP server is already running."
         case .stoppedBeforeReady: "The MCP server stopped before it began listening."
         case .startFailed(let message): "The MCP server could not start: \(message)"
+        case .stoppedAfterReady(let message):
+            if let message {
+                "The MCP server stopped unexpectedly: \(message)"
+            } else {
+                "The MCP server stopped unexpectedly."
+            }
         }
     }
 }
@@ -175,6 +204,11 @@ private struct MCPHummingbirdAdapter: Sendable {
 private actor MCPServerStartupSignal {
     private var result: Result<Void, MCPServerError>?
     private var continuation: CheckedContinuation<Void, any Error>?
+
+    var didSucceed: Bool {
+        guard case .success? = result else { return false }
+        return true
+    }
 
     func wait() async throws {
         if let result {
