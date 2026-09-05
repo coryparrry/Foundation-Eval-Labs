@@ -512,7 +512,7 @@ private struct ModelRubricEditor: View {
         RubricScale()
 
         Label(
-            "An exact verified-reference match passes deterministically. Other responses use the selected provider as a fixed greedy judge with tools off. Compare judged scores with a small human-reviewed set before using them as a release gate.",
+            "A matching reference answer does not bypass the rubric. Use a standalone exact: \"text\" requirement for deterministic equality. Review AI scores against a small human-reviewed set before using them as a release gate.",
             systemImage: "person.2"
         )
         .font(.caption)

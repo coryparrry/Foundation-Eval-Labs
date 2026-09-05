@@ -48,6 +48,7 @@ struct RunDetailView: View {
                 RunAnalysisSection(run: run, baselineRuns: baselineRuns)
                 RunConfigurationSection(run: run)
                 ResultsSection(run: run)
+                    .id(run.id)
             }
             .padding(28)
             .frame(maxWidth: 1_100, alignment: .leading)
@@ -290,6 +291,10 @@ private struct ResultsSection: View {
         }
     }
 
+    private var isFiltering: Bool {
+        filter != .all || !searchText.isEmpty
+    }
+
     private var selectedResult: EvaluationSampleResult? {
         guard let selectedResultID else { return results.first }
         return results.first(where: { $0.id == selectedResultID }) ?? results.first
@@ -301,28 +306,44 @@ private struct ResultsSection: View {
                 Text("Results")
                     .font(.title2.bold())
                     .accessibilityAddTraits(.isHeader)
-                Text("\(results.count)")
+                Text(isFiltering ? "\(results.count) of \(run.results.count)" : "\(run.results.count)")
                     .foregroundStyle(.secondary)
                 Spacer()
             }
 
-            HStack(spacing: 12) {
-                Picker("Result filter", selection: $filter) {
-                    ForEach(ResultFilter.allCases) { filter in
-                        Text(filter.title).tag(filter)
+            if !run.results.isEmpty {
+                HStack(spacing: 12) {
+                    Picker("Result filter", selection: $filter) {
+                        ForEach(ResultFilter.allCases) { filter in
+                            Text(filter.title).tag(filter)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 390)
+
+                    Spacer()
+
+                    TextField("Search case, prompt, or response", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 290)
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 390)
 
-                Spacer()
-
-                TextField("Search case, prompt, or response", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 290)
+                if isFiltering {
+                    Button("Clear filters") { clearFilters() }
+                        .accessibilityIdentifier("Clear result filters")
+                }
             }
 
-            if results.isEmpty {
+            if run.results.isEmpty {
+                ContentUnavailableView(
+                    run.cancelled ? "Cancelled Before Results" : "No Results Collected",
+                    systemImage: run.cancelled ? "stop.circle" : "tray",
+                    description: Text(run.cancelled
+                        ? "This run was cancelled before a response was collected. Start a new run from the Suite Editor."
+                        : "This run did not collect any responses. Review its configuration and start a new run from the Suite Editor.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 220)
+            } else if results.isEmpty {
                 ContentUnavailableView(
                     "No Matching Results",
                     systemImage: "line.3.horizontal.decrease.circle",
@@ -361,6 +382,11 @@ private struct ResultsSection: View {
         .onChange(of: results.map(\.id)) { _, _ in
             selectFirstResultIfNeeded()
         }
+    }
+
+    private func clearFilters() {
+        filter = .all
+        searchText = ""
     }
 
     private func selectFirstResultIfNeeded() {

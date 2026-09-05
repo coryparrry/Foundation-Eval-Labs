@@ -1,5 +1,15 @@
 import SwiftUI
 
+enum RunBaselineSelection {
+    static func defaultID(for run: EvaluationRun, candidates: [EvaluationRun]) -> UUID? {
+        candidates
+            .filter { $0.id != run.id && $0.suiteID == run.suiteID && $0.startedAt < run.startedAt }
+            .sorted { $0.startedAt > $1.startedAt }
+            .first { EvaluationRunComparison(current: run, baseline: $0).compatibility == .compatible }?
+            .id
+    }
+}
+
 struct RunAnalysisSection: View {
     let run: EvaluationRun
     let baselineRuns: [EvaluationRun]
@@ -8,7 +18,7 @@ struct RunAnalysisSection: View {
     init(run: EvaluationRun, baselineRuns: [EvaluationRun]) {
         self.run = run
         self.baselineRuns = baselineRuns
-        _selectedBaselineID = State(initialValue: baselineRuns.first?.id)
+        _selectedBaselineID = State(initialValue: RunBaselineSelection.defaultID(for: run, candidates: baselineRuns))
     }
 
     private var selectedBaseline: EvaluationRun? {
@@ -46,11 +56,11 @@ struct RunAnalysisSection: View {
                 .stroke(Color.secondary.opacity(0.14))
         }
         .onChange(of: run.id) { _, _ in
-            selectedBaselineID = baselineRuns.first?.id
+            selectedBaselineID = RunBaselineSelection.defaultID(for: run, candidates: baselineRuns)
         }
         .onChange(of: baselineRuns.map(\.id)) { _, ids in
-            if selectedBaselineID.map({ ids.contains($0) }) != true {
-                selectedBaselineID = ids.first
+            if let selectedBaselineID, !ids.contains(selectedBaselineID) {
+                self.selectedBaselineID = RunBaselineSelection.defaultID(for: run, candidates: baselineRuns)
             }
         }
     }
@@ -86,8 +96,8 @@ private struct RunAnalysisHeader: View {
     }
 
     private func baselineLabel(_ run: EvaluationRun) -> String {
-        let date = run.startedAt.formatted(date: .abbreviated, time: .shortened)
-        return "\(date) · \(run.environment.model)"
+        let date = run.startedAt.formatted(date: .abbreviated, time: .standard)
+        return "\(run.suiteName) \(run.suiteVersion) · \(date) · \(run.environment.model)"
     }
 }
 
