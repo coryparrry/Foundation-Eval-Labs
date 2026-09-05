@@ -1,17 +1,26 @@
+<div align="center">
+
 # Foundation Evals
 
-![macOS 27+](https://img.shields.io/badge/macOS-27%2B-111827?style=for-the-badge&logo=apple&logoColor=white)
-![Apple Foundation Models](https://img.shields.io/badge/Apple-Foundation_Models-2563eb?style=for-the-badge)
-![MCP](https://img.shields.io/badge/Agent_Integration-MCP-7c3aed?style=for-the-badge)
-[![MIT License](https://img.shields.io/badge/License-MIT-16a34a?style=for-the-badge)](LICENSE)
+**Put Apple's Foundation Models to the test.**
 
-> Test Apple's Foundation Models. Inspect every run. Compare what changed.
+Build an evaluation. Inspect the evidence. See what changed.
 
-A native macOS app with a built-in MCP server that lets your coding agent build evaluation suites, run Apple's Foundation Models, inspect responses and execution traces, and compare results—all from your agent workflow. Review every run in the app as you refine prompts, settings, and tools.
+<img src=".github/assets/foundation-evals-demo.gif" alt="Foundation Evals walkthrough: configure a test suite, run an evaluation, and inspect the results and scoring evidence." width="960">
 
-[Install](#-install) · [First evaluation](#-run-your-first-evaluation) · [Models and tools](#-models-and-tools) · [Agent integration](#-connect-an-agent) · [Build from source](#-build-from-source)
+![macOS 27+](https://img.shields.io/badge/macOS-27%2B-111827?style=flat-square&logo=apple&logoColor=white)
+![Swift](https://img.shields.io/badge/Swift-F05138?style=flat-square&logo=swift&logoColor=white)
+![Apple Foundation Models](https://img.shields.io/badge/Apple-Foundation_Models-2563eb?style=flat-square)
+![MCP](https://img.shields.io/badge/Agent_Integration-MCP-7c3aed?style=flat-square)
+[![MIT License](https://img.shields.io/badge/License-MIT-16a34a?style=flat-square)](LICENSE)
 
-## ✨ What you can do
+[Install](#install) · [First evaluation](#run-your-first-evaluation) · [Models and tools](#models-and-tools) · [Connect an agent](#connect-an-agent) · [Build from source](#build-from-source)
+
+</div>
+
+Foundation Evals is a native macOS workbench for testing Apple's Foundation Models. Create repeatable suites, inspect responses and execution traces, and compare saved runs as you refine prompts, settings, and tools. Its built-in MCP server lets a coding agent use the same evaluation workflow, with every run available to review in the app.
+
+## What you can do
 
 | Capability | What it gives you |
 |---|---|
@@ -22,7 +31,7 @@ A native macOS app with a built-in MCP server that lets your coding agent build 
 | **Models and tools** | Apple's on-device model, compatible Core AI models, custom HTTP providers, and configurable tools. |
 | **Agent integration** | An included MCP server for managing suites, running evaluations, and inspecting results. |
 
-## 🚀 Install
+## Install
 
 Requirements:
 
@@ -38,7 +47,7 @@ The app is signed with Developer ID and notarized by Apple.
 
 Xcode is only needed to build from source.
 
-## 🧪 Run your first evaluation
+## Run your first evaluation
 
 1. Open **Suite Editor** and enter the instructions shared by your test cases.
 2. Add cases with a prompt and, where appropriate, an expected response or reference answer. You can attach text, JSON, CSV, PDF, and image files as context.
@@ -55,13 +64,13 @@ Xcode is only needed to build from source.
 
 For AI rubrics, write one observable requirement per line and provide a verified reference answer for factual tasks. Inspect the judge's explanation alongside its score. Repetitions help reveal variation; a few runs do not establish statistical significance.
 
-## 🧰 Models and tools
+## Models and tools
 
 The default provider is Apple's on-device Foundation Model. You can also load a compatible [Core AI model](docs/coreai-provider.md) or connect a [custom local HTTP provider](docs/custom-provider-protocol.md).
 
 Use the **Features** page to configure custom tools, structured output, streaming, and tool workflows. The [tools and structured output guide](docs/foundation-model-features.md) includes a runnable local HTTP example.
 
-## 🔌 Connect an agent
+## Connect an agent
 
 Foundation Evals includes an MCP server so an agent can manage suites and references, run evaluations, inspect traces, and compare saved results.
 
@@ -75,13 +84,13 @@ The server provides an agent workflow guide during MCP initialization. Its HTTP 
 
 The connector listens only on this Mac and does not require credentials. Connected local clients can read and change evaluation data.
 
-## 🔒 Your data
+## Your data
 
 Suites, imported attachments, and run history are saved in `~/Library/Application Support/FoundationEvals/`. The app does not encrypt these files itself. Saved traces and JSON exports can include prompts, responses, reference content, and tool arguments and outputs; review them before sharing.
 
 On-device evaluations run locally. Custom HTTP providers and tools receive the content needed for their calls, and those separate services control any onward network use. Optional Private Cloud Compute uses Apple's network service when available. Spotlight tools can make matching local file content available to the selected model.
 
-## 🛠️ Build from source
+## Build from source
 
 Use Xcode 27 with its command-line tools selected. From the repository root:
 
@@ -103,6 +112,6 @@ UI tests require an interactive Mac. The optional Core AI inference test require
 
 GitHub CI compiles the app and test bundles; its current macOS 26 runner cannot execute tests requiring macOS 27. See the [release guide](docs/releasing.md) for signing setup and the automated DMG release workflow.
 
-## 📄 License
+## License
 
 Foundation Evals is released under the [MIT License](LICENSE). Dependencies retain their own licenses; see [third-party notices](FoundationEvals/FoundationEvals/Resources/THIRD_PARTY_NOTICES.txt). Separately supplied model resources have their own terms.
