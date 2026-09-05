@@ -39,6 +39,8 @@ final class FoundationEvalsUITests: XCTestCase {
                 || app.staticTexts["Needs attention"].exists
         )
 
+        let showSidebar = app.buttons["Show Sidebar"]
+        if showSidebar.exists { showSidebar.click() }
         let connector = app.descendants(matching: .any)["Open MCP Connector"]
         XCTAssertTrue(connector.waitForExistence(timeout: 2))
         connector.click()
