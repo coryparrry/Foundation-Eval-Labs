@@ -604,10 +604,54 @@ struct EvaluationStorePersistenceTests {
     }
 
     @MainActor
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func completedRunSaveFailureRetriesAfterStorageRecovers(restart: Bool) async throws {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.scoringMode = .review
+        store.draftSuite.modelConfiguration.provider = .customHTTP
+        #expect(store.saveSuite())
+        let id = UUID()
+        _ = try store.startRun(id: id, expectedRevision: store.suiteRevision)
+        _ = try store.cancelRun(id: id)
+
+        // Cancellation happens before the runner task executes; no model request is needed.
+        let runsDirectory = directory.appending(path: "Runs")
+        try FileManager.default.removeItem(at: runsDirectory)
+        try Data().write(to: runsDirectory)
+        while store.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(store.activeRun?.id == id)
+        #expect(store.runs.isEmpty)
+        if restart { store = EvaluationStore(supportDirectory: directory) }
+        #expect(store.activeRun?.id == id)
+        #expect(throws: EvaluationStoreError.self) {
+            _ = try store.cancelRun(id: id)
+        }
+        #expect(throws: EvaluationStoreError.self) {
+            _ = try store.startRun(id: UUID(), expectedRevision: store.suiteRevision)
+        }
+        #expect(store.activeRun?.id == id)
+
+        try FileManager.default.removeItem(at: runsDirectory)
+        try FileManager.default.createDirectory(at: runsDirectory, withIntermediateDirectories: true)
+        let operation = try store.cancelRun(id: id)
+        #expect(operation.phase == .cancelled)
+        #expect(store.activeRun == nil)
+        #expect(store.runs.first?.id == id)
+        #expect(store.runs.first?.cancelled == true)
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.runs.first?.cancelled == true)
+        #expect(reloaded.runs.first?.execution?.configuration == store.suite.modelConfiguration)
+    }
+
+    @MainActor
     @Test func unfinishedActiveRunRecoversAsInterruptedHistory() throws {
         let directory = Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let suite = EvaluationSuite()
+        var suite = EvaluationSuite()
+        suite.modelConfiguration.provider = .customHTTP
+        suite.modelConfiguration.customProviderSettings.endpoint = "http://127.0.0.1:9876/generate"
         let summary = EvaluationActiveRun(
             id: UUID(),
             suiteRevision: "revision",
@@ -647,6 +691,9 @@ struct EvaluationStorePersistenceTests {
         #expect(store.runs.first?.id == summary.id)
         #expect(store.runs.first?.terminationReason == "interrupted")
         #expect(store.runs.first?.plannedCases == suite.cases)
+        #expect(store.runs.first?.execution?.configuration == suite.modelConfiguration)
+        #expect(store.runs.first?.execution?.features == suite.features)
+        #expect(store.runs.first?.environment.model == "Custom local HTTP model (interrupted)")
         #expect(store.runs.first?.results.first?.response == "Completed before interruption")
         #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "active-run.json").path))
         #expect(FileManager.default.fileExists(

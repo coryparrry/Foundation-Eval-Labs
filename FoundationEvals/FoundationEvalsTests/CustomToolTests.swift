@@ -232,6 +232,26 @@ struct CustomToolTests {
         #expect(trace.errorDescription == "Bridge unavailable")
     }
 
+    @Test func releasingHTTPClientReleasesItsSession() async throws {
+        weak var retainedSession: URLSession?
+        autoreleasepool {
+            let session = URLSession(
+                configuration: .ephemeral,
+                delegate: EvaluationNoRedirectDelegate(),
+                delegateQueue: nil
+            )
+            let client = EvaluationLocalHTTPToolClient(session: session)
+            withExtendedLifetime(client) {
+                retainedSession = session
+            }
+        }
+        defer { retainedSession?.invalidateAndCancel() }
+        for _ in 0..<100 where retainedSession != nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(retainedSession == nil)
+    }
+
     @Test func redirectDelegateNeverFollowsRedirects() throws {
         let originalURL = try #require(URL(string: "http://127.0.0.1:19093/run"))
         let redirectedURL = try #require(URL(string: "http://127.0.0.1:19094/other"))

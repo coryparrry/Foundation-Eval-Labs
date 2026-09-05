@@ -50,6 +50,7 @@ final class EvaluationStore {
     private var runTask: Task<Void, Never>?
     private var activeRunSuite: EvaluationSuite?
     private var activeRunResults: [EvaluationSampleResult] = []
+    private var unsavedRun: EvaluationRun?
 
     init(supportDirectory customSupportDirectory: URL? = nil) {
         let base = customSupportDirectory
@@ -97,9 +98,12 @@ final class EvaluationStore {
         suite = initialSuite
         draftSuite = loadedDraft.suite ?? initialSuite
         runs = loadedRuns.runs
-        activeRun = nil
-        activeRunSuite = nil
-        activeRunResults = []
+        activeRun = recovery.pending?.summary
+        activeRunSuite = recovery.pending?.suite
+        activeRunResults = recovery.pending?.results ?? []
+        unsavedRun = recovery.pending?.completedRun
+        completedSamples = recovery.pending?.summary.completedSamples ?? 0
+        totalSamples = recovery.pending?.summary.totalSamples ?? 0
         notice = initialNotice.isEmpty ? nil : initialNotice
         if migratedRubric || (loadedSuite.suite == nil && loadedSuite.notice == nil) { saveSuite() }
     }
@@ -529,6 +533,7 @@ final class EvaluationStore {
 
     @discardableResult
     func startRun(id: UUID, expectedRevision: String) throws -> EvaluationRunOperation {
+        try retryUnsavedRun()
         if let existing = runStatus(id: id) {
             guard existing.suiteRevision == expectedRevision else {
                 throw EvaluationStoreError.resourceConflict("Run ID already belongs to another suite revision.")
@@ -615,6 +620,7 @@ final class EvaluationStore {
 
     @discardableResult
     func cancelRun(id: UUID) throws -> EvaluationRunOperation {
+        try retryUnsavedRun()
         if let finished = runStatus(id: id), finished.phase != .running, finished.phase != .cancellationRequested {
             return finished
         }
@@ -666,7 +672,13 @@ final class EvaluationStore {
             selection = .run(run.id)
             try? FileManager.default.removeItem(at: activeRunURL)
         } catch {
-            notice = "The run finished, but its trace could not be saved: \(error.localizedDescription)"
+            unsavedRun = run
+            if let activeRun, let activeRunSuite {
+                try? persistActiveRun(ActiveRunRecord(
+                    summary: activeRun, suite: activeRunSuite, results: run.results, completedRun: run
+                ))
+            }
+            notice = "The run finished, but its trace could not be saved: \(error.localizedDescription). Restore storage access and try again to save it."
             activeRunResults = run.results
             if var active = activeRun {
                 active.completedSamples = run.results.count
@@ -676,6 +688,8 @@ final class EvaluationStore {
             runTask = nil
             return
         }
+        if unsavedRun != nil { notice = nil }
+        unsavedRun = nil
         activeRun = nil
         activeRunSuite = nil
         activeRunResults = []
@@ -1114,7 +1128,16 @@ final class EvaluationStore {
         }
     }
 
+    private func retryUnsavedRun() throws {
+        guard let unsavedRun else { return }
+        finish(unsavedRun)
+        if self.unsavedRun != nil {
+            throw EvaluationStoreError.persistence("The completed run still needs to be saved.")
+        }
+    }
+
     private func requireIdle() throws {
+        try retryUnsavedRun()
         if isRunning || activeRun != nil { throw EvaluationStoreError.runBusy }
         if isProcessingFiles { throw EvaluationStoreError.fileOperationBusy }
     }
@@ -1245,18 +1268,18 @@ final class EvaluationStore {
         from activeRunURL: URL,
         runsDirectory: URL,
         existingRuns: [EvaluationRun]
-    ) -> (run: EvaluationRun?, notice: String?) {
-        guard FileManager.default.fileExists(atPath: activeRunURL.path) else { return (nil, nil) }
+    ) -> (run: EvaluationRun?, pending: ActiveRunRecord?, notice: String?) {
+        guard FileManager.default.fileExists(atPath: activeRunURL.path) else { return (nil, nil, nil) }
         guard let record = loadActiveRun(from: activeRunURL) else {
-            return (nil, "An unreadable active-run record was left unchanged for recovery.")
+            return (nil, nil, "An unreadable active-run record was left unchanged for recovery.")
         }
         if existingRuns.contains(where: { $0.id == record.summary.id }) {
             try? FileManager.default.removeItem(at: activeRunURL)
-            return (nil, nil)
+            return (nil, nil, nil)
         }
 
         let suite = record.suite
-        let run = EvaluationRun(
+        let run = record.completedRun ?? EvaluationRun(
             id: record.summary.id,
             suiteID: suite.id,
             suiteName: suite.name,
@@ -1277,7 +1300,7 @@ final class EvaluationStore {
             environment: EvaluationEnvironment(
                 operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
                 locale: Locale.current.identifier,
-                model: "On-device model (interrupted)",
+                model: "\(suite.modelConfiguration.provider.title) (interrupted)",
                 modelContextSize: 0
             ),
             attachments: suite.attachments.map {
@@ -1288,7 +1311,15 @@ final class EvaluationStore {
                     sha256: $0.sha256
                 )
             },
-            results: record.results ?? []
+            results: record.results ?? [],
+            execution: EvaluationExecutionTrace(
+                behaviorVersion: EvaluationModelConfiguration.currentBehaviorVersion,
+                configuration: suite.modelConfiguration,
+                modelDisplayName: suite.modelConfiguration.provider.title,
+                capabilities: [],
+                toolNames: [],
+                features: suite.features
+            )
         )
         do {
             try CanonicalJSON.data(for: run).write(
@@ -1296,13 +1327,17 @@ final class EvaluationStore {
                 options: .atomic
             )
         } catch {
-            return (nil, "The interrupted run could not be preserved: \(error.localizedDescription)")
+            var pending = record
+            pending.completedRun = run
+            pending.results = run.results
+            pending.summary.completedSamples = run.results.count
+            return (nil, pending, "The previous run could not be saved. Restore storage access and try again: \(error.localizedDescription)")
         }
         do {
             try FileManager.default.removeItem(at: activeRunURL)
-            return (run, "A run interrupted by the previous app exit was preserved in history.")
+            return (run, nil, "A run from the previous app session was preserved in history.")
         } catch {
-            return (run, "The interrupted run was preserved, but its recovery marker could not be removed: \(error.localizedDescription)")
+            return (run, nil, "The interrupted run was preserved, but its recovery marker could not be removed: \(error.localizedDescription)")
         }
     }
 
@@ -1372,6 +1407,7 @@ private struct ActiveRunRecord: Codable, Sendable {
     var summary: EvaluationActiveRun
     var suite: EvaluationSuite
     var results: [EvaluationSampleResult]?
+    var completedRun: EvaluationRun? = nil
 }
 
 private struct SuiteDraftRecord: Codable {

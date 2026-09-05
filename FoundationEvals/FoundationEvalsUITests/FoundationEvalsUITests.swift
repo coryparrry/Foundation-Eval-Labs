@@ -54,8 +54,16 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertTrue(app.popUpButtons["Model provider"].exists)
         XCTAssertTrue(app.popUpButtons["Sampling"].exists)
         XCTAssertFalse(app.popUpButtons["System model use case"].exists)
-        app.disclosureTriangles["Advanced model options"].click()
-        XCTAssertTrue(app.popUpButtons["System model use case"].exists)
+        let advancedOptions = app.disclosureTriangles["Advanced model options"]
+        advancedOptions.click() // Let XCTest scroll the disclosure's enclosing editor into view.
+        let useCase = app.popUpButtons["System model use case"]
+        if !useCase.waitForExistence(timeout: 2) {
+            // The recorded AX frame includes leading padding: its chevron is 27pt
+            // from the left edge, while XCTest's default click lands on the label.
+            advancedOptions.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+                .withOffset(CGVector(dx: 27, dy: 0)).click()
+        }
+        XCTAssertTrue(useCase.waitForExistence(timeout: 3))
         XCTAssertTrue(app.popUpButtons["System model guardrails"].exists)
 
         app.radioButtons["Scoring"].click()

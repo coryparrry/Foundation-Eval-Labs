@@ -20,6 +20,32 @@ That creates `dist/Foundation Evals.app`. Quit the app before rebuilding; the sc
 
 The app itself uses the system `FoundationModels` framework. It does not link the Xcode-only `Evaluations` developer framework, so a built app has no evaluation-runtime dependency on Xcode.
 
+## Development and tests
+
+Open `FoundationEvals/FoundationEvals.xcodeproj` in Xcode, or run the unit tests from the repository root:
+
+```sh
+xcodebuild -project FoundationEvals/FoundationEvals.xcodeproj \
+  -scheme FoundationEvals -destination 'platform=macOS' \
+  -only-testing:FoundationEvalsTests test
+```
+
+Omit `-only-testing:FoundationEvalsTests` to include the UI tests. Tests that exercise real inference require a ready model; UI tests require an interactive Mac with the necessary automation permissions.
+
+The build script creates a local Debug app. It does not produce a notarized release. See [release readiness](docs/release-readiness.md) for the remaining distribution work.
+
+## Providers and privacy
+
+The default provider is Apple's on-device Foundation Model. The app also supports a selected local Core AI resource folder and a developer-owned HTTP provider on literal `127.0.0.1`. Core AI resources are supplied separately; see [Core AI integration](docs/coreai-provider.md). The [custom provider protocol](docs/custom-provider-protocol.md) describes the request and response format.
+
+Private Cloud Compute is also available when the app has an approved entitlement and the system reports availability; those requests use Apple's network service and quota.
+
+Custom HTTP providers receive evaluation request content, and configured HTTP tools receive their call arguments. These connections are restricted to loopback, but the separate local service controls what it does with that data, including any onward network requests. Only use services you trust. Optional Spotlight tools can expose matching local file content to the selected model.
+
+Suites, drafts, run records, and imported attachments are stored under `~/Library/Application Support/FoundationEvals/`. Saved JSON and exports can contain prompts, responses, extracted reference text, tool arguments and outputs, and selected resource bookmarks. The app does not encrypt these files itself. Treat exported reports and shared traces as potentially sensitive.
+
+The MCP connector described below permits local clients to read and change evaluation data without a bearer credential. Host and origin checks do not make it an authenticated service. Connecting to Codex also updates `~/.codex/config.toml`.
+
 ## Agent control with MCP
 
 Open the app's **Settings**, choose **Connect to Codex**, then restart Codex. The app writes a managed entry directly to `~/.codex/config.toml`. Keep Foundation Evals running while an agent uses the connector.
@@ -61,3 +87,9 @@ Apple's current evaluation model is dataset → subject → evaluators → aggre
 Foundation Models exposes native attachments for images, not arbitrary document files. The app extracts text from supported text/PDF files and clearly delimits it in the prompt; images use `Attachment(imageURL:)` with stable labels.
 
 The JSON trace is app-owned because Foundation Models does not expose a programmatic export of its Instruments track. For deeper local profiling, use Apple's Foundation Models Instruments template, which shows sessions, requests, instructions, inference, tools, loading, timing, and token details. Instruments recordings can contain unencrypted prompts and responses, so treat them as sensitive. See [Analyzing runtime performance](https://developer.apple.com/documentation/foundationmodels/analyzing-the-runtime-performance-of-your-foundation-models-app).
+
+## License and project notes
+
+Foundation Evals is available under the [MIT License](LICENSE). Dependencies retain their own terms; [third-party notices](FoundationEvals/FoundationEvals/Resources/THIRD_PARTY_NOTICES.txt) reproduce license and notice files from the pinned package revisions. User-supplied model resources are separate from this source license.
+
+`worklog.md` records historical development sessions, including superseded implementations and earlier validation limits. It is not the current product contract or release certification.

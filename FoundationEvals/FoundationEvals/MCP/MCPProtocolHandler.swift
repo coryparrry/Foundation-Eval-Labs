@@ -384,10 +384,6 @@ private struct MCPRPCRequest: Decodable {
         parameter(name)?.stringValue
     }
 
-    func objectParameter(_ name: String) -> [String: MCPJSONValue]? {
-        parameter(name)?.objectValue
-    }
-
     func parameter(_ name: String) -> MCPJSONValue? {
         params?.objectValue?[name]
     }

@@ -511,7 +511,7 @@ struct EvaluationSystemModelTokenCounter: EvaluationCustomToolTokenCounting {
     }
 }
 
-struct EvaluationLocalHTTPToolClient: EvaluationCustomToolHTTPClient {
+final class EvaluationLocalHTTPToolClient: EvaluationCustomToolHTTPClient {
     private let session: URLSession
 
     init() {
@@ -533,6 +533,10 @@ struct EvaluationLocalHTTPToolClient: EvaluationCustomToolHTTPClient {
 
     init(session: URLSession) {
         self.session = session
+    }
+
+    deinit {
+        session.invalidateAndCancel()
     }
 
     func post(body: Data, to endpoint: URL) async throws -> String {

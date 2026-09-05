@@ -130,12 +130,6 @@ actor CoreAIModelLoader {
         return result
     }
 
-    /// Drops loader-owned references. It does not unload models that a caller may still be using.
-    func clear() {
-        latestRequestedKey = nil
-        cachedModel = nil
-    }
-
     private static func resolveResources(
         _ configuration: EvaluationCoreAIConfiguration
     ) throws -> (url: URL, securityScopedAccess: CoreAISecurityScopedAccess) {
