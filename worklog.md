@@ -9,6 +9,7 @@
 - Validation: Xcode MCP BuildProject(buildForTesting: true) passed. RunSomeTests batches passed 22/22 and 31/31 (50 distinct tests, three overlap); two final targeted reruns passed after review corrections. Includes real loopback socket coverage. Independent review findings were fixed.
 - Native evidence: two real on-device example runs completed and persisted. UI baseline comparison showed unchanged 1/1 scored; measured trace showed 2,472 ms preparation, 3,597 ms generation, 6,597 ms scoring on the second run. Subject 108 tokens and judge 766 tokens matched live MCP analysis. These are smoke-run observations, not a model-quality benchmark.
 - Xcode RunCodeSnippet timed out and left a stale app instance; closed it and verified the current build in the native interface.
+- Packaging: `./script/build_and_run.sh --verify` passed from clean DerivedData. Removed File Provider-added FinderInfo from the generated bundle; `codesign --verify --strict --deep` then passed. The packaged app launched, retained both smoke runs, and returned the same comparison through live MCP.
 - Delivery: current non-main branch retained; no remote is configured, so push/PR creation is unavailable. Unrelated staged `.codegraph/.gitignore` preserved.
 
 ## Earlier work
