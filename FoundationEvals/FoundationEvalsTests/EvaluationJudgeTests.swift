@@ -1,8 +1,94 @@
 import Foundation
+import FoundationModels
 import Testing
 @testable import FoundationEvals
 
 struct EvaluationJudgeTests {
+    @Test(arguments: 1...4)
+    func namedRequirementsPreserveCoverageAndScoresRegardlessOfPropertyOrder(count: Int) throws {
+        _ = try EvaluationJudge.schema(criterionCount: count)
+        let properties = (1...count).reversed().map { index in
+            "\"requirement\(index)\":{\"score\":\(5 - index),\"rationale\":\"Evidence for requirement \(index).\",\"exactComparisons\":[]}"
+        }.joined(separator: ",")
+        let content = try GeneratedContent(json: "{\(properties)}")
+        let verdict = try EvaluationJudge.verdict(from: content, criterionCount: count)
+        let result = try EvaluationJudge.validate(
+            verdict: verdict,
+            criteria: (1...count).map { "Semantic requirement \($0)" },
+            response: "A candidate response", verifiedReference: ""
+        )
+        #expect(result.checks.map(\.criterionIndex) == Array(1...count))
+        #expect(result.checks.map(\.score) == (1...count).map { 5 - $0 })
+        #expect(result.checks.map(\.rationale) == (1...count).map { "Evidence for requirement \($0)." })
+        #expect(result.score == 5 - count)
+    }
+
+    @Test(arguments: 1...4)
+    func namedRequirementsRejectEachMissingAssessment(missingIndex: Int) throws {
+        let properties = (1...4).filter { $0 != missingIndex }.map { index in
+            "\"requirement\(index)\":{\"score\":4,\"rationale\":\"Met.\",\"exactComparisons\":[]}"
+        }.joined(separator: ",")
+        let content = try GeneratedContent(json: "{\(properties)}")
+        #expect(throws: (any Error).self) {
+            try EvaluationJudge.verdict(from: content, criterionCount: 4)
+        }
+    }
+
+    @Test func namedRequirementDecodingDoesNotBypassEvidenceValidation() throws {
+        let content = try GeneratedContent(json: #"{"requirement1":{"score":4,"rationale":"The complete response matches READY.","exactComparisons":[{"expectedText":"READY","matches":true}]}}"#)
+        let verdict = try EvaluationJudge.verdict(from: content, criterionCount: 1)
+        #expect(throws: EvaluationJudgeValidationError.contradictoryComparison(criterionIndex: 1)) {
+            try EvaluationJudge.validate(
+                verdict: verdict, criteria: ["The response is exactly READY."],
+                response: "OTHER", verifiedReference: ""
+            )
+        }
+        #expect(throws: EvaluationJudgeValidationError.ungroundedComparison(criterionIndex: 1)) {
+            try EvaluationJudge.validate(
+                verdict: verdict, criteria: ["Explain the sky's color."],
+                response: "READY", verifiedReference: ""
+            )
+        }
+    }
+
+    @Test func semanticAssessmentsDoNotRequireLiteralComparisons() throws {
+        let content = try GeneratedContent(json: #"{"requirement1":{"score":4,"rationale":"The explanation correctly describes stronger scattering of blue light."},"requirement2":{"score":2,"rationale":"The answer uses three sentences instead of two."}}"#)
+        let verdict = try EvaluationJudge.verdict(from: content, criterionCount: 2)
+        let result = try EvaluationJudge.validate(
+            verdict: verdict,
+            criteria: ["Explain why the sky is blue.", "Use exactly two sentences."],
+            response: "Sunlight contains many colors. Air scatters blue light more strongly. This makes the sky appear blue.",
+            verifiedReference: "Air molecules scatter blue light more than red light. The scattered blue light reaches our eyes."
+        )
+        #expect(result.checks.map(\.criterionIndex) == [1, 2])
+        #expect(result.checks.map(\.score) == [4, 2])
+        #expect(result.checks.allSatisfy { $0.exactComparisons.isEmpty })
+        #expect(result.score == 2)
+        #expect(result.rationale.contains("three sentences instead of two"))
+    }
+
+    @Test(arguments: [
+        #"{"requirement1":{"rationale":"The explanation is correct."}}"#,
+        #"{"requirement1":{"score":4}}"#
+    ])
+    func semanticAssessmentsStillRequireScoreAndRationale(json: String) throws {
+        let content = try GeneratedContent(json: json)
+        #expect(throws: (any Error).self) {
+            try EvaluationJudge.verdict(from: content, criterionCount: 1)
+        }
+    }
+
+    @Test(arguments: [0, 5])
+    func namedRequirementSchemaAndDecoderRejectUnsupportedCounts(count: Int) throws {
+        #expect(throws: EvaluationJudgeValidationError.invalidCriteria) {
+            try EvaluationJudge.schema(criterionCount: count)
+        }
+        let content = try GeneratedContent(json: "{}")
+        #expect(throws: EvaluationJudgeValidationError.invalidCriteria) {
+            try EvaluationJudge.verdict(from: content, criterionCount: count)
+        }
+    }
+
     @Test func rejectsTheObservedIdenticalTextMisgrade() {
         let verdict = Self.verdict(expected: "DELIVERY VERIFIED", matches: false, score: 2)
         #expect(throws: EvaluationJudgeValidationError.contradictoryComparison(criterionIndex: 1)) {

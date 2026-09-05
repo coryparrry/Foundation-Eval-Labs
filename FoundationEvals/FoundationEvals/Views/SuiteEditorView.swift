@@ -259,7 +259,7 @@ private struct RunReadinessPanel: View {
             let quotaNote = store.draftSuite.modelConfiguration.provider == .privateCloudCompute
                 ? " It uses an additional cloud request and quota for each response."
                 : ""
-            return requestSummary + " The AI rubric uses greedy decoding with tools off, with at most one correction if its exact-text evidence is contradictory." + quotaNote
+            return requestSummary + " The AI rubric uses greedy decoding with tools off, with at most one repair if its assessment fails validation." + quotaNote
         }
         return requestSummary
     }

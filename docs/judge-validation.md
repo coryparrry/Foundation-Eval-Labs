@@ -12,11 +12,13 @@ JSON strings support Unicode, punctuation and escaped whitespace. The two senten
 
 Exact rules compare the whole response without trimming, case folding or punctuation changes. They receive 4 for a match and 1 for a mismatch. When every requirement is exact, no model judge is called. For mixed rubrics, only the remaining requirements go to the AI judge; the report records how its check indexes map back to the original rubric. The lowest score across all requirements determines the result, so a literal match cannot hide a failed tool or semantic requirement.
 
-The AI judge returns one structured check per remaining requirement, with its score, explanation, and any claimed exact comparison of the complete response. The app requires complete, unique criterion coverage, scores in range, explanations, and expected comparison text grounded in that requirement or the supplied reference. Swift verifies each declared equality against the actual candidate.
+The AI judge receives a dynamic schema with a required named field for each remaining requirement. Each field contains a score and a short explanation. The application assigns the criterion indexes, then requires every assessment, a score from 1 to 4, and a non-empty explanation. Schema guidance is included explicitly in the request and counted in both admission and runtime context budgets.
 
-A contradictory exact comparison permits one correction in a fresh session, supplied with equality facts calculated by Swift. Both attempts remain in the trace; their token usage is added together. A second contradiction, malformed evidence, or a correction that cannot fit the context budget stops scoring. Inconsistent or incomplete evidence produces **Unscored** with `invalidJudgeOutput`. It is not counted as a genuine failed evaluation. The overall accepted score is the lowest criterion score: a literal match cannot override a separately failed tool, format or factual requirement. A response matching the reference no longer bypasses the entire rubric. Use the existing Exact text scoring mode when equality is the whole evaluation contract.
+The generation schema does not request literal-comparison arrays. Those fields caused the on-device model to invent irrelevant comparisons for semantic tasks and sometimes exhaust its output budget completing empty arrays. Recognized standalone exact rules continue to use Swift equality. Compound or unrecognized exact requirements remain model-scored; their equality claims are not independently guaranteed. The decoder still validates any unexpected supplied comparison evidence instead of ignoring it.
 
-The model still interprets free-text requirements and selects its evidence. These checks reject declared contradictions; they do not make every semantic judgment correct or guarantee that the model declares every incorrect prose claim. Historical reports keep their original scores. The new judge prompt version prevents treating old and new judging policies as an unchanged comparison contract.
+A rejected assessment permits one repair in a fresh session with the validation failure supplied as feedback. Unexpected contradictory comparison evidence uses application-computed equality facts. Both attempts remain in the trace and their token usage is added together. A second invalid assessment or a repair that cannot fit the context budget stops scoring. Inconsistent or incomplete evidence produces **Unscored** with `invalidJudgeOutput`, not a genuine failed evaluation or a fabricated pass. Model execution failures retain their own error categories. A response matching the reference never bypasses the entire rubric.
+
+The model still interprets free-text requirements. Structural validation does not make every semantic score or explanation correct. Historical reports keep their original scores. The new judge prompt version prevents treating old and new judging policies as an unchanged comparison contract.
 
 Each new evaluation records **Scoring evidence** in the result UI and JSON/MCP report:
 
@@ -40,3 +42,25 @@ The app currently persists selected subject response/tool/profile/timing fields 
 Neither API provides arbitrary hidden model internals or reasoning that the provider does not expose. Opaque reasoning signatures are not readable reasoning.
 
 Apple sources were checked through Xcode MCP and the Xcode 27 beta 6 interface on 2026-09-05.
+
+## End-to-end regression verification — 2026-09-05
+
+The reported run `9FF20D93-91BA-4678-97DD-48BA9CB38E9F` generated its subject response successfully but returned only two of three judge checks. Intermediate live tests also exposed spurious literal comparisons and incomplete comparison arrays; prompt changes alone did not resolve them. The accepted configuration uses required named scalar assessments and keeps recognized standalone exact rules in application code.
+
+Official Xcode MCP `RunAllTests` on the final Swift changes: **175 passed, 0 failed, 0 skipped**. An independent read-only review found no outstanding code findings. `git diff --check` passed.
+
+| Live scenario | Saved run | Observed result |
+|---|---|---|
+| Original sky rubric, three repetitions | `B434BE7B-519E-4554-BB61-86F470D62C54` | 3/3 passed, all three requirements scored per response, no judge errors |
+| Incorrect answer, four requirements | `0DAB9336-CC02-40FC-9F40-4FBA73E5BA7A` | Berlin-as-France-capital candidate failed with score 1; four assessments recorded |
+| Mixed exact and semantic tool rubric | `5BF23A4F-EF02-408A-B30C-9E7FF17070D0` | Score 4; actual fixture call, profile transition and streamed response; original indexes preserved |
+| Exact pass and mismatch | `BFE34888-A58A-430A-A90C-AB25C6965630` | READY passed with 4, OTHER failed with 1; neither used a model judge |
+| Local HTTP, guided output and streaming | `E3738CF6-483D-49DE-8CD5-8748BA3151D6` | Actual HTTP POST recorded; structured delivered status passed |
+| Unavailable HTTP endpoint | `DA720853-7BC1-48EC-A829-1964F766DF14` | Connection error and failed tool trace preserved; no fabricated pass |
+| Imported text and reference lookup | `173BC64F-750D-4F29-B35F-2D0047CF981E` | Actual reference-tool call returned the supplied verification code; passed |
+| Cancellation | `C92274DA-DFDA-4BBF-82A6-82CC0FDC40C9` | Terminal cancelled state, no active run left |
+| Final installed app, primary Run button | `62F3BAC5-C519-4EC8-9DA6-A01AB9873EC4` | Original suite passed with three assessments and zero issues; JSON export and MCP agree after restart |
+
+The installed app passed `codesign --verify --strict --deep`. Its executable debug library SHA-256 matched the final Xcode product: `dad7d69da34b4f567a2c478987dad72d1cd9b712e85bed6aa258150e67423cf7`. After restart, the installed app was the sole app instance and owned the loopback MCP listener. The UI showed the saved successful result and a comparable baseline against the three-repetition run. The original suite revision and empty attachment set were restored, and the temporary HTTP test server was stopped.
+
+These checks establish the exercised on-device workflows, not universal semantic grading accuracy. The negative test also showed the model can let one factual failure influence another criterion's explanation. Calibrate subjective rubrics before using their scores as release gates. Private Cloud Compute and image/PDF ingestion were not exercised in this live matrix.

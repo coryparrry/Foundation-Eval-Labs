@@ -3,31 +3,25 @@ import FoundationModels
 
 @Generable
 struct EvaluationJudgeExactComparison {
-    @Guide(description: "Copy the complete required response literally from this rubric requirement or the verified reference. Do not paraphrase it, add punctuation, or copy it from the candidate response. This comparison concerns the whole candidate response, not a substring.")
     var expectedText: String
-
-    @Guide(description: "Whether the entire candidate response exactly equals expectedText, preserving capitalization, punctuation, and whitespace. The application independently verifies this comparison.")
     var matches: Bool
 }
 
 @Generable
-struct EvaluationJudgeCriterionVerdict {
-    @Guide(description: "The one-based index of this numbered rubric requirement. Include each requirement exactly once.", .range(1...4))
-    var criterionIndex: Int
-
-    @Guide(description: "Score this requirement independently: 4 fully met, 3 met with only minor non-material issues, 2 materially unmet, 1 fundamentally violated. Account for all parts of the requirement, including non-text requirements such as tool use.", .range(1...4))
+struct EvaluationJudgeAssessment {
     var score: Int
-
-    @Guide(description: "Explain the evidence for this requirement's score. Do not invent requirements. Every claim that the whole candidate exactly equals or differs from a required literal must also appear in exactComparisons.")
     var rationale: String
+    var exactComparisons: [EvaluationJudgeExactComparison]?
+}
 
-    @Guide(description: "Represent every claimed whole-response literal equality or inequality as a comparison. Use an empty array for semantic or other non-literal assessments. Never use these comparisons for substring matching, case-insensitive matching, or meaning equivalence.")
+struct EvaluationJudgeCriterionVerdict {
+    var criterionIndex: Int
+    var score: Int
+    var rationale: String
     var exactComparisons: [EvaluationJudgeExactComparison]
 }
 
-@Generable
 struct EvaluationJudgeVerdict {
-    @Guide(description: "Evaluate every numbered rubric requirement independently, exactly once, in numbered order. Do not add a requirement from the subject input or your own preferences.")
     var checks: [EvaluationJudgeCriterionVerdict]
 }
 
@@ -52,6 +46,7 @@ struct EvaluationValidatedJudgment: Equatable, Sendable {
 
 enum EvaluationJudgeValidationError: Error, LocalizedError, Equatable, Sendable {
     case invalidCriteria
+    case invalidAssessment(criterionIndex: Int)
     case invalidCriterionCoverage
     case invalidScore(criterionIndex: Int)
     case emptyRationale(criterionIndex: Int)
@@ -63,6 +58,8 @@ enum EvaluationJudgeValidationError: Error, LocalizedError, Equatable, Sendable 
         switch self {
         case .invalidCriteria:
             "The judge needs between one and four non-empty rubric requirements."
+        case .invalidAssessment(let index):
+            "The judge returned an incomplete or invalid assessment for requirement \(index)."
         case .invalidCriterionCoverage:
             "The judge did not assess every rubric requirement exactly once."
         case .invalidScore(let index):
@@ -80,6 +77,53 @@ enum EvaluationJudgeValidationError: Error, LocalizedError, Equatable, Sendable 
 }
 
 enum EvaluationJudge {
+    // Required named fields make coverage part of constrained decoding. The model
+    // supplies evidence; the application owns requirement identity and ordering.
+    static func schema(criterionCount: Int) throws -> GenerationSchema {
+        guard (1...4).contains(criterionCount) else {
+            throw EvaluationJudgeValidationError.invalidCriteria
+        }
+        // Recognized standalone literal rules are evaluated by EvaluationExactCriterion first.
+        // Do not ask the semantic judge to generate irrelevant literal comparisons.
+        let assessment = DynamicGenerationSchema(name: "RequirementAssessment", properties: [
+            .init(name: "score", description: "4 fully met; 3 minor issue; 2 material failure; 1 fundamental failure.",
+                  schema: DynamicGenerationSchema(type: Int.self, guides: [.range(1...4)])),
+            .init(name: "rationale", description: "One short sentence explaining the evidence for this requirement alone.",
+                  schema: DynamicGenerationSchema(type: String.self))
+        ])
+        let properties = (1...criterionCount).map { index in
+            DynamicGenerationSchema.Property(
+                name: "requirement\(index)",
+                description: "Assess only numbered rubric requirement \(index).",
+                schema: DynamicGenerationSchema(referenceTo: "RequirementAssessment"),
+                isOptional: false
+            )
+        }
+        return try GenerationSchema(
+            root: DynamicGenerationSchema(name: "RubricAssessment", properties: properties),
+            dependencies: [assessment]
+        )
+    }
+
+    static func verdict(from content: GeneratedContent, criterionCount: Int) throws -> EvaluationJudgeVerdict {
+        guard (1...4).contains(criterionCount) else {
+            throw EvaluationJudgeValidationError.invalidCriteria
+        }
+        let checks = try (1...criterionCount).map { index in
+            let assessment: EvaluationJudgeAssessment
+            do {
+                assessment = try content.value(EvaluationJudgeAssessment.self, forProperty: "requirement\(index)")
+            } catch {
+                throw EvaluationJudgeValidationError.invalidAssessment(criterionIndex: index)
+            }
+            return EvaluationJudgeCriterionVerdict(
+                criterionIndex: index, score: assessment.score,
+                rationale: assessment.rationale, exactComparisons: assessment.exactComparisons ?? []
+            )
+        }
+        return EvaluationJudgeVerdict(checks: checks)
+    }
+
     static func validate(
         verdict: EvaluationJudgeVerdict,
         criteria: [String],
