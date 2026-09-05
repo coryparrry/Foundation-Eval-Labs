@@ -44,3 +44,17 @@ xcodebuild -project FoundationEvals/FoundationEvals.xcodeproj -scheme Foundation
 ```
 
 The first two commands had the pre-fix disclosure failure; the final targeted command succeeded. `plutil -lint FoundationEvals/FoundationEvals.xcodeproj/project.pbxproj`, `bash -n script/build_and_run.sh`, and `git diff --check` also passed.
+
+## Live Release MCP verification — 2026-09-05
+
+The reviewed Release executable (SHA-256 `3e9702de6ea271ab4bbe8f54b6908b514526e570e15e4d0c9f85efb890133683`) was launched in place of the older Debug app. The listener process was verified against that exact Release app path before evaluation and after restart.
+
+- MCP initialization negotiated `2025-06-18`; discovery returned ten tools and the run-resource template.
+- Codex called `eval_get_state`, `eval_start_run`, and `eval_get_run` through the installed connector against the Release process.
+- Run `E1FB286C-727D-46C6-901E-4E6532EB1588` executed the existing one-case on-device sky-color example with AI rubric scoring. It completed in about seven seconds with **3/4, passed**, using `On-device · AFM 3 Core Advanced`.
+- The result included measured generation (3,393 ms), preparation (624 ms), scoring (2,938 ms), and separate subject/judge token usage.
+- Repeating `eval_start_run` with the same UUID returned `duplicate` and the completed run rather than creating another evaluation.
+- After quitting and reopening the Release app, `eval_get_run` returned the same complete payload. `resources/read` through the advertised run template matched the saved JSON on disk.
+- The saved run SHA-256 was `058e39cb0212136b5a43deaf4792092baddfc87f3dc4b3786aaeca1b2bbfedf4`. The suite revision stayed unchanged. The storage comparison found exactly one new run file, no removed files, and no changes to existing history files; `suite.json` was rewritten during the app lifecycle.
+
+The Release app remains running and the test result remains in history. This verifies the on-device evaluation, judge, idempotency, result-resource, and restart-persistence path. Live cancellation, attachment mutations, custom providers, and notarized distribution were not exercised by this smoke test.
