@@ -1,54 +1,7 @@
+import CoreGraphics
 import Foundation
 import FoundationModels
-
-enum EvaluationSchemaBuilder {
-    static func schema(
-        fields: [EvaluationSchemaField],
-        name: String
-    ) throws -> GenerationSchema {
-        guard EvaluationIdentifier.isValid(
-            name,
-            maximumCharacters: EvaluationCustomToolDefinition.maximumNameCharacters
-        ) else {
-            throw EvaluationFeatureConfigurationError.invalid(
-                "Schema names must be identifiers of \(EvaluationCustomToolDefinition.maximumNameCharacters) characters or fewer."
-            )
-        }
-        guard fields.count <= EvaluationCustomToolDefinition.maximumParameters else {
-            throw EvaluationFeatureConfigurationError.invalid(
-                "A schema can define at most \(EvaluationCustomToolDefinition.maximumParameters) fields."
-            )
-        }
-        if let issue = EvaluationFeatureConfiguration.schemaValidationIssue(
-            fields: fields,
-            context: "Schema \(name)"
-        ) {
-            throw EvaluationFeatureConfigurationError.invalid(issue)
-        }
-
-        let properties = fields.map { field in
-            DynamicGenerationSchema.Property(
-                name: field.name,
-                description: field.description.isEmpty ? nil : field.description,
-                schema: dynamicSchema(for: field.type),
-                isOptional: field.isOptional
-            )
-        }
-        let root = DynamicGenerationSchema(name: name, properties: properties)
-        return try GenerationSchema(root: root, dependencies: [])
-    }
-
-    private static func dynamicSchema(
-        for type: EvaluationSchemaFieldType
-    ) -> DynamicGenerationSchema {
-        switch type {
-        case .string: DynamicGenerationSchema(type: String.self)
-        case .integer: DynamicGenerationSchema(type: Int.self)
-        case .number: DynamicGenerationSchema(type: Double.self)
-        case .boolean: DynamicGenerationSchema(type: Bool.self)
-        }
-    }
-}
+import ImageIO
 
 enum EvaluationCustomToolCallOutcome: String, Codable, Equatable, Sendable {
     case running
@@ -74,16 +27,19 @@ actor EvaluationCustomToolRecorder {
     private static let maximumRecordedRejections = 4
 
     let maximumCalls: Int
-    private var acceptedCallCount = 0
+    private let callLimiter: EvaluationToolCallLimiter
     private var rejectedCallCount = 0
     private var traces: [EvaluationCustomToolCallTrace] = []
 
-    init(maximumCalls: Int) {
+    init(maximumCalls: Int, callLimiter: EvaluationToolCallLimiter? = nil) {
         self.maximumCalls = min(max(0, maximumCalls), Self.maximumCallsPerSample)
+        self.callLimiter = callLimiter ?? EvaluationToolCallLimiter(maximumCalls: maximumCalls)
     }
 
-    func beginCall(toolName: String, argumentsJSON: String) throws -> UUID {
-        guard acceptedCallCount < maximumCalls else {
+    func beginCall(toolName: String, argumentsJSON: String) async throws -> UUID {
+        do {
+            try await callLimiter.beginCall()
+        } catch {
             if rejectedCallCount < Self.maximumRecordedRejections {
                 rejectedCallCount += 1
                 traces.append(
@@ -103,7 +59,6 @@ actor EvaluationCustomToolRecorder {
             throw EvaluationCustomToolError.callLimitReached(maximum: maximumCalls)
         }
 
-        acceptedCallCount += 1
         let id = UUID()
         traces.append(
             EvaluationCustomToolCallTrace(
@@ -136,6 +91,13 @@ actor EvaluationCustomToolRecorder {
         traces[index].outcome = outcome
         traces[index].errorDescription = errorDescription?.boundedUTF8(
             to: Self.maximumErrorBytes
+        )
+    }
+
+    func updateArguments(id: UUID, argumentsJSON: String) {
+        guard let index = traces.firstIndex(where: { $0.id == id }) else { return }
+        traces[index].argumentsJSON = argumentsJSON.boundedUTF8(
+            to: EvaluationCustomToolDefinition.maximumArgumentBytes
         )
     }
 
@@ -181,6 +143,8 @@ struct EvaluationCustomTool: Tool {
     private let httpClient: any EvaluationCustomToolHTTPClient
     private let tokenCounter: any EvaluationCustomToolTokenCounting
 
+    @SessionProperty(\.history) private var history
+
     init(
         definition: EvaluationCustomToolDefinition,
         recorder: EvaluationCustomToolRecorder
@@ -206,7 +170,9 @@ struct EvaluationCustomTool: Tool {
         self.description = definition.description
         self.parameters = try EvaluationSchemaBuilder.schema(
             fields: definition.parameters,
-            name: definition.name
+            name: definition.name,
+            definitions: definition.schemaDefinitions,
+            representNilExplicitlyInGeneratedContent: definition.representNilExplicitlyInGeneratedContent
         )
         self.definition = definition
         self.recorder = recorder
@@ -238,9 +204,24 @@ struct EvaluationCustomTool: Tool {
         var observedOutput: String?
 
         do {
+            let requestArgumentsJSON: String
+            if Self.containsImageReference(
+                fields: definition.parameters,
+                definitions: definition.schemaDefinitions
+            ) {
+                requestArgumentsJSON = try Self.resolvedArgumentsJSON(
+                    argumentsJSON: argumentsJSON,
+                    fields: definition.parameters,
+                    definitions: definition.schemaDefinitions,
+                    history: history
+                )
+                await recorder.updateArguments(id: callID, argumentsJSON: requestArgumentsJSON)
+            } else {
+                requestArgumentsJSON = argumentsJSON
+            }
             let requestBody = try Self.requestBody(
                 toolName: name,
-                argumentsJSON: argumentsJSON
+                argumentsJSON: requestArgumentsJSON
             )
             let argumentTokenCount = try await tokenCounter.tokenCount(for: argumentsJSON)
             guard argumentTokenCount <= Self.maximumArgumentTokens else {
@@ -328,6 +309,191 @@ struct EvaluationCustomTool: Tool {
             throw EvaluationCustomToolRejectedError.argumentsTooLarge
         }
         return body
+    }
+
+    static func resolvedArgumentsJSON<History: Sequence>(
+        argumentsJSON: String,
+        fields: [EvaluationSchemaField],
+        definitions: [EvaluationSchemaField],
+        history: History
+    ) throws -> String where History.Element == Transcript.Entry {
+        let argumentsData = Data(argumentsJSON.utf8)
+        guard var object = try JSONSerialization.jsonObject(with: argumentsData) as? [String: Any] else {
+            throw EvaluationCustomToolRejectedError.argumentsMustBeObject
+        }
+        let definitionsByName = Dictionary(uniqueKeysWithValues: definitions.map { ($0.name, $0) })
+
+        for field in fields {
+            guard let value = object[field.name] else { continue }
+            object[field.name] = try resolveImageReferences(
+                in: value,
+                field: field,
+                definitions: definitionsByName,
+                history: history
+            )
+        }
+
+        let resolvedData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(decoding: resolvedData, as: UTF8.self)
+    }
+
+    private static func resolveImageReferences<History: Sequence>(
+        in value: Any,
+        field: EvaluationSchemaField,
+        definitions: [String: EvaluationSchemaField],
+        history: History
+    ) throws -> Any where History.Element == Transcript.Entry {
+        switch field.type {
+        case .imageReference:
+            return try resolvedImageMetadata(from: value, fieldName: field.name, history: history)
+        case .object:
+            guard var object = value as? [String: Any] else { return value }
+            for child in field.children {
+                guard let childValue = object[child.name] else { continue }
+                object[child.name] = try resolveImageReferences(
+                    in: childValue,
+                    field: child,
+                    definitions: definitions,
+                    history: history
+                )
+            }
+            return object
+        case .array:
+            guard let itemSchema = field.children.first,
+                  let values = value as? [Any] else { return value }
+            return try values.map {
+                try resolveImageReferences(
+                    in: $0,
+                    field: itemSchema,
+                    definitions: definitions,
+                    history: history
+                )
+            }
+        case .reference:
+            guard let definition = definitions[field.referenceName] else {
+                throw EvaluationFeatureConfigurationError.invalid(
+                    "Image argument references undefined schema \(field.referenceName)."
+                )
+            }
+            return try resolveImageReferences(
+                in: value,
+                field: definition,
+                definitions: definitions,
+                history: history
+            )
+        case .union:
+            guard let choice = field.children.first(where: {
+                containsImageReference(
+                    field: $0,
+                    definitions: definitions,
+                    visitedDefinitions: []
+                ) && valueCouldMatch(value, field: $0, definitions: definitions)
+            }) else { return value }
+            return try resolveImageReferences(
+                in: value,
+                field: choice,
+                definitions: definitions,
+                history: history
+            )
+        case .string, .integer, .number, .boolean, .enumeration, .null:
+            return value
+        }
+    }
+
+    private static func resolvedImageMetadata<History: Sequence>(
+        from value: Any,
+        fieldName: String,
+        history: History
+    ) throws -> [String: Any] where History.Element == Transcript.Entry {
+        let valueData = try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
+        guard let valueJSON = String(data: valueData, encoding: .utf8) else {
+            throw EvaluationCustomToolError.invalidImageReference(field: fieldName)
+        }
+
+        let reference: ImageReference
+        do {
+            reference = try ImageReference(GeneratedContent(json: valueJSON))
+        } catch {
+            throw EvaluationCustomToolError.invalidImageReference(field: fieldName)
+        }
+        guard let attachment = reference.resolved(in: history) else {
+            throw EvaluationCustomToolError.imageReferenceNotFound(label: reference.attachmentLabel)
+        }
+        let image = attachment.cgImage
+        return [
+            "kind": "imageReference",
+            "attachmentLabel": reference.attachmentLabel,
+            "width": image.width,
+            "height": image.height,
+            "orientation": Int(attachment.orientation.rawValue)
+        ]
+    }
+
+    private static func containsImageReference(
+        fields: [EvaluationSchemaField],
+        definitions: [EvaluationSchemaField]
+    ) -> Bool {
+        let definitionsByName = Dictionary(uniqueKeysWithValues: definitions.map { ($0.name, $0) })
+        return fields.contains {
+            containsImageReference(
+                field: $0,
+                definitions: definitionsByName,
+                visitedDefinitions: []
+            )
+        }
+    }
+
+    private static func containsImageReference(
+        field: EvaluationSchemaField,
+        definitions: [String: EvaluationSchemaField],
+        visitedDefinitions: Set<String>
+    ) -> Bool {
+        if field.type == .imageReference { return true }
+        if field.type == .reference,
+           !visitedDefinitions.contains(field.referenceName),
+           let definition = definitions[field.referenceName] {
+            var visited = visitedDefinitions
+            visited.insert(field.referenceName)
+            return containsImageReference(
+                field: definition,
+                definitions: definitions,
+                visitedDefinitions: visited
+            )
+        }
+        return field.children.contains {
+            containsImageReference(
+                field: $0,
+                definitions: definitions,
+                visitedDefinitions: visitedDefinitions
+            )
+        }
+    }
+
+    private static func valueCouldMatch(
+        _ value: Any,
+        field: EvaluationSchemaField,
+        definitions: [String: EvaluationSchemaField]
+    ) -> Bool {
+        switch field.type {
+        case .object:
+            guard let object = value as? [String: Any] else { return false }
+            return field.children.filter { !$0.isOptional }.allSatisfy {
+                object[$0.name] != nil
+            }
+        case .array: return value is [Any]
+        case .imageReference:
+            guard let object = value as? [String: Any] else { return false }
+            return object["attachmentLabel"] is String
+        case .reference:
+            guard let definition = definitions[field.referenceName] else { return false }
+            return valueCouldMatch(value, field: definition, definitions: definitions)
+        case .string, .enumeration: return value is String
+        case .integer: return value is Int
+        case .number: return value is NSNumber
+        case .boolean: return value is Bool
+        case .null: return value is NSNull
+        case .union: return true
+        }
     }
 }
 
@@ -422,6 +588,8 @@ enum EvaluationCustomToolError: LocalizedError, Sendable {
     case invalidHTTPResponse
     case httpStatus(Int)
     case invalidOutputEncoding
+    case invalidImageReference(field: String)
+    case imageReferenceNotFound(label: String)
 
     var errorDescription: String? {
         switch self {
@@ -439,12 +607,17 @@ enum EvaluationCustomToolError: LocalizedError, Sendable {
             "The custom tool endpoint returned HTTP \(status)."
         case .invalidOutputEncoding:
             "The custom tool endpoint returned output that is not UTF-8."
+        case .invalidImageReference(let field):
+            "The custom tool received an invalid image reference for field \(field)."
+        case .imageReferenceNotFound(let label):
+            "The custom tool could not resolve image attachment \(label) in this session."
         }
     }
 
     fileprivate var isPolicyRejection: Bool {
         switch self {
-        case .outputTooLarge, .argumentTokenLimitExceeded, .outputTokenLimitExceeded:
+        case .outputTooLarge, .argumentTokenLimitExceeded, .outputTokenLimitExceeded,
+             .invalidImageReference, .imageReferenceNotFound:
             true
         case .callLimitReached, .invalidHTTPResponse, .httpStatus, .invalidOutputEncoding:
             false

@@ -145,7 +145,7 @@ struct ModelConfigurationTests {
     }
 
     @MainActor
-    @Test func storeMigratesPrivateCloudSuiteToOnDevice() throws {
+    @Test func storePreservesPrivateCloudSelectionAcrossRelaunch() throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "FoundationEvalsTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -165,10 +165,10 @@ struct ModelConfigurationTests {
             from: Data(contentsOf: directory.appending(path: "suite.json"))
         )
 
-        #expect(store.suite.modelConfiguration.provider == .onDevice)
-        #expect(store.suite.modelConfiguration.reasoningLevel == .automatic)
-        #expect(persisted.modelConfiguration.provider == .onDevice)
-        #expect(persisted.modelConfiguration.reasoningLevel == .automatic)
+        #expect(store.suite.modelConfiguration.provider == .privateCloudCompute)
+        #expect(store.suite.modelConfiguration.reasoningLevel == .deep)
+        #expect(persisted.modelConfiguration.provider == .privateCloudCompute)
+        #expect(persisted.modelConfiguration.reasoningLevel == .deep)
     }
 
     @MainActor
@@ -378,6 +378,104 @@ struct EvaluationStorePersistenceTests {
         #expect(!store.saveSuite())
         #expect(store.suite == committed)
         #expect(store.notice?.contains("Could not save the suite") == true)
+        #expect(store.draftSaveFailed)
+
+        let draftURL = directory.appending(path: "suite-draft.json")
+        try FileManager.default.removeItem(at: draftURL)
+        try FileManager.default.createDirectory(at: draftURL, withIntermediateDirectories: false)
+        store.draftSuite.cases[0].conversation.setupTurns.append(EvaluationSetupTurn())
+        #expect(!store.saveSuite())
+        #expect(store.draftSaveFailed)
+        #expect(store.notice?.contains("Could not save the draft") == true)
+
+        try FileManager.default.removeItem(at: draftURL)
+        try FileManager.default.removeItem(at: suiteURL)
+        store.draftSuite.cases[0].conversation.setupTurns[0].prompt = "Prepare context"
+        #expect(store.saveSuite())
+        #expect(!store.draftSaveFailed)
+    }
+
+    @MainActor
+    @Test func invalidConversationDraftRecoversWithoutReplacingCanonicalSuite() throws {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let canonical = store.suite
+
+        store.draftSuite.name = "Recovered draft"
+        store.draftSuite.cases[0].conversation.setupTurns.append(EvaluationSetupTurn())
+        #expect(!store.saveSuite())
+        #expect(!store.draftSaveFailed)
+        #expect(store.suite == canonical)
+        #expect(FileManager.default.fileExists(atPath: directory.appending(path: "suite-draft.json").path))
+
+        let recovered = EvaluationStore(supportDirectory: directory)
+        #expect(recovered.suite == canonical)
+        #expect(recovered.draftSuite.name == "Recovered draft")
+        #expect(recovered.draftSuite.cases[0].conversation.setupTurns.count == 1)
+        #expect(recovered.validationIssue(for: recovered.draftSuite, includeModelReadiness: false) == "Every setup turn needs a prompt.")
+        #expect(recovered.runBlocker != nil)
+
+        recovered.draftSuite.cases[0].conversation.setupTurns[0].prompt = "Prepare context"
+        #expect(recovered.saveSuite())
+        #expect(recovered.suite.name == "Recovered draft")
+        #expect(recovered.draftSuite == recovered.suite)
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "suite-draft.json").path))
+
+        let persisted = EvaluationStore(supportDirectory: directory)
+        #expect(persisted.suite == recovered.suite)
+        #expect(persisted.draftSuite == recovered.suite)
+    }
+
+    @MainActor
+    @Test func canonicalReplacementArchivesAndIgnoresOlderDraft() throws {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let revision = store.suiteRevision
+
+        store.draftSuite.name = "Older local draft"
+        store.draftSuite.cases[0].conversation.setupTurns.append(EvaluationSetupTurn())
+        #expect(!store.saveSuite())
+
+        var replacement = store.suite
+        replacement.name = "Canonical replacement"
+        _ = try store.replaceSuite(replacement, expectedRevision: revision, confirmDeletes: false)
+
+        let staleDraft = try #require(
+            FileManager.default.contentsOfDirectory(atPath: directory.path).first {
+                $0.hasPrefix("suite-draft-stale-")
+            }
+        )
+        try FileManager.default.moveItem(
+            at: directory.appending(path: staleDraft),
+            to: directory.appending(path: "suite-draft.json")
+        )
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.suite.name == "Canonical replacement")
+        #expect(reloaded.draftSuite == reloaded.suite)
+        #expect(reloaded.notice?.contains("An older draft did not match the current suite") == true)
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "suite-draft.json").path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains {
+            $0.hasPrefix("suite-draft-stale-")
+        })
+    }
+
+    @MainActor
+    @Test func malformedDraftIsVisibleAndPreservedForRecovery() throws {
+        let directory = Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let canonical = EvaluationStore(supportDirectory: directory).suite
+        try Data("{not-json".utf8).write(to: directory.appending(path: "suite-draft.json"), options: .atomic)
+
+        let reloaded = EvaluationStore(supportDirectory: directory)
+
+        #expect(reloaded.suite == canonical)
+        #expect(reloaded.draftSuite == canonical)
+        #expect(reloaded.notice?.contains("The saved draft could not be read") == true)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains {
+            $0.hasPrefix("suite-draft-unreadable-")
+        })
     }
 
     @MainActor

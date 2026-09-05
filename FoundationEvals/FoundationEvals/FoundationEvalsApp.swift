@@ -11,13 +11,14 @@ import SwiftUI
 @main
 @MainActor
 struct FoundationEvalsApp: App {
+    @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(FoundationEvalsAppDelegate.self) private var appDelegate
     @State private var store: EvaluationStore
     @State private var mcpSettings: MCPSettingsController
     private let mcpRuntime: FoundationEvalsMCPRuntime
 
     init() {
-        let store = EvaluationStore()
+        let store = EvaluationStore(supportDirectory: Self.acceptanceStorageDirectory)
         let runtime = FoundationEvalsMCPRuntime(store: store)
         let settings = MCPSettingsController(
             serverControl: MCPServerControl(
@@ -31,8 +32,19 @@ struct FoundationEvalsApp: App {
         mcpRuntime = runtime
     }
 
+    private static var acceptanceStorageDirectory: URL? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--evaluation-storage"),
+           arguments.indices.contains(index + 1), arguments[index + 1].hasPrefix("/") {
+            return URL(filePath: arguments[index + 1], directoryHint: .isDirectory)
+        }
+        #endif
+        return nil
+    }
+
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "evaluation-main", for: String.self) { _ in
             ContentView(store: store)
                 .task(id: mcpSettings.installationState) {
                     appDelegate.runtime = mcpRuntime
@@ -40,7 +52,10 @@ struct FoundationEvalsApp: App {
                     guard mcpSettings.installationState == .installed else { return }
                     await mcpSettings.startServer()
                 }
+        } defaultValue: {
+            "main"
         }
+        .defaultLaunchBehavior(.presented)
         .defaultSize(width: 1_180, height: 780)
         .commands {
             CommandGroup(replacing: .newItem) { }
@@ -48,6 +63,7 @@ struct FoundationEvalsApp: App {
             CommandMenu("Evaluation") {
                 Button("Show Suite Editor") {
                     store.selection = .suite
+                    openWindow(id: "evaluation-main", value: "main")
                 }
                 .keyboardShortcut("1", modifiers: [.command])
 

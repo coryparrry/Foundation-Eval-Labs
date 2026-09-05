@@ -58,6 +58,39 @@ struct EvaluationCase: Identifiable, Codable, Hashable, Sendable {
     var name: String
     var prompt: String
     var expected: String
+    var conversation = EvaluationConversationConfiguration()
+    var fieldAssertions: [EvaluationFieldAssertion]? = nil
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        prompt: String,
+        expected: String,
+        conversation: EvaluationConversationConfiguration = .init(),
+        fieldAssertions: [EvaluationFieldAssertion]? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.prompt = prompt
+        self.expected = expected
+        self.conversation = conversation
+        self.fieldAssertions = fieldAssertions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, prompt, expected, conversation, fieldAssertions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        prompt = try container.decode(String.self, forKey: .prompt)
+        expected = try container.decode(String.self, forKey: .expected)
+        conversation = try container.decodeIfPresent(EvaluationConversationConfiguration.self, forKey: .conversation)
+            ?? EvaluationConversationConfiguration()
+        fieldAssertions = try container.decodeIfPresent([EvaluationFieldAssertion].self, forKey: .fieldAssertions)
+    }
 }
 
 enum EvaluationAttachmentKind: String, Codable, Sendable {
@@ -85,6 +118,8 @@ struct EvaluationAttachmentImportResult: Codable, Sendable {
 enum EvaluationModelProvider: String, Codable, CaseIterable, Identifiable, Sendable {
     case onDevice
     case privateCloudCompute
+    case customHTTP
+    case coreAI
 
     var id: Self { self }
 
@@ -92,6 +127,8 @@ enum EvaluationModelProvider: String, Codable, CaseIterable, Identifiable, Senda
         switch self {
         case .onDevice: "On device"
         case .privateCloudCompute: "Private Cloud Compute"
+        case .customHTTP: "Custom local HTTP model"
+        case .coreAI: "Core AI model"
         }
     }
 
@@ -101,6 +138,10 @@ enum EvaluationModelProvider: String, Codable, CaseIterable, Identifiable, Senda
             "Keeps prompts on this Mac. The current system model supports tools but not explicit reasoning levels."
         case .privateCloudCompute:
             "Supports explicit reasoning and a larger context. Requires a network connection, available quota, and Apple's managed entitlement."
+        case .customHTTP:
+            "Uses the local inference service you configure. Its declared capabilities and context limit must match that service."
+        case .coreAI:
+            "Loads a local Core AI language model resource folder exported for Apple's runtime."
         }
     }
 }
@@ -110,6 +151,7 @@ enum EvaluationReasoningLevel: String, Codable, CaseIterable, Identifiable, Send
     case light
     case moderate
     case deep
+    case custom
 
     var id: Self { self }
 
@@ -119,6 +161,7 @@ enum EvaluationReasoningLevel: String, Codable, CaseIterable, Identifiable, Send
         case .light: "Light"
         case .moderate: "Moderate"
         case .deep: "Deep"
+        case .custom: "Custom provider value"
         }
     }
 }
@@ -170,7 +213,7 @@ enum EvaluationContextPolicy: String, Codable, CaseIterable, Identifiable, Senda
 }
 
 struct EvaluationModelConfiguration: Codable, Equatable, Sendable {
-    static let currentBehaviorVersion = "foundation-evals-v8"
+    static let currentBehaviorVersion = "foundation-evals-v9"
 
     var provider: EvaluationModelProvider = .onDevice
     var reasoningLevel: EvaluationReasoningLevel = .automatic
@@ -186,6 +229,9 @@ struct EvaluationModelConfiguration: Codable, Equatable, Sendable {
     var referenceMode: EvaluationReferenceMode = .inline
     var contextPolicy: EvaluationContextPolicy = .fitReferences
     var maximumToolCalls = 2
+    var customization: EvaluationModelCustomization? = nil
+    var customProvider: EvaluationCustomProviderConfiguration? = nil
+    var coreAI: EvaluationCoreAIConfiguration? = nil
 }
 
 struct EvaluationSuite: Codable, Equatable, Sendable {
@@ -305,6 +351,9 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var timing: EvaluationSampleTiming? = nil
     var featureTrace: EvaluationFeatureTrace? = nil
     var judgeTrace: EvaluationJudgeTrace? = nil
+    var fieldAssertionResults: [EvaluationFieldAssertionResult]? = nil
+    var refusal: EvaluationRefusalTrace? = nil
+    var imageInputTokenCountAvailable: Bool? = nil
 }
 
 struct EvaluationToolCallTrace: Codable, Sendable {
@@ -340,6 +389,7 @@ struct EvaluationExecutionTrace: Codable, Sendable {
     var reservedToolOutputTokens: Int? = nil
     var reservedJudgeOverheadTokens: Int? = nil
     var inputTokenCountingMethod: String? = nil
+    var imageInputTokenCountAvailable: Bool? = nil
     var features: EvaluationFeatureConfiguration? = nil
 }
 

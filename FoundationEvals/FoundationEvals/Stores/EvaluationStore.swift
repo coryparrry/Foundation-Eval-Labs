@@ -28,6 +28,14 @@ final class EvaluationStore {
     var isRunning = false
     var completedSamples = 0
     var totalSamples = 0
+    private(set) var liveResponse: EvaluationLiveResponse?
+    private var loadedCoreAI: CoreAIModelLoadResult?
+    private var loadedCoreAIConfiguration: EvaluationCoreAIConfiguration?
+    private var coreAILoadStatus: CoreAIModelControlStatus = .unconfigured
+    private var cloudContextSize: Int?
+    private(set) var isRefreshingCloud = false
+    private var cloudMetadataError: String?
+    private(set) var draftSaveFailed = false
     var notice: String?
     var isImportingFiles = false
     var isProcessingFiles = false
@@ -38,6 +46,7 @@ final class EvaluationStore {
     private let attachmentsDirectory: URL
     private let runsDirectory: URL
     private let activeRunURL: URL
+    private let draftSuiteURL: URL
     private var runTask: Task<Void, Never>?
     private var activeRunSuite: EvaluationSuite?
     private var activeRunResults: [EvaluationSampleResult] = []
@@ -50,6 +59,7 @@ final class EvaluationStore {
         attachmentsDirectory = base.appending(path: "Attachments", directoryHint: .isDirectory)
         runsDirectory = base.appending(path: "Runs", directoryHint: .isDirectory)
         activeRunURL = base.appending(path: "active-run.json")
+        draftSuiteURL = base.appending(path: "suite-draft.json")
 
         var startupNotice: String?
         do {
@@ -62,7 +72,6 @@ final class EvaluationStore {
         let loadedSuite = Self.loadSuite(from: base)
         var initialSuite = loadedSuite.suite ?? EvaluationSuite()
         let migratedRubric = initialSuite.criteria == EvaluationSuite.legacyDefaultCriteria
-        let migratedProvider = initialSuite.modelConfiguration.provider != .onDevice
         if migratedRubric {
             initialSuite.criteria = EvaluationSuite.defaultRubric
             if initialSuite.cases.count == 1,
@@ -71,10 +80,7 @@ final class EvaluationStore {
                 initialSuite.cases[0].expected = EvaluationSuite().cases[0].expected
             }
         }
-        if migratedProvider {
-            initialSuite.modelConfiguration.provider = .onDevice
-            initialSuite.modelConfiguration.reasoningLevel = .automatic
-        }
+        let loadedDraft = Self.loadDraft(from: base, canonicalSuite: initialSuite)
         var loadedRuns = Self.loadRuns(from: runsDirectory)
         let recovery = Self.recoverInterruptedRun(
             from: activeRunURL,
@@ -85,17 +91,17 @@ final class EvaluationStore {
             loadedRuns.runs.append(recoveredRun)
             loadedRuns.runs.sort { $0.startedAt > $1.startedAt }
         }
-        let initialNotice = [startupNotice, loadedSuite.notice, loadedRuns.notice, recovery.notice]
+        let initialNotice = [startupNotice, loadedSuite.notice, loadedDraft.notice, loadedRuns.notice, recovery.notice]
             .compactMap { $0 }
             .joined(separator: "\n")
         suite = initialSuite
-        draftSuite = initialSuite
+        draftSuite = loadedDraft.suite ?? initialSuite
         runs = loadedRuns.runs
         activeRun = nil
         activeRunSuite = nil
         activeRunResults = []
         notice = initialNotice.isEmpty ? nil : initialNotice
-        if migratedRubric || migratedProvider { saveSuite() }
+        if migratedRubric || (loadedSuite.suite == nil && loadedSuite.notice == nil) { saveSuite() }
     }
 
     var modelStatus: ModelStatus {
@@ -105,7 +111,7 @@ final class EvaluationStore {
     func modelStatus(for candidate: EvaluationSuite) -> ModelStatus {
         switch candidate.modelConfiguration.provider {
         case .onDevice:
-            return switch SystemLanguageModel.default.availability {
+            return switch candidate.modelConfiguration.systemModel.availability {
             case .available:
                 ModelStatus(isAvailable: true, label: "On-device model ready", detail: "Prompts and reference-tool lookups stay on this Mac.")
             case .unavailable(.deviceNotEligible):
@@ -136,6 +142,13 @@ final class EvaluationStore {
             }
             switch model.availability {
             case .available:
+                guard cloudContextSize != nil else {
+                    return ModelStatus(
+                        isAvailable: false,
+                        label: isRefreshingCloud ? "Checking cloud model" : "Cloud metadata needed",
+                        detail: cloudMetadataError ?? "Refresh cloud status to load the model's context capacity before running."
+                    )
+                }
                 return ModelStatus(
                     isAvailable: true,
                     label: "Cloud model ready",
@@ -148,6 +161,25 @@ final class EvaluationStore {
             case .unavailable:
                 return ModelStatus(isAvailable: false, label: "Cloud model unavailable", detail: "Private Cloud Compute is unavailable for an unknown reason.")
             }
+        case .customHTTP:
+            let configuration = candidate.modelConfiguration.customProviderSettings
+            if let issue = configuration.validationIssue {
+                return ModelStatus(isAvailable: false, label: "Custom provider needs setup", detail: issue)
+            }
+            return ModelStatus(isAvailable: true, label: "Custom provider configured", detail: "The local endpoint will be contacted when a run starts. Availability and declared capabilities have not been verified by this status.")
+        case .coreAI:
+            if let loaded = coreAIModel(for: candidate) {
+                return ModelStatus(isAvailable: true, label: "Core AI model loaded", detail: "\(loaded.modelName) · \(loaded.contextSize.formatted()) token context. Runs locally on this Mac.")
+            }
+            if candidate.modelConfiguration.coreAISettings == loadedCoreAIConfiguration {
+                if case .failed(let message) = coreAILoadStatus {
+                    return ModelStatus(isAvailable: false, label: "Core AI model could not load", detail: message)
+                }
+                if coreAILoadStatus == .loading {
+                    return ModelStatus(isAvailable: false, label: "Core AI model loading", detail: "Loading and validating the selected model. Run becomes available after loading succeeds.")
+                }
+            }
+            return ModelStatus(isAvailable: false, label: "Core AI model needs loading", detail: "Choose and load a Core AI language model resource folder before running.")
         }
     }
 
@@ -157,8 +189,67 @@ final class EvaluationStore {
 
     func selectedModelCapabilities(for candidate: EvaluationSuite) -> LanguageModelCapabilities {
         switch candidate.modelConfiguration.provider {
-        case .onDevice: SystemLanguageModel.default.capabilities
+        case .onDevice: candidate.modelConfiguration.systemModel.capabilities
         case .privateCloudCompute: PrivateCloudComputeLanguageModel().capabilities
+        case .customHTTP: candidate.modelConfiguration.customProviderSettings.capabilities
+        case .coreAI: coreAIModel(for: candidate)?.capabilities ?? LanguageModelCapabilities([])
+        }
+    }
+
+    var coreAIControlStatus: CoreAIModelControlStatus {
+        guard draftSuite.modelConfiguration.coreAISettings == loadedCoreAIConfiguration else {
+            return draftSuite.modelConfiguration.coreAISettings.hasResources ? .readyToLoad : .unconfigured
+        }
+        return coreAILoadStatus
+    }
+
+    func loadCoreAIModel() async {
+        guard !isRunning, draftSuite.modelConfiguration.provider == .coreAI else { return }
+        let configuration = draftSuite.modelConfiguration.coreAISettings
+        loadedCoreAI = nil
+        loadedCoreAIConfiguration = configuration
+        coreAILoadStatus = .loading
+        do {
+            let result = try await CoreAIModelLoader.shared.load(configuration: configuration)
+            guard loadedCoreAIConfiguration == configuration else { return }
+            loadedCoreAI = result
+            coreAILoadStatus = .loaded(CoreAIModelDescriptor(result: result))
+        } catch {
+            guard loadedCoreAIConfiguration == configuration else { return }
+            coreAILoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    private func coreAIModel(for candidate: EvaluationSuite) -> CoreAIModelLoadResult? {
+        candidate.modelConfiguration.coreAISettings == loadedCoreAIConfiguration ? loadedCoreAI : nil
+    }
+
+    func refreshCloudMetadata() async {
+        guard !isRunning, !isRefreshingCloud,
+              Self.hasAuthorizedPrivateCloudComputeSignature else { return }
+        isRefreshingCloud = true
+        cloudMetadataError = nil
+        defer { isRefreshingCloud = false }
+        do {
+            let size = try await PrivateCloudComputeLanguageModel().contextSize
+            guard size > 0 else {
+                cloudContextSize = nil
+                cloudMetadataError = "The cloud model reported an invalid context capacity."
+                return
+            }
+            cloudContextSize = size
+        } catch {
+            cloudContextSize = nil
+            cloudMetadataError = "Could not load cloud metadata: \(error.localizedDescription)"
+        }
+    }
+
+    private func contextSize(for candidate: EvaluationSuite) -> Int {
+        switch candidate.modelConfiguration.provider {
+        case .onDevice: candidate.modelConfiguration.systemModel.contextSize
+        case .customHTTP: candidate.modelConfiguration.customProviderSettings.contextSize
+        case .coreAI: coreAIModel(for: candidate)?.contextSize ?? 0
+        case .privateCloudCompute: cloudContextSize ?? 0
         }
     }
 
@@ -167,13 +258,14 @@ final class EvaluationStore {
     }
 
     var plannedRequestCount: Int {
-        plannedSampleCount * (draftSuite.needsModelJudge ? 3 : 1)
+        let subjectRequests = draftSuite.repetitions * draftSuite.cases.reduce(0) {
+            $0 + $1.conversation.setupTurns.count + 1
+        }
+        return subjectRequests + (draftSuite.needsModelJudge ? plannedSampleCount * 2 : 0)
     }
 
     var plannedToolCallLimit: Int {
-        let allowances = (draftSuite.modelConfiguration.referenceMode == .lookupTool ? 1 : 0)
-            + (draftSuite.features.tools.isEmpty ? 0 : 1)
-        return plannedSampleCount * draftSuite.modelConfiguration.maximumToolCalls * allowances
+        draftSuite.hasConfiguredTools ? plannedSampleCount * draftSuite.modelConfiguration.maximumToolCalls : 0
     }
 
     var runBlocker: String? {
@@ -366,6 +458,13 @@ final class EvaluationStore {
 
         var candidate = suite
         candidate.attachments.removeAll { $0.id == id }
+        if attachment.kind == .image,
+           !suite.modelConfiguration.customizationSettings.visionSettings.isEmpty,
+           !candidate.attachments.contains(where: { $0.kind == .image }) {
+            throw EvaluationStoreError.invalidSuite(
+                "Turn off OCR and barcode tools in Model before removing the last image."
+            )
+        }
         try commitSuite(candidate)
         draftSuite.attachments.removeAll { $0.id == id }
 
@@ -387,8 +486,20 @@ final class EvaluationStore {
             try commitSuite(draftSuite)
             return true
         } catch EvaluationStoreError.invalidSuite {
+            do {
+                let record = SuiteDraftRecord(
+                    canonicalRevision: try currentSuiteRevision(),
+                    suite: draftSuite
+                )
+                try CanonicalJSON.data(for: record).write(to: draftSuiteURL, options: .atomic)
+                draftSaveFailed = false
+            } catch {
+                draftSaveFailed = true
+                notice = "Could not save the draft: \(error.localizedDescription)"
+            }
             return false
         } catch {
+            draftSaveFailed = true
             notice = "Could not save the suite: \(error.localizedDescription)"
             return false
         }
@@ -445,6 +556,7 @@ final class EvaluationStore {
             activeRun = active
             activeRunSuite = suiteSnapshot
             activeRunResults = []
+            liveResponse = nil
             isRunning = true
             completedSamples = 0
             totalSamples = total
@@ -457,11 +569,15 @@ final class EvaluationStore {
                     suiteRevision: expectedRevision,
                     startedAt: startedAt,
                     suite: suiteSnapshot,
-                    images: images
+                    images: images,
+                    liveResponse: { [weak self] response in
+                        await self?.updateLiveResponse(runID: id, response: response)
+                    }
                 ) { [weak self] result, completed, total in
                     await self?.updateProgress(runID: id, result: result, completed: completed, total: total)
                 }
                 finish(run)
+                liveResponse = nil
             }
             return operation(for: active)
         }
@@ -490,6 +606,11 @@ final class EvaluationStore {
             startedAt: run.startedAt,
             completedAt: run.completedAt
         )
+    }
+
+    private func updateLiveResponse(runID: UUID, response: EvaluationLiveResponse) {
+        guard activeRun?.id == runID, !Task.isCancelled else { return }
+        liveResponse = response
     }
 
     @discardableResult
@@ -591,18 +712,50 @@ final class EvaluationStore {
         includeModelReadiness: Bool = true
     ) -> String? {
         let configuration = candidate.modelConfiguration
+        let capabilities = selectedModelCapabilities(for: candidate)
+        let validateCapabilities = includeModelReadiness || configuration.provider != .coreAI
+            || coreAIModel(for: candidate) != nil
+        if includeModelReadiness, !modelStatus(for: candidate).isAvailable {
+            return modelStatus(for: candidate).detail
+        }
+        if let issue = configuration.customizationSettings.validationIssue { return issue }
+        if configuration.reasoningLevel == .custom,
+           configuration.customizationSettings.reasoningName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Enter the reasoning value supported by the selected provider."
+        }
         if let issue = candidate.features.validationIssue { return issue }
+        if candidate.features.profile.enabled, candidate.features.profile.requireToolFirst,
+           !candidate.hasConfiguredTools {
+            return "A profile that requires a tool call must enable at least one tool."
+        }
+        if candidate.hasConfiguredTools, validateCapabilities, !capabilities.contains(.toolCalling) {
+            return "The selected model does not support tool calling."
+        }
         if candidate.features.tools.contains(where: { $0.name == ReferenceLookupTool.toolName }) {
             return "Custom tools must not use the reserved reference lookup name."
         }
-        if !candidate.features.tools.isEmpty, !SystemLanguageModel.default.capabilities.contains(.toolCalling) {
+        let vision = configuration.customizationSettings.visionSettings
+        if !vision.isEmpty {
+            if validateCapabilities && !capabilities.contains(.toolCalling) { return "Image tools require a model that supports tool calling." }
+            if !candidate.attachments.contains(where: { $0.kind == .image }) {
+                return "Attach an image before enabling OCR or barcode tools."
+            }
+        }
+        if candidate.features.tools.contains(where: { vision.enabledToolNames.contains($0.name) }) {
+            return "Custom tool names must differ from the enabled image tool names."
+        }
+        if !candidate.features.tools.isEmpty, validateCapabilities && !capabilities.contains(.toolCalling) {
             return "The current model does not support custom tool calls."
         }
-        if !candidate.features.outputFields.isEmpty, !SystemLanguageModel.default.capabilities.contains(.guidedGeneration) {
+        if !candidate.features.outputFields.isEmpty, validateCapabilities && !capabilities.contains(.guidedGeneration) {
             return "The current model does not support guided output."
         }
-        if candidate.modelConfiguration.provider != .onDevice {
-            return "Only the on-device model is available for evaluation runs."
+        if configuration.provider == .customHTTP, let issue = configuration.customProviderSettings.validationIssue {
+            return issue
+        }
+        if configuration.customizationSettings.toolCalling == .required,
+           !candidate.hasConfiguredTools {
+            return "Required tool calling needs at least one enabled tool."
         }
         if candidate.cases.isEmpty {
             return "Add at least one evaluation case."
@@ -623,9 +776,24 @@ final class EvaluationStore {
         if candidate.cases.contains(where: { $0.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             return "Every case needs a prompt."
         }
+        if let issue = candidate.cases.lazy.compactMap(\.conversation.validationIssue).first {
+            return issue
+        }
+        if let issue = candidate.cases.lazy.compactMap({ evaluationCase in
+            EvaluationFieldAssertions.validationIssue(
+                assertions: evaluationCase.fieldAssertions ?? [],
+                scoringMode: candidate.scoringMode
+            )
+        }).first {
+            return issue
+        }
         if candidate.instructions.count > Self.maximumFieldCharacters
             || candidate.cases.contains(where: {
-                $0.prompt.count > Self.maximumFieldCharacters || $0.expected.count > Self.maximumFieldCharacters
+                $0.prompt.count > Self.maximumFieldCharacters
+                    || $0.expected.count > Self.maximumFieldCharacters
+                    || $0.conversation.setupTurns.contains(where: {
+                        $0.prompt.count > Self.maximumFieldCharacters
+                    })
             }) {
             return "Instructions, prompts, and expected responses must each contain \(Self.maximumFieldCharacters) characters or fewer."
         }
@@ -633,7 +801,10 @@ final class EvaluationStore {
             + candidate.version.count
             + candidate.instructions.count
             + candidate.criteria.count
-            + candidate.cases.reduce(0) { $0 + $1.name.count + $1.prompt.count + $1.expected.count }
+            + candidate.cases.reduce(0) {
+                $0 + $1.name.count + $1.prompt.count + $1.expected.count + $1.conversation.textCharacterCount
+                    + ($1.fieldAssertions ?? []).reduce(0) { $0 + $1.pointer.count + $1.expectedValue.count }
+            }
         if suiteCharacterCount > Self.maximumCombinedSuiteCharacters {
             return "Keep the suite text to \(Self.maximumCombinedSuiteCharacters) characters or fewer."
         }
@@ -651,7 +822,7 @@ final class EvaluationStore {
             if candidate.rubricCriteria.contains(where: { $0.count > Self.maximumRubricRequirementCharacters }) {
                 return "Keep each rubric requirement to \(Self.maximumRubricRequirementCharacters) characters or fewer."
             }
-            if !SystemLanguageModel.default.capabilities.contains(.guidedGeneration) {
+            if validateCapabilities && !capabilities.contains(.guidedGeneration) {
                 return "The selected model does not support the guided output required by the AI judge."
             }
         }
@@ -674,14 +845,19 @@ final class EvaluationStore {
             return "Probability threshold must be between 0.01 and 1."
         }
         if configuration.reasoningLevel != .automatic,
-           !SystemLanguageModel.default.capabilities.contains(.reasoning) {
-            return "The on-device model does not support explicit reasoning levels. Choose Automatic."
+           validateCapabilities && !capabilities.contains(.reasoning) {
+            return "The selected model does not support explicit reasoning levels. Choose Automatic."
         }
-        if !candidate.features.tools.isEmpty, !(1...4).contains(configuration.maximumToolCalls) {
-            return "The tool call limit must be between one and four calls per response."
+        if candidate.features.profile.enabled,
+           candidate.features.profile.afterToolReasoningLevel != .automatic,
+           validateCapabilities && !capabilities.contains(.reasoning) {
+            return "The selected model does not support explicit reasoning levels in the active profile. Choose Automatic."
+        }
+        if candidate.hasConfiguredTools, !(1...4).contains(configuration.maximumToolCalls) {
+            return "The tool call limit must be between one and four calls per sample."
         }
         if configuration.referenceMode == .lookupTool {
-            if !SystemLanguageModel.default.capabilities.contains(.toolCalling) {
+            if validateCapabilities && !capabilities.contains(.toolCalling) {
                 return "The selected model does not support tool calling."
             }
             if !candidate.attachments.contains(where: { $0.kind == .text }) {
@@ -692,11 +868,11 @@ final class EvaluationStore {
             }
         }
         let allocation = configuration.contextAllocation(
-            contextSize: SystemLanguageModel.default.contextSize,
+            contextSize: contextSize(for: candidate),
             includesModelJudge: candidate.needsModelJudge,
-            customToolOutputReserve: candidate.features.tools.isEmpty ? 0 : configuration.maximumToolCalls * EvaluationCustomTool.contextTokenReservePerCall
+            sharedToolOutputReserve: candidate.sharedToolOutputReserve
         )
-        if allocation.effectiveInputLimit < 512 {
+        if contextSize(for: candidate) > 0, allocation.effectiveInputLimit < 512 {
             return "Reduce the response limit or reference-tool call limit so at least 512 input tokens remain."
         }
         if candidate.attachments.count > Self.maximumAttachments {
@@ -709,7 +885,7 @@ final class EvaluationStore {
             return "Every attachment needs a unique ID."
         }
         if candidate.attachments.contains(where: { $0.kind == .image }),
-           !SystemLanguageModel.default.capabilities.contains(.vision) {
+           validateCapabilities && !capabilities.contains(.vision) {
             return "The selected model does not support image input."
         }
         let status = modelStatus(for: candidate)
@@ -890,12 +1066,32 @@ final class EvaluationStore {
         if let issue = validationIssue(for: candidate, includeModelReadiness: false) {
             throw EvaluationStoreError.invalidSuite(issue)
         }
+        let canonicalChanged = candidate != suite
         do {
             let data = try CanonicalJSON.data(for: candidate)
             try data.write(to: supportDirectory.appending(path: "suite.json"), options: .atomic)
             suite = candidate
+            draftSaveFailed = false
         } catch {
+            draftSaveFailed = true
             throw EvaluationStoreError.persistence(error.localizedDescription)
+        }
+
+        guard FileManager.default.fileExists(atPath: draftSuiteURL.path) else { return }
+        if candidate == draftSuite {
+            do {
+                try FileManager.default.removeItem(at: draftSuiteURL)
+            } catch {
+                notice = "The suite was saved, but its older draft marker could not be removed: \(error.localizedDescription)"
+            }
+        } else if canonicalChanged {
+            let backup = supportDirectory.appending(path: "suite-draft-stale-\(UUID().uuidString).json")
+            do {
+                try FileManager.default.moveItem(at: draftSuiteURL, to: backup)
+                notice = "The suite changed while a local draft was incomplete. The older draft was ignored and preserved as \(backup.lastPathComponent)."
+            } catch {
+                notice = "The suite changed while a local draft was incomplete. The older draft will be ignored, but it could not be moved: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -984,6 +1180,35 @@ final class EvaluationStore {
             let preserved = (try? FileManager.default.copyItem(at: url, to: backup)) != nil
             let suffix = preserved ? " It was preserved as \(backup.lastPathComponent)." : ""
             return (nil, "The saved suite could not be read.\(suffix)")
+        }
+    }
+
+    private static func loadDraft(
+        from directory: URL,
+        canonicalSuite: EvaluationSuite
+    ) -> (suite: EvaluationSuite?, notice: String?) {
+        let url = directory.appending(path: "suite-draft.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return (nil, nil) }
+        do {
+            let record = try CanonicalJSON.decode(SuiteDraftRecord.self, from: Data(contentsOf: url))
+            guard record.canonicalRevision == (try revision(for: canonicalSuite)) else {
+                let backup = directory.appending(path: "suite-draft-stale-\(UUID().uuidString).json")
+                do {
+                    try FileManager.default.moveItem(at: url, to: backup)
+                    return (nil, "An older draft did not match the current suite. It was ignored and preserved as \(backup.lastPathComponent).")
+                } catch {
+                    return (nil, "An older draft did not match the current suite and was ignored. It could not be moved: \(error.localizedDescription)")
+                }
+            }
+            return (record.suite, nil)
+        } catch {
+            let backup = directory.appending(path: "suite-draft-unreadable-\(UUID().uuidString).json")
+            do {
+                try FileManager.default.moveItem(at: url, to: backup)
+                return (nil, "The saved draft could not be read. It was preserved as \(backup.lastPathComponent).")
+            } catch {
+                return (nil, "The saved draft could not be read and was left unchanged for recovery: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -1147,6 +1372,11 @@ private struct ActiveRunRecord: Codable, Sendable {
     var summary: EvaluationActiveRun
     var suite: EvaluationSuite
     var results: [EvaluationSampleResult]?
+}
+
+private struct SuiteDraftRecord: Codable {
+    var canonicalRevision: String
+    var suite: EvaluationSuite
 }
 
 private struct SuiteRevisionPayload: Codable {

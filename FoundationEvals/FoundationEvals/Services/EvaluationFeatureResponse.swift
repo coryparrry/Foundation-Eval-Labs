@@ -5,6 +5,10 @@ struct EvaluationFeatureTrace: Codable, Sendable {
     var customToolCalls: [EvaluationCustomToolCallTrace] = []
     var profileEvents: [String] = []
     var firstContentMilliseconds: Double? = nil
+    var transcript: EvaluationTranscriptTrace? = nil
+    var conversation: EvaluationConversationTrace? = nil
+    var spotlightSearch: EvaluationSpotlightSearchTrace? = nil
+    var builtinToolCalls: [EvaluationBuiltinToolTrace]? = nil
 }
 
 struct EvaluationFeatureResponse {
@@ -17,29 +21,49 @@ struct EvaluationFeatureResponse {
         session: LanguageModelSession,
         prompt: Prompt,
         suite: EvaluationSuite,
-        metadata: [String: any ConvertibleToGeneratedContent]
+        metadata: [String: any ConvertibleToGeneratedContent],
+        onPartial: @Sendable (String) async -> Void = { _ in }
     ) async throws -> Self {
         var options = suite.modelConfiguration.generationOptions
         // A dynamic profile supplies its own changing tool policy.
         options.toolCallingMode = suite.features.profile.enabled ? nil
-            : (suite.features.tools.isEmpty && suite.modelConfiguration.referenceMode != .lookupTool
-                ? .disallowed : .allowed)
-        var context = suite.modelConfiguration.contextOptions
-        context.includeSchemaInPrompt = true
+            : suite.modelConfiguration.toolCallingMode(
+                hasTools: !suite.features.tools.isEmpty || suite.modelConfiguration.referenceMode == .lookupTool
+                    || !suite.modelConfiguration.customizationSettings.visionSettings.isEmpty
+                    || suite.features.spotlightSearch.enabled
+            )
+        let context = suite.modelConfiguration.contextOptions
         let schema = suite.features.outputFields.isEmpty ? nil
-            : try EvaluationSchemaBuilder.schema(fields: suite.features.outputFields, name: "EvaluationOutput")
+            : try EvaluationSchemaBuilder.schema(
+                fields: suite.features.outputFields,
+                name: "EvaluationOutput",
+                definitions: suite.features.outputSchemaDefinitions,
+                representNilExplicitlyInGeneratedContent:
+                    suite.features.outputRepresentNilExplicitlyInGeneratedContent
+            )
         if suite.features.streamResponse {
+            var requestMetadata = metadata
+            if suite.modelConfiguration.provider == .customHTTP {
+                requestMetadata[EvaluationHTTPLiveResponseObserver.generationStartedMetadataKey] =
+                    Date().timeIntervalSinceReferenceDate
+            }
             if let schema {
                 return try await collect(
                     session.streamResponse(to: prompt, schema: schema, options: options,
-                                           contextOptions: context, metadata: metadata),
+                                           contextOptions: context, metadata: requestMetadata),
                     text: { $0.rawContent.jsonString },
-                    finalText: { $0.jsonString }
+                    finalText: { $0.jsonString },
+                    onPartial: onPartial
                 )
             }
             return try await collect(
-                session.streamResponse(to: prompt, options: options, contextOptions: context, metadata: metadata),
-                text: { $0.content }, finalText: { $0 }
+                session.streamResponse(
+                    to: prompt,
+                    options: options,
+                    contextOptions: context,
+                    metadata: requestMetadata
+                ),
+                text: { $0.content }, finalText: { $0 }, onPartial: onPartial
             )
         }
         if let schema {
@@ -57,10 +81,12 @@ struct EvaluationFeatureResponse {
     private static func collect<Content: Generable>(
         _ stream: LanguageModelSession.ResponseStream<Content>,
         text: (LanguageModelSession.ResponseStream<Content>.Snapshot) -> String,
-        finalText: (Content) -> String
+        finalText: (Content) -> String,
+        onPartial: @Sendable (String) async -> Void
     ) async throws -> Self {
         let started = ContinuousClock.now
         var firstContent: Double?
+        var lastPublication = started
         for try await snapshot in stream {
             try Task.checkCancellation()
             let visible = text(snapshot).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -68,10 +94,28 @@ struct EvaluationFeatureResponse {
                 let elapsed = started.duration(to: .now).components
                 firstContent = Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1e15
             }
+            if lastPublication.duration(to: .now) >= .milliseconds(100) {
+                await onPartial(text(snapshot))
+                try Task.checkCancellation()
+                lastPublication = .now
+            }
         }
         let response = try await stream.collect()
+        try Task.checkCancellation()
+        await onPartial(finalText(response.content))
+        try Task.checkCancellation()
+        let providerFirstContent = response.transcriptEntries.compactMap { entry -> Double? in
+            guard case .response(let response) = entry,
+                  let value = response.metadata[
+                    EvaluationHTTPLiveResponseObserver.firstContentMetadataKey
+                  ] else {
+                return nil
+            }
+            return try? JSONDecoder().decode(Double.self, from: Data(value.jsonString.utf8))
+        }.min()
+        let measuredFirstContent = [firstContent, providerFirstContent].compactMap { $0 }.min()
         return Self(content: finalText(response.content), usage: response.usage,
                     transcriptEntries: Array(response.transcriptEntries),
-                    firstContentMilliseconds: firstContent)
+                    firstContentMilliseconds: measuredFirstContent)
     }
 }

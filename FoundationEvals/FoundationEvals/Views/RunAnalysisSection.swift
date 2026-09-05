@@ -90,6 +90,17 @@ private struct RunAnalysisHeader: View {
                         Text(baselineLabel(baseline)).tag(Optional(baseline.id))
                     }
                 }
+                .accessibilitySelectionActions(
+                    [Optional<UUID>.none] + baselineRuns.map { Optional($0.id) },
+                    selection: $selectedBaselineID,
+                    title: { baselineID in
+                        guard let baselineID,
+                              let baseline = baselineRuns.first(where: { $0.id == baselineID }) else {
+                            return "No baseline"
+                        }
+                        return baselineLabel(baseline)
+                    }
+                )
                 .frame(maxWidth: 310)
             }
         }

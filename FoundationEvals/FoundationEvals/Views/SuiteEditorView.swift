@@ -70,6 +70,7 @@ private enum SuiteEditorPage: String, CaseIterable, Identifiable {
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
     @State private var selectedPage = SuiteEditorPage.cases
+    @State private var selectedCaseID: UUID?
 
     var body: some View {
         ScrollView {
@@ -77,6 +78,9 @@ struct SuiteEditorView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     SuiteOverviewHeader(store: store)
                     RunReadinessPanel(store: store)
+                    if let response = store.liveResponse, store.isRunning {
+                        LiveResponseSection(response: response)
+                    }
 
                     Picker("Editor page", selection: $selectedPage) {
                         ForEach(SuiteEditorPage.allCases) { page in
@@ -99,6 +103,10 @@ struct SuiteEditorView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
+        .onAppear { selectFirstCaseIfNeeded() }
+        .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
+            selectFirstCaseIfNeeded()
+        }
         .navigationTitle("Suite Editor")
         .toolbar {
             RunToolbarContent(store: store)
@@ -115,11 +123,17 @@ struct SuiteEditorView: View {
         }
     }
 
+    private func selectFirstCaseIfNeeded() {
+        if selectedCaseID.flatMap({ id in store.draftSuite.cases.firstIndex(where: { $0.id == id }) }) == nil {
+            selectedCaseID = store.draftSuite.cases.first?.id
+        }
+    }
+
     @ViewBuilder
     private var selectedPageContent: some View {
         switch selectedPage {
         case .cases:
-            CasesSection(store: store)
+            CasesSection(store: store, selectedCaseID: $selectedCaseID)
         case .instructions:
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 350), alignment: .top)],
@@ -130,7 +144,7 @@ struct SuiteEditorView: View {
                 SharedReferenceFilesSection(store: store)
             }
         case .scoring:
-            ScoringSection(store: store)
+            ScoringSection(store: store, selectedCaseID: $selectedCaseID)
         case .model:
             ModelControlsSection(store: store)
         case .features:
@@ -170,9 +184,14 @@ private struct SuiteOverviewHeader: View {
                 Divider()
                     .frame(height: 18)
 
-                Label("Saved automatically on this Mac", systemImage: "lock.laptopcomputer")
+                Label(
+                    store.draftSaveFailed ? "Changes could not be saved"
+                        : store.draftSuite != store.suite ? "Draft saved on this Mac"
+                        : "Saved automatically on this Mac",
+                    systemImage: store.draftSaveFailed ? "exclamationmark.triangle" : "lock.laptopcomputer"
+                )
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(store.draftSaveFailed ? Color.orange : Color.secondary)
             }
         }
         .disabled(store.isRunning || store.isProcessingFiles)
@@ -348,7 +367,7 @@ private struct ModelInstructionsSection: View {
 
 private struct ScoringSection: View {
     @Bindable var store: EvaluationStore
-    @State private var selectedCaseID: UUID?
+    @Binding var selectedCaseID: UUID?
 
     var body: some View {
         EditorSection(
@@ -383,7 +402,7 @@ private struct ScoringSection: View {
                     )
                 }
 
-                if store.draftSuite.scoringMode != .review, let selectedCaseIndex {
+                if let selectedCaseIndex {
                     Divider()
 
                     HStack {
@@ -396,6 +415,17 @@ private struct ScoringSection: View {
                                     .tag(Optional(evaluationCase.id))
                             }
                         }
+                        .accessibilitySelectionActions(
+                            store.draftSuite.cases.map { Optional($0.id) },
+                            selection: $selectedCaseID,
+                            title: { caseID in
+                                guard let caseID,
+                                      let evaluationCase = store.draftSuite.cases.first(where: { $0.id == caseID }) else {
+                                    return "Untitled case"
+                                }
+                                return evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name
+                            }
+                        )
                         .labelsHidden()
                         .frame(maxWidth: 260)
                         .accessibilityIdentifier("Scoring case selector")
@@ -416,27 +446,34 @@ private struct ScoringSection: View {
                             .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 8))
                     }
 
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(store.draftSuite.scoringMode.expectedLabel)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        TextEditor(text: $store.draftSuite.cases[selectedCaseIndex].expected)
-                            .accessibilityLabel(
-                                "\(store.draftSuite.scoringMode.expectedLabel) for \(store.draftSuite.cases[selectedCaseIndex].name.isEmpty ? "Untitled case" : store.draftSuite.cases[selectedCaseIndex].name)"
-                            )
-                            .accessibilityIdentifier("Scoring expected text")
-                            .font(store.draftSuite.scoringMode == .modelJudge ? .body : .body.monospaced())
-                            .frame(minHeight: 72)
-                            .padding(8)
-                            .background(.background, in: .rect(cornerRadius: 8))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.secondary.opacity(0.2))
-                            }
-                        Text(store.draftSuite.scoringMode.expectedHelp)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if store.draftSuite.scoringMode != .review {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(store.draftSuite.scoringMode.expectedLabel)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            TextEditor(text: $store.draftSuite.cases[selectedCaseIndex].expected)
+                                .accessibilityLabel(
+                                    "\(store.draftSuite.scoringMode.expectedLabel) for \(store.draftSuite.cases[selectedCaseIndex].name.isEmpty ? "Untitled case" : store.draftSuite.cases[selectedCaseIndex].name)"
+                                )
+                                .accessibilityIdentifier("Scoring expected text")
+                                .font(store.draftSuite.scoringMode == .modelJudge ? .body : .body.monospaced())
+                                .frame(minHeight: 72)
+                                .padding(8)
+                                .background(.background, in: .rect(cornerRadius: 8))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.secondary.opacity(0.2))
+                                }
+                            Text(store.draftSuite.scoringMode.expectedHelp)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+
+                    FieldAssertionsEditor(
+                        assertions: $store.draftSuite.cases[selectedCaseIndex].fieldAssertions,
+                        scoringMode: store.draftSuite.scoringMode
+                    )
                 }
 
                 if store.draftSuite.scoringMode == .modelJudge {
@@ -445,10 +482,6 @@ private struct ScoringSection: View {
             }
             .disabled(store.isRunning || store.isProcessingFiles)
         }
-        .onAppear { selectFirstCaseIfNeeded() }
-        .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
-            selectFirstCaseIfNeeded()
-        }
     }
 
     private var selectedCaseIndex: Int? {
@@ -456,11 +489,6 @@ private struct ScoringSection: View {
         return store.draftSuite.cases.firstIndex(where: { $0.id == selectedCaseID })
     }
 
-    private func selectFirstCaseIfNeeded() {
-        if selectedCaseID.flatMap({ id in store.draftSuite.cases.firstIndex(where: { $0.id == id }) }) == nil {
-            selectedCaseID = store.draftSuite.cases.first?.id
-        }
-    }
 }
 
 private struct ModelRubricEditor: View {
@@ -483,12 +511,9 @@ private struct ModelRubricEditor: View {
             }
             Spacer()
             Menu("Use Template", systemImage: "wand.and.stars") {
-                ForEach(RubricTemplate.allCases) { template in
-                    Button(template.title) {
-                        store.draftSuite.criteria = template.requirements
-                    }
-                }
+                templateActions
             }
+            .accessibilityActions { templateActions }
         }
 
         TextEditor(text: $store.draftSuite.criteria)
@@ -518,6 +543,16 @@ private struct ModelRubricEditor: View {
         .font(.caption)
         .foregroundStyle(.secondary)
     }
+
+    @ViewBuilder
+    private var templateActions: some View {
+        ForEach(RubricTemplate.allCases) { template in
+            Button(template.title) {
+                guard !store.isRunning, !store.isProcessingFiles else { return }
+                store.draftSuite.criteria = template.requirements
+            }
+        }
+    }
 }
 
 private struct RubricScale: View {
@@ -542,13 +577,13 @@ private struct RubricScale: View {
 
 private struct CasesSection: View {
     @Bindable var store: EvaluationStore
-    @State private var selectedCaseID: UUID?
+    @Binding var selectedCaseID: UUID?
 
     var body: some View {
         EditorSection(
             "Test cases",
             systemImage: "list.bullet.rectangle",
-            description: "Each case gets its own fresh model session and produces one result per repetition."
+            description: "Each case gets its own session. Optional restored history and setup turns run before the scored prompt."
         ) {
             HStack(spacing: 12) {
                 Text("\(store.draftSuite.cases.count) case\(store.draftSuite.cases.count == 1 ? "" : "s")")
@@ -561,14 +596,28 @@ private struct CasesSection: View {
                             .tag(Optional(evaluationCase.id))
                     }
                 }
+                .accessibilitySelectionActions(
+                    store.draftSuite.cases.map { Optional($0.id) },
+                    selection: $selectedCaseID,
+                    title: { caseID in
+                        guard let caseID,
+                              let evaluationCase = store.draftSuite.cases.first(where: { $0.id == caseID }) else {
+                            return "Untitled case"
+                        }
+                        return evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name
+                    }
+                )
                 .labelsHidden()
                 .frame(maxWidth: 260)
                 .accessibilityIdentifier("Case selector")
 
                 Spacer()
                 Button("Add Case", systemImage: "plus") {
+                    let previousCount = store.draftSuite.cases.count
                     store.addCase()
-                    selectedCaseID = store.draftSuite.cases.last?.id
+                    if store.draftSuite.cases.count > previousCount {
+                        selectedCaseID = store.draftSuite.cases.last?.id
+                    }
                 }
                     .disabled(store.isRunning || store.isProcessingFiles)
             }
@@ -580,8 +629,11 @@ private struct CasesSection: View {
                     isDisabled: store.isRunning || store.isProcessingFiles,
                     duplicate: {
                         let id = store.draftSuite.cases[selectedCaseIndex].id
+                        let previousCount = store.draftSuite.cases.count
                         store.duplicateCase(id: id)
-                        selectedCaseID = store.draftSuite.cases[selectedCaseIndex + 1].id
+                        if store.draftSuite.cases.count > previousCount {
+                            selectedCaseID = store.draftSuite.cases[selectedCaseIndex + 1].id
+                        }
                     },
                     remove: {
                         store.removeCase(id: store.draftSuite.cases[selectedCaseIndex].id)
@@ -590,10 +642,6 @@ private struct CasesSection: View {
                 )
             }
         }
-        .onAppear { selectFirstCaseIfNeeded() }
-        .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
-            selectFirstCaseIfNeeded()
-        }
     }
 
     private var selectedCaseIndex: Int? {
@@ -601,11 +649,6 @@ private struct CasesSection: View {
         return store.draftSuite.cases.firstIndex(where: { $0.id == selectedCaseID })
     }
 
-    private func selectFirstCaseIfNeeded() {
-        if selectedCaseID.flatMap({ id in store.draftSuite.cases.firstIndex(where: { $0.id == id }) }) == nil {
-            selectedCaseID = store.draftSuite.cases.first?.id
-        }
-    }
 }
 
 private struct EvaluationCaseEditor: View {
@@ -627,13 +670,9 @@ private struct EvaluationCaseEditor: View {
                 Spacer()
 
                 Menu("Case actions", systemImage: "ellipsis.circle") {
-                    Button("Duplicate Case", systemImage: "plus.square.on.square", action: duplicate)
-                    Divider()
-                    Button("Delete Case", systemImage: "trash", role: .destructive) {
-                        isConfirmingDeletion = true
-                    }
-                    .disabled(!canDelete)
+                    caseActions
                 }
+                .accessibilityActions { caseActions }
                 .labelStyle(.iconOnly)
                 .menuStyle(.borderlessButton)
                 .help("Case actions")
@@ -655,6 +694,11 @@ private struct EvaluationCaseEditor: View {
                     }
             }
 
+            ConversationConfigurationEditor(
+                configuration: $evaluationCase.conversation,
+                isDisabled: isDisabled
+            )
+
         }
         .padding(14)
         .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 11))
@@ -669,6 +713,20 @@ private struct EvaluationCaseEditor: View {
         } message: {
             Text("This removes its prompt and scoring value from the suite.")
         }
+    }
+
+    @ViewBuilder
+    private var caseActions: some View {
+        Button("Duplicate Case", systemImage: "plus.square.on.square") {
+            guard !isDisabled else { return }
+            duplicate()
+        }
+        Divider()
+        Button("Delete Case", systemImage: "trash", role: .destructive) {
+            guard !isDisabled, canDelete else { return }
+            isConfirmingDeletion = true
+        }
+        .disabled(!canDelete)
     }
 }
 

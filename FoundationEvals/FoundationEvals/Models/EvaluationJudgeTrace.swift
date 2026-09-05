@@ -8,6 +8,7 @@ struct EvaluationJudgeTrace: Codable, Sendable {
     var validationError: String? = nil
     var attempts: [EvaluationJudgeAttemptTrace]? = nil
     var judgedCriterionIndexes: [Int]? = nil
+    var refusal: EvaluationRefusalTrace? = nil
 }
 
 struct EvaluationJudgeAttemptTrace: Codable, Sendable {

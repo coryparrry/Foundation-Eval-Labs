@@ -1,4 +1,5 @@
 import SwiftUI
+import FoundationModels
 
 struct ModelControlsSection: View {
     @Bindable var store: EvaluationStore
@@ -11,7 +12,7 @@ struct ModelControlsSection: View {
         EditorSection(
             "Model controls",
             systemImage: "slider.horizontal.3",
-            description: "Make decoding, context, and tool behavior explicit for every run."
+            description: "Choose a model and set the limits for each response."
         ) {
             VStack(alignment: .leading, spacing: 18) {
                 providerAndReasoning
@@ -20,8 +21,24 @@ struct ModelControlsSection: View {
                 Divider()
                 contextAndToolControls
                 capabilitySummary
+                Divider()
+                DisclosureGroup("Advanced model options") {
+                    ModelCustomizationSection(
+                        configuration: $store.draftSuite.modelConfiguration,
+                        supportsReasoning: store.selectedModelCapabilities.contains(.reasoning)
+                    )
+                    .padding(.top, 12)
+                }
+                Text("Saved advanced settings apply even when this section is collapsed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .disabled(store.isRunning || store.isProcessingFiles)
+        }
+        .task(id: configuration.provider) {
+            if configuration.provider == .privateCloudCompute {
+                await store.refreshCloudMetadata()
+            }
         }
     }
 
@@ -30,13 +47,32 @@ struct ModelControlsSection: View {
             Text("Execution")
                 .font(.headline)
 
-            Label("On-device Foundation Model", systemImage: "cpu")
-                .font(.body.weight(.medium))
-                .accessibilityIdentifier("On-device model")
-
-            Text("Prompts stay on this Mac. The framework chooses reasoning automatically and the run trace records any reasoning tokens or readable reasoning it returns.")
+            Picker("Model provider", selection: $store.draftSuite.modelConfiguration.provider) {
+                ForEach(EvaluationModelProvider.allCases) { Text($0.title).tag($0) }
+            }
+            .accessibilityIdentifier("Model provider")
+            .accessibilitySelectionActions(
+                EvaluationModelProvider.allCases,
+                selection: $store.draftSuite.modelConfiguration.provider,
+                title: \.title
+            )
+            Text(configuration.provider.detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if configuration.provider == .customHTTP {
+                CustomProviderControls(configuration: $store.draftSuite.modelConfiguration.customProviderSettings)
+            } else if configuration.provider == .coreAI {
+                CoreAIModelControls(
+                    configuration: $store.draftSuite.modelConfiguration.coreAISettings,
+                    status: store.coreAIControlStatus,
+                    onLoad: { await store.loadCoreAIModel() }
+                )
+            } else if configuration.provider == .privateCloudCompute {
+                Button("Refresh cloud status") {
+                    Task { await store.refreshCloudMetadata() }
+                }
+                .disabled(store.isRefreshingCloud)
+            }
         }
     }
 
@@ -52,6 +88,11 @@ struct ModelControlsSection: View {
                             Text(mode.title).tag(mode)
                         }
                     }
+                    .accessibilitySelectionActions(
+                        EvaluationSamplingMode.allCases,
+                        selection: $store.draftSuite.modelConfiguration.samplingMode,
+                        title: \.title
+                    )
                     .labelsHidden()
                     .frame(width: 190)
                 }
@@ -62,6 +103,11 @@ struct ModelControlsSection: View {
                             Text("\(limit.formatted()) tokens").tag(limit)
                         }
                     }
+                    .accessibilitySelectionActions(
+                        [256, 512, 1_024, 2_048, 4_096],
+                        selection: $store.draftSuite.modelConfiguration.maximumResponseTokens,
+                        title: { "\($0.formatted()) tokens" }
+                    )
                     .labelsHidden()
                     .frame(width: 150)
                 }
@@ -70,8 +116,11 @@ struct ModelControlsSection: View {
             if configuration.samplingMode == .topK {
                 Stepper("Top K: \(configuration.topK)", value: $store.draftSuite.modelConfiguration.topK, in: 1...1_000)
             } else if configuration.samplingMode == .probability {
-                LabeledContent("Probability threshold") {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Probability threshold")
+                    Spacer()
                     Slider(value: $store.draftSuite.modelConfiguration.probabilityThreshold, in: 0.05...1, step: 0.05)
+                        .accessibilityLabel("Probability threshold")
                         .frame(width: 180)
                     Text(configuration.probabilityThreshold.formatted(.number.precision(.fractionLength(2))))
                         .monospacedDigit()
@@ -90,8 +139,11 @@ struct ModelControlsSection: View {
 
             Toggle("Set temperature", isOn: $store.draftSuite.modelConfiguration.temperatureEnabled)
             if configuration.temperatureEnabled {
-                LabeledContent("Temperature") {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Temperature")
+                    Spacer()
                     Slider(value: $store.draftSuite.modelConfiguration.temperature, in: 0...1, step: 0.05)
+                        .accessibilityLabel("Temperature")
                         .frame(width: 180)
                     Text(configuration.temperature.formatted(.number.precision(.fractionLength(2))))
                         .monospacedDigit()
@@ -118,6 +170,11 @@ struct ModelControlsSection: View {
                             Text("\(limit.formatted()) tokens").tag(Int?.some(limit))
                         }
                     }
+                    .accessibilitySelectionActions(
+                        [nil, 2_048, 4_096, 8_192, 16_384, 32_768],
+                        selection: $store.draftSuite.modelConfiguration.maximumInputTokens,
+                        title: { $0.map { "\($0.formatted()) tokens" } ?? "Automatic" }
+                    )
                     .labelsHidden()
                     .frame(width: 170)
                 }
@@ -128,6 +185,11 @@ struct ModelControlsSection: View {
                             Text(policy.title).tag(policy)
                         }
                     }
+                    .accessibilitySelectionActions(
+                        EvaluationContextPolicy.allCases,
+                        selection: $store.draftSuite.modelConfiguration.contextPolicy,
+                        title: \.title
+                    )
                     .labelsHidden()
                     .frame(width: 170)
                 }
@@ -143,7 +205,7 @@ struct ModelControlsSection: View {
 
             if configuration.referenceMode == .lookupTool {
                 Stepper(
-                    "Maximum tool calls per response: \(configuration.maximumToolCalls)",
+                    "Maximum tool calls per sample: \(configuration.maximumToolCalls)",
                     value: $store.draftSuite.modelConfiguration.maximumToolCalls,
                     in: 1...4
                 )
@@ -163,9 +225,15 @@ struct ModelControlsSection: View {
     }
 
     private var referenceToolPrivacyText: String {
-        let destination = configuration.provider == .onDevice
-            ? "Returned excerpts stay on this Mac."
-            : "Returned excerpts are sent to Apple's Private Cloud Compute as model context."
+        let destination: String
+        switch configuration.provider {
+        case .onDevice, .coreAI:
+            destination = "Returned excerpts stay on this Mac."
+        case .customHTTP:
+            destination = "Returned excerpts are sent to the configured local model service."
+        case .privateCloudCompute:
+            destination = "Returned excerpts are sent to Apple's Private Cloud Compute as model context."
+        }
         return "The app searches imported text locally and read-only, returning at most two bounded excerpts per call. \(destination) Saved traces omit query text and returned passages."
     }
 

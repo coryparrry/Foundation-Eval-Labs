@@ -41,7 +41,7 @@ struct MCPFeatureTests {
     }
 
     @MainActor
-    @Test func stateCountsReferenceAndCustomToolCallAllowancesTogether() async throws {
+    @Test func stateReportsOneSharedToolAllowancePerSample() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
@@ -65,7 +65,7 @@ struct MCPFeatureTests {
         let state = await MCPStoreAuthority.make(store: store).call(.getState).structuredContent.objectValue
         let workload = try #require(state?["workload"]?.objectValue)
         #expect(workload["plannedSamples"] == .integer(2))
-        #expect(workload["plannedToolCalls"] == .integer(8))
+        #expect(workload["plannedToolCalls"] == .integer(4))
     }
 
     @MainActor
@@ -93,6 +93,104 @@ struct MCPFeatureTests {
         )
         #expect(store.suite.name == "Legacy replacement")
         #expect(store.suite.features == existingFeatures)
+    }
+
+    @MainActor
+    @Test func fieldAssertionsRoundTripThroughSuiteReplacementAndState() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let authority = MCPStoreAuthority.make(store: store)
+        let assertion = EvaluationFieldAssertion(
+            pointer: "/answer",
+            operation: .equals,
+            expectedValue: #""Paris""#
+        )
+        var declaration = suiteDeclaration(name: "Assertion suite", features: nil)
+        declaration.scoringMode = .exactMatch
+        declaration.cases = [MCPCaseDeclaration(
+            id: UUID(),
+            name: "Structured answer",
+            prompt: "Return JSON.",
+            expected: #"{"answer":"Paris"}"#,
+            fieldAssertions: [assertion]
+        )]
+
+        let arguments = try MCPJSONValue.encode(MCPReplaceSuiteArguments(
+            expectedRevision: store.suiteRevision,
+            confirmDeletes: true,
+            suite: declaration
+        ))
+        let call = try MCPToolCatalog.parse(name: "eval_replace_suite", arguments: arguments)
+        let replacement = await authority.call(call)
+
+        #expect(!replacement.isError)
+        #expect(store.suite.cases[0].fieldAssertions == [assertion])
+
+        let state = try #require((await authority.call(.getState)).structuredContent.objectValue?["suite"])
+        let reportedCase = try #require(state.objectValue?["cases"]?.arrayValue?.first)
+        #expect(reportedCase.objectValue?["fieldAssertions"]?.arrayValue?.count == 1)
+        var reportedSuite = try state.decode(MCPSuiteDeclaration.self)
+        #expect(reportedSuite.cases[0].fieldAssertions == [assertion])
+
+        let replayed = await authority.call(.replaceSuite(.init(
+            expectedRevision: store.suiteRevision,
+            confirmDeletes: false,
+            suite: reportedSuite
+        )))
+        #expect(replayed.structuredContent.objectValue?["outcome"] == .string("duplicate"))
+
+        reportedSuite.name = "Legacy assertion update"
+        reportedSuite.cases[0].fieldAssertions = nil
+        let legacyArguments = try MCPJSONValue.encode(MCPReplaceSuiteArguments(
+            expectedRevision: store.suiteRevision,
+            confirmDeletes: false,
+            suite: reportedSuite
+        ))
+        let legacyCase = try #require(
+            legacyArguments.objectValue?["suite"]?.objectValue?["cases"]?.arrayValue?.first?.objectValue
+        )
+        #expect(legacyCase["fieldAssertions"] == nil)
+        let legacyReplacement = await authority.call(try MCPToolCatalog.parse(
+            name: "eval_replace_suite",
+            arguments: legacyArguments
+        ))
+        #expect(legacyReplacement.structuredContent.objectValue?["outcome"] == .string("committed"))
+        #expect(store.suite.cases[0].fieldAssertions == [assertion])
+
+        reportedSuite.cases[0].fieldAssertions = []
+        let clearArguments = try MCPJSONValue.encode(MCPReplaceSuiteArguments(
+            expectedRevision: store.suiteRevision,
+            confirmDeletes: false,
+            suite: reportedSuite
+        ))
+        let cleared = await authority.call(try MCPToolCatalog.parse(
+            name: "eval_replace_suite",
+            arguments: clearArguments
+        ))
+        #expect(cleared.structuredContent.objectValue?["outcome"] == .string("committed"))
+        #expect(store.suite.cases[0].fieldAssertions == [])
+    }
+
+    @Test func fieldAssertionArgumentsRejectInvalidConfiguration() throws {
+        var declaration = suiteDeclaration(name: "Invalid assertion suite", features: nil)
+        declaration.scoringMode = .exactMatch
+        declaration.cases[0].expected = "Paris"
+        declaration.cases[0].fieldAssertions = [EvaluationFieldAssertion(
+            pointer: "/answer~2value",
+            operation: .exists
+        )]
+
+        #expect(throws: MCPToolInputError.self) {
+            try MCPToolCatalog.parse(
+                name: "eval_replace_suite",
+                arguments: MCPJSONValue.encode(MCPReplaceSuiteArguments(
+                    expectedRevision: "revision",
+                    confirmDeletes: false,
+                    suite: declaration
+                ))
+            )
+        }
     }
 
     @Test func featureArgumentsRejectUnknownFieldsAndEnumValues() throws {
@@ -132,6 +230,23 @@ struct MCPFeatureTests {
 
         #expect(throws: MCPToolInputError.self) {
             try MCPToolCatalog.parse(name: "eval_replace_suite", arguments: invalidEnumArguments)
+        }
+
+        var unknownSpotlightFieldArguments = try featureArguments()
+        suite = try #require(unknownSpotlightFieldArguments.objectValue?["suite"]?.objectValue)
+        features = try #require(suite["features"]?.objectValue)
+        var spotlight = try #require(features["spotlightSearch"]?.objectValue)
+        var guidance = try #require(spotlight["guidance"]?.objectValue)
+        guidance["undeclared"] = .bool(true)
+        spotlight["guidance"] = .object(guidance)
+        features["spotlightSearch"] = .object(spotlight)
+        suite["features"] = .object(features)
+        root = try #require(unknownSpotlightFieldArguments.objectValue)
+        root["suite"] = .object(suite)
+        unknownSpotlightFieldArguments = .object(root)
+
+        #expect(throws: MCPToolInputError.self) {
+            try MCPToolCatalog.parse(name: "eval_replace_suite", arguments: unknownSpotlightFieldArguments)
         }
 
         var nullFeatureArguments = try featureArguments()
@@ -246,6 +361,7 @@ struct MCPFeatureTests {
                     name: "fixture_lookup",
                     description: "Return a canned lookup result.",
                     parameters: [query],
+                    representNilExplicitlyInGeneratedContent: true,
                     mode: .fixture,
                     fixtureResponse: #"{"result":"fixture"}"#
                 ),
@@ -257,11 +373,56 @@ struct MCPFeatureTests {
                     endpoint: "http://127.0.0.1:19000/tool"
                 )
             ],
+            spotlightSearch: EvaluationSpotlightSearchConfiguration(
+                enabled: true,
+                fileSource: .init(enabled: false),
+                coreSpotlightSource: .init(
+                    enabled: true,
+                    maximumResults: 12,
+                    fetchedAttributes: .init(
+                        presets: [.title, .contentType, .lastUsedDate],
+                        customAttributeNames: ["com.example.rank"]
+                    ),
+                    allowMail: false
+                ),
+                guidance: .init(
+                    mode: .dynamic,
+                    focusedDomain: .items,
+                    dynamicProfile: .init(
+                        textMatch: .allowed,
+                        similarityMatch: .allowed,
+                        numericMatch: .unused,
+                        dates: .allowed,
+                        people: .disallowed,
+                        contentType: .allowed,
+                        attributes: .init(presets: [.keywords])
+                    ),
+                    outputFormat: .structured
+                ),
+                contactIdentity: .init(
+                    enabled: true,
+                    displayName: "Taylor Example",
+                    alternateNames: ["Taylor"],
+                    emailAddresses: ["taylor@example.com"],
+                    phoneNumbers: ["+44 20 7946 0958"]
+                ),
+                pipeline: .init(deduplicateItems: true),
+                maximumResponseSize: 2_048
+            ),
             profile: EvaluationProfileConfiguration(
                 enabled: true,
                 name: "Lookup first",
                 afterToolInstructions: "Use the returned evidence in the final answer.",
-                requireToolFirst: true
+                requireToolFirst: true,
+                afterToolSamplingMode: .probability,
+                afterToolTemperatureEnabled: true,
+                afterToolTemperature: 0.35,
+                afterToolSeedEnabled: true,
+                afterToolSeed: 17,
+                afterToolTopK: 25,
+                afterToolProbabilityThreshold: 0.75,
+                afterToolMaximumResponseTokens: 512,
+                afterToolTranscriptErrorPolicy: .preserve
             ),
             outputFields: [
                 EvaluationSchemaField(
@@ -276,6 +437,7 @@ struct MCPFeatureTests {
                     isOptional: true
                 )
             ],
+            outputRepresentNilExplicitlyInGeneratedContent: true,
             prewarm: true,
             streamResponse: true
         )

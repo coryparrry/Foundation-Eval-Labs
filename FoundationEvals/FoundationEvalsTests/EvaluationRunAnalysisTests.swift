@@ -143,6 +143,52 @@ struct EvaluationRunAnalysisTests {
         #expect(comparison.caseComparisons.allSatisfy { $0.change == .notComparable })
     }
 
+    @Test func changedFieldAssertionsAreNotComparable() {
+        var evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")
+        evaluationCase.fieldAssertions = [.init(pointer: "/score", operation: .minimum, expectedValue: "5")]
+        let baseline = makeRun(cases: [evaluationCase], results: [sample(evaluationCase, repetition: 1, status: .passed)])
+        var current = baseline
+        current.id = UUID()
+        current.plannedCases?[0].fieldAssertions?[0].expectedValue = "10"
+
+        let comparison = EvaluationRunComparison(current: current, baseline: baseline)
+        #expect(comparison.compatibility == .partialCoverage)
+        #expect(comparison.caseComparisons.first?.issue == .caseDefinitionChanged)
+        #expect(comparison.meanComparableCasePassRateDelta == nil)
+    }
+
+    @Test func changedConversationSetupOrHistoryIsNotComparable() {
+        let evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")
+        let baseline = makeRun(cases: [evaluationCase], results: [sample(evaluationCase, repetition: 1, status: .passed)])
+        var current = baseline
+        current.id = UUID()
+        current.plannedCases?[0].conversation.setupTurns = [.init(prompt: "Remember Paris")]
+        #expect(EvaluationRunComparison(current: current, baseline: baseline).caseComparisons.first?.issue == .caseDefinitionChanged)
+        current.plannedCases?[0].conversation.setupTurns = []
+        current.plannedCases?[0].conversation.historyPolicy = .resetBeforeFinal
+        #expect(EvaluationRunComparison(current: current, baseline: baseline).caseComparisons.first?.issue == .caseDefinitionChanged)
+    }
+
+    @Test func comparisonIgnoresEditorIDsAndNormalizesAbsentOptionalChecks() throws {
+        var evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")
+        evaluationCase.fieldAssertions = [.init(pointer: "/score", operation: .exists)]
+        evaluationCase.conversation.setupTurns = [.init(prompt: "Remember Paris")]
+        let baseline = makeRun(cases: [evaluationCase], results: [sample(evaluationCase, repetition: 1, status: .passed)])
+        var current = baseline
+        current.id = UUID()
+        current.plannedCases?[0].fieldAssertions?[0].id = UUID()
+        current.plannedCases?[0].conversation.setupTurns[0].id = UUID()
+        #expect(EvaluationRunComparison(current: current, baseline: baseline).compatibility == .compatible)
+
+        var analysis = EvaluationRunAnalysis(run: baseline)
+        analysis.cases[0].conversation = nil
+        analysis.cases[0].fieldAssertions = nil
+        let data = try JSONEncoder().encode(analysis)
+        let decoded = try JSONDecoder().decode(EvaluationRunAnalysis.self, from: data)
+        #expect(decoded.cases[0].conversation == nil)
+        #expect(decoded.cases[0].fieldAssertions == nil)
+    }
+
     @Test func incompleteScoredCoverageCannotAppearImproved() {
         let suiteID = UUID()
         let evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")

@@ -2,6 +2,28 @@ import Foundation
 import FoundationModels
 
 extension EvaluationModelConfiguration {
+    var transcriptErrorHandlingPolicy: TranscriptErrorHandlingPolicy? {
+        switch customizationSettings.errorPolicy {
+        case .automatic: nil
+        case .preserve: .preserveTranscript
+        case .revert: .revertTranscript
+        }
+    }
+    var systemModel: SystemLanguageModel {
+        SystemLanguageModel(
+            useCase: customizationSettings.useCase == .general ? .general : .contentTagging,
+            guardrails: customizationSettings.guardrails == .standard ? .default : .permissiveContentTransformations
+        )
+    }
+
+    func toolCallingMode(hasTools: Bool) -> GenerationOptions.ToolCallingMode {
+        switch customizationSettings.toolCalling {
+        case .automatic: hasTools ? .allowed : .disallowed
+        case .allowed: .allowed
+        case .required: .required
+        case .disallowed: .disallowed
+        }
+    }
     static let judgeResponseTokenReserve = 1_024
     private static let judgeFixedTokenReserve = 1_024
 
@@ -15,7 +37,7 @@ extension EvaluationModelConfiguration {
     }
 
     var contextOptions: ContextOptions {
-        ContextOptions(reasoningLevel: resolvedReasoningLevel)
+        ContextOptions(includeSchemaInPrompt: customizationSettings.schemaPrompt.value, reasoningLevel: resolvedReasoningLevel)
     }
 
     var samplingSummary: String {
@@ -35,11 +57,12 @@ extension EvaluationModelConfiguration {
     func contextAllocation(
         contextSize: Int,
         includesModelJudge: Bool,
-        customToolOutputReserve: Int = 0
+        customToolOutputReserve: Int = 0,
+        sharedToolOutputReserve: Int? = nil
     ) -> (effectiveInputLimit: Int, toolOutputReserve: Int, judgeOverheadReserve: Int) {
-        let toolOutputReserve = (referenceMode == .lookupTool
+        let toolOutputReserve = sharedToolOutputReserve ?? ((referenceMode == .lookupTool
             ? maximumToolCalls * ReferenceLookupTool.contextTokenReservePerCall
-            : 0) + customToolOutputReserve
+            : 0) + customToolOutputReserve)
         let subjectAvailableInput = contextSize - maximumResponseTokens - toolOutputReserve
         let judgeOverheadReserve = includesModelJudge
             ? Self.judgeResponseTokenReserve + Self.judgeFixedTokenReserve + maximumResponseTokens + toolOutputReserve
@@ -74,7 +97,24 @@ extension EvaluationModelConfiguration {
             return .moderate
         case .deep:
             return .deep
+        case .custom:
+            return .custom(customizationSettings.reasoningName)
         }
+    }
+}
+
+extension EvaluationSuite {
+    var hasConfiguredTools: Bool {
+        modelConfiguration.referenceMode == .lookupTool || !features.tools.isEmpty
+            || !modelConfiguration.customizationSettings.visionSettings.isEmpty || features.spotlightSearch.enabled
+    }
+
+    var sharedToolOutputReserve: Int {
+        let perCall = max(
+            modelConfiguration.referenceMode == .lookupTool ? ReferenceLookupTool.contextTokenReservePerCall : 0,
+            hasConfiguredTools ? EvaluationCustomTool.contextTokenReservePerCall : 0
+        )
+        return modelConfiguration.maximumToolCalls * perCall
     }
 }
 

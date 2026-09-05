@@ -267,7 +267,10 @@ private struct RunConfigurationSection: View {
         let toolReserve = execution.reservedToolOutputTokens.flatMap { $0 > 0 ? " · tool reserve \($0) tokens" : nil } ?? ""
         let judgeReserve = execution.reservedJudgeOverheadTokens.flatMap { $0 > 0 ? " · judge reserve \($0) tokens" : nil } ?? ""
         let counting = execution.inputTokenCountingMethod.map { " · \($0)" } ?? ""
-        return "Requested \(requested)\(effective)\(toolReserve)\(judgeReserve)\(counting) · \(configuration.contextPolicy.title) · \(configuration.referenceMode.title)"
+        let imageCounting = execution.imageInputTokenCountAvailable == false
+            ? " · image input token count unavailable"
+            : ""
+        return "Requested \(requested)\(effective)\(toolReserve)\(judgeReserve)\(counting)\(imageCounting) · \(configuration.contextPolicy.title) · \(configuration.referenceMode.title)"
     }
 }
 
@@ -366,12 +369,12 @@ private struct ResultsSection: View {
                                 result: selectedResult,
                                 scoringMode: run.scoringMode,
                                 repetitions: run.repetitions,
-                                passingScore: run.judgePassingScore ?? EvaluationSuite.judgePassingScore
+                                passingScore: run.judgePassingScore ?? EvaluationSuite.judgePassingScore,
+                                modelConfiguration: run.execution?.configuration
                             )
                             .id(selectedResult.id)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.trailing, 8)
-                            .accessibilityIdentifier("Result detail")
                         }
                     }
                 }
@@ -457,6 +460,7 @@ private struct ResultDetail: View {
     let scoringMode: ScoringMode
     let repetitions: Int
     let passingScore: Int
+    let modelConfiguration: EvaluationModelConfiguration?
     @State private var hasCopiedResponse = false
 
     var body: some View {
@@ -475,6 +479,9 @@ private struct ResultDetail: View {
                     message: errorMessage,
                     category: result.errorCategory
                 )
+            }
+            if let refusal = result.refusal {
+                RefusalExplanationView(trace: refusal)
             }
 
             LabeledText(label: "Prompt", text: result.prompt)
@@ -523,9 +530,23 @@ private struct ResultDetail: View {
                     category: result.judgeErrorCategory
                 )
             }
+            if let refusal = result.judgeTrace?.refusal {
+                RefusalExplanationView(trace: refusal, title: "Why the judge refused")
+            }
 
             SampleTraceSection(result: result)
+            if let assertions = result.fieldAssertionResults, !assertions.isEmpty {
+                FieldAssertionEvidenceSection(results: assertions)
+            }
             if let trace = result.featureTrace { FeatureTraceSection(trace: trace) }
+            if let transcript = result.featureTrace?.transcript {
+                TranscriptFeedbackSection(
+                    trace: transcript,
+                    configuration: modelConfiguration,
+                    caseName: result.caseName,
+                    repetition: result.repetition
+                )
+            }
             if let trace = result.judgeTrace { JudgeEvidenceSection(trace: trace) }
         }
         .textSelection(.enabled)

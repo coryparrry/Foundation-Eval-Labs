@@ -72,14 +72,23 @@ private struct FeaturePageContent: View {
         VStack(alignment: .leading, spacing: 0) {
             switch selectedPage {
             case .tools:
-                CustomToolsEditor(
-                    tools: $configuration.tools,
-                    maximumToolCalls: $maximumToolCalls
-                )
+                VStack(alignment: .leading, spacing: 16) {
+                    SpotlightSearchToolEditor(configuration: $configuration.spotlightSearch)
+                    Divider()
+                    CustomToolsEditor(
+                        tools: $configuration.tools,
+                        maximumToolCalls: $maximumToolCalls
+                    )
+                }
             case .profile:
                 ProfileEditor(profile: $configuration.profile)
             case .output:
-                StructuredOutputEditor(fields: $configuration.outputFields)
+                StructuredOutputEditor(
+                    fields: $configuration.outputFields,
+                    definitions: $configuration.outputSchemaDefinitions,
+                    representNilExplicitlyInGeneratedContent:
+                        $configuration.outputRepresentNilExplicitlyInGeneratedContent
+                )
             case .performance:
                 PerformanceEditor(
                     prewarm: $configuration.prewarm,
@@ -102,17 +111,22 @@ private struct CustomToolsEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            LabeledContent("Custom call limit per response") {
-                Picker("Custom call limit per response", selection: $maximumToolCalls) {
+            LabeledContent("Tool call limit per sample") {
+                Picker("Tool call limit per sample", selection: $maximumToolCalls) {
                     ForEach(1...4, id: \.self) { limit in
                         Text(limit.formatted()).tag(limit)
                     }
                 }
+                .accessibilitySelectionActions(
+                    Array(1...4),
+                    selection: $maximumToolCalls,
+                    title: { $0.formatted() }
+                )
                 .labelsHidden()
                 .frame(width: 90)
             }
 
-            Text("All custom tools share this total. Reference lookup tools use a separate allowance with the same saved limit.")
+            Text("Custom, reference, image, and Spotlight tools share this total across all turns in each sample.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -130,6 +144,17 @@ private struct CustomToolsEditor: View {
                                 .tag(Optional(tool.id))
                         }
                     }
+                    .accessibilitySelectionActions(
+                        tools.map { Optional($0.id) },
+                        selection: $selectedToolID,
+                        title: { toolID in
+                            guard let toolID,
+                                  let tool = tools.first(where: { $0.id == toolID }) else {
+                                return "Untitled tool"
+                            }
+                            return tool.name.isEmpty ? "Untitled tool" : tool.name
+                        }
+                    )
                     .labelsHidden()
                     .frame(maxWidth: 260)
                     .accessibilityIdentifier("Tool selector")
@@ -273,11 +298,14 @@ private struct CustomToolEditor: View {
 
             Divider()
 
-            SchemaFieldsEditor(
+            EvaluationSchemaEditor(
                 title: "Arguments",
                 emptyDetail: "No arguments. The model calls this tool without a generated input object.",
                 maximumFields: EvaluationCustomToolDefinition.maximumParameters,
-                fields: $tool.parameters
+                fields: $tool.parameters,
+                definitions: $tool.schemaDefinitions,
+                representNilExplicitlyInGeneratedContent:
+                    $tool.representNilExplicitlyInGeneratedContent
             )
         }
         .padding(14)
@@ -326,6 +354,10 @@ private struct ProfileEditor: View {
                 Text("After a tool completes, the runtime applies these instructions to the model's next transition. Leave them empty to use the default profile transition.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Divider()
+
+                ProfileGenerationOverrides(profile: $profile)
             } else {
                 Text("The run uses the suite instructions without profile transitions.")
                     .font(.callout)
@@ -335,8 +367,154 @@ private struct ProfileEditor: View {
     }
 }
 
+private struct ProfileGenerationOverrides: View {
+    @Binding var profile: EvaluationProfileConfiguration
+
+    private let responseLimits: [Int?] = [nil, 256, 512, 1_024, 2_048, 4_096]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("After-tool generation")
+                .font(.headline)
+
+            Text("Override generation only after the first tool output. Automatic and Inherit keep the run's existing settings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .firstTextBaseline, spacing: 24) {
+                LabeledContent("Sampling") {
+                    Picker("After-tool sampling", selection: $profile.afterToolSamplingMode) {
+                        ForEach(EvaluationSamplingMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .accessibilitySelectionActions(
+                        EvaluationSamplingMode.allCases,
+                        selection: $profile.afterToolSamplingMode,
+                        title: \.title
+                    )
+                    .labelsHidden()
+                    .frame(width: 190)
+                    .accessibilityIdentifier("After-tool sampling")
+                }
+
+                LabeledContent("Response limit") {
+                    Picker("After-tool response limit", selection: $profile.afterToolMaximumResponseTokens) {
+                        ForEach(responseLimits, id: \.self) { limit in
+                            if let limit {
+                                Text("\(limit.formatted()) tokens").tag(Optional(limit))
+                            } else {
+                                Text("Inherit").tag(Optional<Int>.none)
+                            }
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+                    .accessibilityIdentifier("After-tool response limit")
+                }
+            }
+
+            if profile.afterToolSamplingMode == .topK {
+                Stepper(
+                    "Top K: \(profile.afterToolTopK)",
+                    value: $profile.afterToolTopK,
+                    in: 1...1_000
+                )
+                .accessibilityIdentifier("After-tool top K")
+            } else if profile.afterToolSamplingMode == .probability {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Probability threshold")
+                    Spacer()
+                    Slider(
+                        value: $profile.afterToolProbabilityThreshold,
+                        in: 0.01...1,
+                        step: 0.01
+                    )
+                    .frame(width: 180)
+                    .accessibilityLabel("After-tool probability threshold")
+                    Text(profile.afterToolProbabilityThreshold.formatted(
+                        .number.precision(.fractionLength(2))
+                    ))
+                    .monospacedDigit()
+                    .frame(width: 38, alignment: .trailing)
+                }
+            }
+
+            if profile.afterToolSamplingMode == .topK
+                || profile.afterToolSamplingMode == .probability {
+                Toggle("Use a repeatable random seed", isOn: $profile.afterToolSeedEnabled)
+                    .accessibilityIdentifier("After-tool seed enabled")
+                if profile.afterToolSeedEnabled {
+                    LabeledContent("Seed") {
+                        TextField("Seed", value: $profile.afterToolSeed, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 150)
+                            .accessibilityIdentifier("After-tool seed")
+                    }
+                }
+            }
+
+            Toggle("Override temperature", isOn: $profile.afterToolTemperatureEnabled)
+                .accessibilityIdentifier("After-tool temperature enabled")
+            if profile.afterToolTemperatureEnabled {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Temperature")
+                    Spacer()
+                    Slider(value: $profile.afterToolTemperature, in: 0...1, step: 0.05)
+                        .frame(width: 180)
+                        .accessibilityLabel("After-tool temperature")
+                    Text(profile.afterToolTemperature.formatted(
+                        .number.precision(.fractionLength(2))
+                    ))
+                    .monospacedDigit()
+                    .frame(width: 38, alignment: .trailing)
+                }
+            }
+
+            Picker("Reasoning", selection: $profile.afterToolReasoningLevel) {
+                ForEach(EvaluationReasoningLevel.allCases) { level in
+                    Text(level.title).tag(level)
+                }
+            }
+            .accessibilitySelectionActions(
+                EvaluationReasoningLevel.allCases,
+                selection: $profile.afterToolReasoningLevel,
+                title: \.title
+            )
+            .accessibilityIdentifier("After-tool reasoning")
+
+            if profile.afterToolReasoningLevel == .custom {
+                TextField(
+                    "Custom reasoning value",
+                    text: $profile.afterToolCustomReasoning
+                )
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("After-tool custom reasoning")
+            }
+
+            Picker("On generation error", selection: $profile.afterToolTranscriptErrorPolicy) {
+                ForEach(EvaluationTranscriptErrorPolicy.allCases) { policy in
+                    Text(policy.title).tag(policy)
+                }
+            }
+            .accessibilitySelectionActions(
+                EvaluationTranscriptErrorPolicy.allCases,
+                selection: $profile.afterToolTranscriptErrorPolicy,
+                title: \.title
+            )
+            .accessibilityIdentifier("After-tool error policy")
+
+            Text("Explicit reasoning requires model support. Preserve keeps a failed after-tool request in the transcript; Revert restores the transcript to before that request.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 private struct StructuredOutputEditor: View {
     @Binding var fields: [EvaluationSchemaField]
+    @Binding var definitions: [EvaluationSchemaField]
+    @Binding var representNilExplicitlyInGeneratedContent: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -344,11 +522,13 @@ private struct StructuredOutputEditor: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            SchemaFieldsEditor(
+            EvaluationSchemaEditor(
                 title: "Response fields",
                 emptyDetail: "No response schema. Runs return text.",
                 maximumFields: EvaluationFeatureConfiguration.maximumOutputFields,
-                fields: $fields
+                fields: $fields,
+                definitions: $definitions,
+                representNilExplicitlyInGeneratedContent: $representNilExplicitlyInGeneratedContent
             )
         }
     }
@@ -372,83 +552,6 @@ private struct PerformanceEditor: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-    }
-}
-
-private struct SchemaFieldsEditor: View {
-    let title: LocalizedStringResource
-    let emptyDetail: LocalizedStringResource
-    let maximumFields: Int
-    @Binding var fields: [EvaluationSchemaField]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(title)
-                    .font(.headline)
-                Text("\(fields.count) of \(maximumFields)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Add Field", systemImage: "plus") {
-                    fields.append(EvaluationSchemaField())
-                }
-                .disabled(fields.count >= maximumFields)
-            }
-
-            if fields.isEmpty {
-                Text(emptyDetail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 10) {
-                    ForEach($fields) { $field in
-                        SchemaFieldRow(
-                            field: $field,
-                            remove: { fields.removeAll { $0.id == field.id } }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct SchemaFieldRow: View {
-    @Binding var field: EvaluationSchemaField
-    let remove: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                TextField("Field name", text: $field.name)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Schema field name")
-
-                Picker("Type", selection: $field.type) {
-                    ForEach(EvaluationSchemaFieldType.allCases) { type in
-                        Text(type.title).tag(type)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 120)
-                .accessibilityLabel("Schema field type")
-
-                Toggle("Optional", isOn: $field.isOptional)
-                    .fixedSize()
-
-                Button("Delete Field", systemImage: "trash", role: .destructive, action: remove)
-                    .labelStyle(.iconOnly)
-                    .help("Delete this field")
-            }
-
-            TextField("Field description", text: $field.description, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...3)
-                .accessibilityLabel("Schema field description")
-        }
-        .padding(11)
-        .background(.background, in: .rect(cornerRadius: 9))
     }
 }
 

@@ -22,6 +22,21 @@ enum MCPStoreAuthority {
                     expectedRevision: arguments.expectedRevision,
                     confirmDeletes: arguments.confirmDeletes == true
                 )
+                switch store.suite.modelConfiguration.provider {
+                case .privateCloudCompute:
+                    await store.refreshCloudMetadata()
+                case .coreAI where store.suite.modelConfiguration.coreAISettings.hasResources:
+                    switch store.coreAIControlStatus {
+                    case .readyToLoad, .failed:
+                        Task { @MainActor [weak store] in
+                            await store?.loadCoreAIModel()
+                        }
+                    case .unconfigured, .loading, .loaded:
+                        break
+                    }
+                case .onDevice, .customHTTP, .coreAI:
+                    break
+                }
                 return mutation(revision == before ? "duplicate" : "committed", ["revision": .string(revision)])
             case .uploadAttachment(let arguments):
                 let result = try await store.importAttachment(
@@ -99,8 +114,11 @@ enum MCPStoreAuthority {
         let modelStatus = store.modelStatus(for: suite)
         let capabilities = store.selectedModelCapabilities(for: suite)
         let plannedSamples = saturatedProduct(suite.cases.count, suite.repetitions)
-        let toolCallFamilies = (suite.modelConfiguration.referenceMode == .lookupTool ? 1 : 0)
-            + (suite.features.tools.isEmpty ? 0 : 1)
+        let plannedSubjectRequests = saturatedProduct(
+            suite.cases.reduce(0) { $0 + $1.conversation.setupTurns.count + 1 },
+            suite.repetitions
+        )
+        let toolCallFamilies = suite.hasConfiguredTools ? 1 : 0
         let active = try store.activeRun.map { try operationJSON(store.runStatus(id: $0.id)!) } ?? .null
         return readPayload([
             "revision": .string(try store.currentSuiteRevision()),
@@ -115,10 +133,9 @@ enum MCPStoreAuthority {
             ]),
             "workload": .object([
                 "plannedSamples": .integer(Int64(plannedSamples)),
-                "plannedModelRequests": .integer(Int64(saturatedProduct(
-                    plannedSamples,
-                    suite.needsModelJudge ? 3 : 1
-                ))),
+                "plannedModelRequests": .integer(Int64(
+                    plannedSubjectRequests + (suite.needsModelJudge ? saturatedProduct(plannedSamples, 2) : 0)
+                )),
                 "plannedToolCalls": .integer(Int64(
                     saturatedProduct(
                         saturatedProduct(plannedSamples, suite.modelConfiguration.maximumToolCalls),
@@ -129,6 +146,11 @@ enum MCPStoreAuthority {
             "limits": .object([
                 "maximumCases": .integer(Int64(EvaluationStore.maximumCases)),
                 "maximumPlannedSamples": .integer(Int64(EvaluationStore.maximumPlannedSamples)),
+                "maximumSetupTurnsPerCase": .integer(Int64(EvaluationConversationConfiguration.maximumSetupTurns)),
+                "maximumRetainedConversationTurns": .integer(Int64(EvaluationConversationConfiguration.maximumRetainedTurns)),
+                "maximumRestoredTranscriptCharacters": .integer(Int64(
+                    EvaluationConversationConfiguration.maximumRestoredTranscriptCharacters
+                )),
                 "maximumAttachments": .integer(Int64(EvaluationStore.maximumAttachments)),
                 "maximumImages": .integer(Int64(EvaluationStore.maximumImages)),
                 "maximumFieldCharacters": .integer(Int64(EvaluationStore.maximumFieldCharacters)),
@@ -142,6 +164,10 @@ enum MCPStoreAuthority {
                 "maximumCustomTools": .integer(Int64(EvaluationFeatureConfiguration.maximumTools)),
                 "maximumToolParameters": .integer(Int64(EvaluationCustomToolDefinition.maximumParameters)),
                 "maximumOutputFields": .integer(Int64(EvaluationFeatureConfiguration.maximumOutputFields)),
+                "maximumSchemaDepth": .integer(Int64(EvaluationFeatureConfiguration.maximumSchemaDepth)),
+                "maximumSchemaNodes": .integer(Int64(EvaluationFeatureConfiguration.maximumSchemaNodes)),
+                "maximumSchemaArrayElements": .integer(Int64(EvaluationSchemaField.maximumArrayElements)),
+                "maximumSchemaEnumValues": .integer(Int64(EvaluationSchemaField.maximumEnumValues)),
                 "maximumFeatureIdentifierCharacters": .integer(Int64(EvaluationSchemaField.maximumNameCharacters)),
                 "maximumToolDescriptionCharacters": .integer(Int64(
                     EvaluationCustomToolDefinition.maximumDescriptionCharacters
@@ -280,12 +306,25 @@ enum MCPStoreAuthority {
         suite.criteria = declaration.rubricRequirements.joined(separator: "\n")
         suite.scoringMode = ScoringMode(rawValue: declaration.scoringMode.rawValue)!
         suite.repetitions = declaration.repetitions
-        suite.cases = declaration.cases.map {
-            EvaluationCase(id: $0.id, name: $0.name, prompt: $0.prompt, expected: $0.expected)
+        suite.cases = declaration.cases.map { declaredCase in
+            let currentCase = current.cases.first { $0.id == declaredCase.id }
+            return EvaluationCase(
+                id: declaredCase.id,
+                name: declaredCase.name,
+                prompt: declaredCase.prompt,
+                expected: declaredCase.expected,
+                conversation: declaredCase.conversation ?? EvaluationConversationConfiguration(),
+                fieldAssertions: declaredCase.fieldAssertions ?? currentCase?.fieldAssertions
+            )
         }
         var configuration = EvaluationModelConfiguration()
-        configuration.provider = .onDevice
-        configuration.reasoningLevel = .automatic
+        configuration.customization = declaration.modelConfiguration.customization ?? current.modelConfiguration.customization
+        configuration.provider = declaration.modelConfiguration.provider ?? current.modelConfiguration.provider
+        configuration.customProvider = declaration.modelConfiguration.customProvider?.evaluationConfiguration
+            ?? current.modelConfiguration.customProvider
+        configuration.coreAI = declaration.modelConfiguration.coreAI?.evaluationConfiguration
+            ?? current.modelConfiguration.coreAI
+        configuration.reasoningLevel = declaration.modelConfiguration.reasoningLevel ?? current.modelConfiguration.reasoningLevel
         configuration.samplingMode = EvaluationSamplingMode(rawValue: declaration.modelConfiguration.samplingMode.rawValue)!
         configuration.temperatureEnabled = declaration.modelConfiguration.temperatureEnabled
         configuration.temperature = declaration.modelConfiguration.temperature
@@ -312,30 +351,118 @@ enum MCPStoreAuthority {
             "scoringMode": .string(suite.scoringMode.rawValue),
             "repetitions": .integer(Int64(suite.repetitions)),
             "rubricRequirements": .array(suite.rubricCriteria.map(MCPJSONValue.string)),
-            "modelConfiguration": .object([
-                "samplingMode": .string(configuration.samplingMode.rawValue),
-                "temperatureEnabled": .bool(configuration.temperatureEnabled),
-                "temperature": .number(configuration.temperature),
-                "seedEnabled": .bool(configuration.seedEnabled),
-                "seed": .unsigned(configuration.seed),
-                "topK": .integer(Int64(configuration.topK)),
-                "probabilityThreshold": .number(configuration.probabilityThreshold),
-                "maximumResponseTokens": .integer(Int64(configuration.maximumResponseTokens)),
-                "maximumInputTokens": configuration.maximumInputTokens.map { .integer(Int64($0)) } ?? .null,
-                "referenceMode": .string(configuration.referenceMode.rawValue),
-                "contextPolicy": .string(configuration.contextPolicy.rawValue),
-                "maximumToolCalls": .integer(Int64(configuration.maximumToolCalls))
-            ]),
+            "modelConfiguration": modelConfigurationJSON(configuration),
             "features": featureJSON(suite.features),
             "cases": .array(suite.cases.map { item in
-                .object([
+                var conversation: [String: MCPJSONValue] = [
+                    "setupTurns": .array(item.conversation.setupTurns.map { turn in
+                        .object([
+                            "id": .string(turn.id.uuidString),
+                            "prompt": .string(turn.prompt)
+                        ])
+                    }),
+                    "historyPolicy": .string(item.conversation.historyPolicy.rawValue),
+                    "retainedTurnCount": .integer(Int64(item.conversation.retainedTurnCount))
+                ]
+                if let restoredTranscriptJSON = item.conversation.restoredTranscriptJSON {
+                    conversation["restoredTranscriptJSON"] = .string(restoredTranscriptJSON)
+                }
+                if let projection = item.conversation.modelHistoryProjection {
+                    conversation["modelHistoryProjection"] = .object([
+                        "policy": .string(projection.policy.rawValue),
+                        "retainedTurnCount": .integer(Int64(projection.retainedTurnCount))
+                    ])
+                }
+                var value: [String: MCPJSONValue] = [
                     "id": .string(item.id.uuidString),
                     "name": .string(item.name),
                     "prompt": .string(item.prompt),
-                    "expected": .string(item.expected)
-                ])
+                    "expected": .string(item.expected),
+                    "conversation": .object(conversation)
+                ]
+                if let fieldAssertions = item.fieldAssertions {
+                    value["fieldAssertions"] = .array(fieldAssertions.map { assertion in
+                        .object([
+                            "id": .string(assertion.id.uuidString),
+                            "pointer": .string(assertion.pointer),
+                            "operation": .string(assertion.operation.rawValue),
+                            "expectedValue": .string(assertion.expectedValue)
+                        ])
+                    })
+                }
+                return .object(value)
             })
         ])
+    }
+
+    private static func modelConfigurationJSON(
+        _ configuration: EvaluationModelConfiguration
+    ) -> MCPJSONValue {
+        var value: [String: MCPJSONValue] = [
+            "provider": .string(configuration.provider.rawValue),
+            "reasoningLevel": .string(configuration.reasoningLevel.rawValue),
+            "samplingMode": .string(configuration.samplingMode.rawValue),
+            "temperatureEnabled": .bool(configuration.temperatureEnabled),
+            "temperature": .number(configuration.temperature),
+            "seedEnabled": .bool(configuration.seedEnabled),
+            "seed": .unsigned(configuration.seed),
+            "topK": .integer(Int64(configuration.topK)),
+            "probabilityThreshold": .number(configuration.probabilityThreshold),
+            "maximumResponseTokens": .integer(Int64(configuration.maximumResponseTokens)),
+            "maximumInputTokens": configuration.maximumInputTokens.map { .integer(Int64($0)) } ?? .null,
+            "referenceMode": .string(configuration.referenceMode.rawValue),
+            "contextPolicy": .string(configuration.contextPolicy.rawValue),
+            "maximumToolCalls": .integer(Int64(configuration.maximumToolCalls))
+        ]
+        if let customization = configuration.customization {
+            var customizationJSON: [String: MCPJSONValue] = [
+                "useCase": .string(customization.useCase.rawValue),
+                "guardrails": .string(customization.guardrails.rawValue),
+                "schemaPrompt": .string(customization.schemaPrompt.rawValue),
+                "toolCalling": .string(customization.toolCalling.rawValue)
+            ]
+            if let customReasoning = customization.customReasoning {
+                customizationJSON["customReasoning"] = .string(customReasoning)
+            }
+            if let transcriptErrorPolicy = customization.transcriptErrorPolicy {
+                customizationJSON["transcriptErrorPolicy"] = .string(transcriptErrorPolicy.rawValue)
+            }
+            if let saveFullTranscript = customization.saveFullTranscript {
+                customizationJSON["saveFullTranscript"] = .bool(saveFullTranscript)
+            }
+            if let prewarmPrefix = customization.prewarmPrefix {
+                customizationJSON["prewarmPrefix"] = .string(prewarmPrefix)
+            }
+            if let prewarmLeadSeconds = customization.prewarmLeadSeconds {
+                customizationJSON["prewarmLeadSeconds"] = .number(prewarmLeadSeconds)
+            }
+            if let visionTools = customization.visionTools {
+                customizationJSON["visionTools"] = .object([
+                    "ocrEnabled": .bool(visionTools.ocrEnabled),
+                    "barcodeEnabled": .bool(visionTools.barcodeEnabled)
+                ])
+            }
+            value["customization"] = .object(customizationJSON)
+        }
+        if let customProvider = configuration.customProvider {
+            let provider = MCPCustomProviderConfiguration(customProvider)
+            value["customProvider"] = .object([
+                "endpoint": .string(provider.endpoint),
+                "contextSize": .integer(Int64(provider.contextSize)),
+                "capabilities": .array(provider.capabilities.map { .string($0.rawValue) }),
+                "requestTimeoutSeconds": .number(provider.requestTimeoutSeconds)
+            ])
+        }
+        if let coreAI = configuration.coreAI {
+            var coreAIJSON: [String: MCPJSONValue] = [
+                "resourcesPath": .string(coreAI.resourcesPath)
+            ]
+            if let bookmark = coreAI.resourcesBookmark {
+                coreAIJSON["resourcesBookmark"] = .string(bookmark.base64EncodedString())
+            }
+            value["coreAI"] = .object(coreAIJSON)
+        }
+        return .object(value)
     }
 
     private static func featureJSON(_ features: EvaluationFeatureConfiguration) -> MCPJSONValue {
@@ -346,6 +473,10 @@ enum MCPStoreAuthority {
                     "name": .string(tool.name),
                     "description": .string(tool.description),
                     "parameters": .array(tool.parameters.map(schemaFieldJSON)),
+                    "schemaDefinitions": .array(tool.schemaDefinitions.map(schemaFieldJSON)),
+                    "representNilExplicitlyInGeneratedContent": .bool(
+                        tool.representNilExplicitlyInGeneratedContent
+                    ),
                     "mode": .string(tool.mode.rawValue),
                     "fixtureResponse": .string(tool.fixtureResponse),
                     "endpoint": .string(tool.endpoint)
@@ -355,21 +486,138 @@ enum MCPStoreAuthority {
                 "enabled": .bool(features.profile.enabled),
                 "name": .string(features.profile.name),
                 "afterToolInstructions": .string(features.profile.afterToolInstructions),
-                "requireToolFirst": .bool(features.profile.requireToolFirst)
+                "requireToolFirst": .bool(features.profile.requireToolFirst),
+                "afterToolSamplingMode": .string(features.profile.afterToolSamplingMode.rawValue),
+                "afterToolTemperatureEnabled": .bool(features.profile.afterToolTemperatureEnabled),
+                "afterToolTemperature": .number(features.profile.afterToolTemperature),
+                "afterToolSeedEnabled": .bool(features.profile.afterToolSeedEnabled),
+                "afterToolSeed": .unsigned(features.profile.afterToolSeed),
+                "afterToolTopK": .integer(Int64(features.profile.afterToolTopK)),
+                "afterToolProbabilityThreshold": .number(features.profile.afterToolProbabilityThreshold),
+                "afterToolMaximumResponseTokens": features.profile.afterToolMaximumResponseTokens.map {
+                    .integer(Int64($0))
+                } ?? .null,
+                "afterToolReasoningLevel": .string(features.profile.afterToolReasoningLevel.rawValue),
+                "afterToolCustomReasoning": .string(features.profile.afterToolCustomReasoning),
+                "afterToolTranscriptErrorPolicy": .string(features.profile.afterToolTranscriptErrorPolicy.rawValue)
             ]),
+            "spotlightSearch": spotlightSearchJSON(features.spotlightSearch),
             "outputFields": .array(features.outputFields.map(schemaFieldJSON)),
+            "outputSchemaDefinitions": .array(features.outputSchemaDefinitions.map(schemaFieldJSON)),
+            "outputRepresentNilExplicitlyInGeneratedContent": .bool(
+                features.outputRepresentNilExplicitlyInGeneratedContent
+            ),
             "prewarm": .bool(features.prewarm),
             "streamResponse": .bool(features.streamResponse)
         ])
     }
 
-    private static func schemaFieldJSON(_ field: EvaluationSchemaField) -> MCPJSONValue {
+    private static func spotlightSearchJSON(
+        _ configuration: EvaluationSpotlightSearchConfiguration
+    ) -> MCPJSONValue {
         .object([
+            "enabled": .bool(configuration.enabled),
+            "fileSource": .object([
+                "enabled": .bool(configuration.fileSource.enabled),
+                "folderPath": .string(configuration.fileSource.folderPath),
+                "maximumResults": .integer(Int64(configuration.fileSource.maximumResults)),
+                "fetchedAttributes": spotlightAttributeSelectionJSON(
+                    configuration.fileSource.fetchedAttributes
+                )
+            ]),
+            "coreSpotlightSource": .object([
+                "enabled": .bool(configuration.coreSpotlightSource.enabled),
+                "maximumResults": .integer(Int64(configuration.coreSpotlightSource.maximumResults)),
+                "fetchedAttributes": spotlightAttributeSelectionJSON(
+                    configuration.coreSpotlightSource.fetchedAttributes
+                ),
+                "allowMail": .bool(configuration.coreSpotlightSource.allowMail)
+            ]),
+            "guidance": .object([
+                "mode": .string(configuration.guidance.mode.rawValue),
+                "focusedDomain": .string(configuration.guidance.focusedDomain.rawValue),
+                "dynamicProfile": .object([
+                    "textMatch": .string(configuration.guidance.dynamicProfile.textMatch.rawValue),
+                    "similarityMatch": .string(configuration.guidance.dynamicProfile.similarityMatch.rawValue),
+                    "numericMatch": .string(configuration.guidance.dynamicProfile.numericMatch.rawValue),
+                    "dates": .string(configuration.guidance.dynamicProfile.dates.rawValue),
+                    "people": .string(configuration.guidance.dynamicProfile.people.rawValue),
+                    "contentType": .string(configuration.guidance.dynamicProfile.contentType.rawValue),
+                    "attributes": spotlightAttributeSelectionJSON(
+                        configuration.guidance.dynamicProfile.attributes
+                    )
+                ]),
+                "outputFormat": .string(configuration.guidance.outputFormat.rawValue)
+            ]),
+            "contactIdentity": .object([
+                "enabled": .bool(configuration.contactIdentity.enabled),
+                "displayName": .string(configuration.contactIdentity.displayName),
+                "alternateNames": .array(
+                    configuration.contactIdentity.alternateNames.map(MCPJSONValue.string)
+                ),
+                "emailAddresses": .array(
+                    configuration.contactIdentity.emailAddresses.map(MCPJSONValue.string)
+                ),
+                "phoneNumbers": .array(
+                    configuration.contactIdentity.phoneNumbers.map(MCPJSONValue.string)
+                )
+            ]),
+            "pipeline": .object([
+                "deduplicateItems": .bool(configuration.pipeline.deduplicateItems)
+            ]),
+            "maximumResponseSize": .integer(Int64(configuration.maximumResponseSize))
+        ])
+    }
+
+    private static func spotlightAttributeSelectionJSON(
+        _ selection: EvaluationSpotlightAttributeSelection
+    ) -> MCPJSONValue {
+        .object([
+            "presets": .array(selection.presets.map { .string($0.rawValue) }),
+            "customAttributeNames": .array(selection.customAttributeNames.map(MCPJSONValue.string))
+        ])
+    }
+
+    private static func schemaFieldJSON(_ field: EvaluationSchemaField) -> MCPJSONValue {
+        var constraints: [String: MCPJSONValue] = [
+            "stringPattern": .string(field.constraints.stringPattern)
+        ]
+        if let value = field.constraints.integerMinimum {
+            constraints["integerMinimum"] = .integer(Int64(value))
+        }
+        if let value = field.constraints.integerMaximum {
+            constraints["integerMaximum"] = .integer(Int64(value))
+        }
+        if let value = field.constraints.numberMinimum {
+            constraints["numberMinimum"] = .number(value)
+        }
+        if let value = field.constraints.numberMaximum {
+            constraints["numberMaximum"] = .number(value)
+        }
+        if let value = field.constraints.arrayMinimumCount {
+            constraints["arrayMinimumCount"] = .integer(Int64(value))
+        }
+        if let value = field.constraints.arrayMaximumCount {
+            constraints["arrayMaximumCount"] = .integer(Int64(value))
+        }
+        return .object([
             "id": .string(field.id.uuidString),
             "name": .string(field.name),
             "description": .string(field.description),
             "type": .string(field.type.rawValue),
-            "isOptional": .bool(field.isOptional)
+            "isOptional": .bool(field.isOptional),
+            "children": .array(field.children.map(schemaFieldJSON)),
+            "enumValues": .array(field.enumValues.map { value in
+                .object([
+                    "id": .string(value.id.uuidString),
+                    "value": .string(value.value)
+                ])
+            }),
+            "constraints": .object(constraints),
+            "referenceName": .string(field.referenceName),
+            "representNilExplicitlyInGeneratedContent": .bool(
+                field.representNilExplicitlyInGeneratedContent
+            )
         ])
     }
 

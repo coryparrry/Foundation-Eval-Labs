@@ -127,6 +127,9 @@ struct MCPCaseDeclaration: Codable, Sendable {
     var name: String
     var prompt: String
     var expected: String
+    var conversation: EvaluationConversationConfiguration? = nil
+    /// Legacy clients omit this; preserve stored assertions for a matching case ID.
+    var fieldAssertions: [EvaluationFieldAssertion]? = nil
 }
 
 enum MCPScoringMode: String, Codable, CaseIterable, Sendable {
@@ -146,6 +149,14 @@ enum MCPContextPolicy: String, Codable, CaseIterable, Sendable {
 }
 
 struct MCPModelConfiguration: Codable, Sendable {
+    /// Omitted by legacy clients. The authority preserves the currently stored provider in that case.
+    var provider: EvaluationModelProvider? = nil
+    /// Omitted by legacy clients. The authority preserves the currently stored custom-provider settings.
+    var customProvider: MCPCustomProviderConfiguration? = nil
+    /// Omitted by legacy clients. The authority preserves the currently stored Core AI settings.
+    var coreAI: MCPCoreAIConfiguration? = nil
+    var customization: EvaluationModelCustomization? = nil
+    var reasoningLevel: EvaluationReasoningLevel? = nil
     var samplingMode: MCPSamplingMode
     var temperatureEnabled: Bool
     var temperature: Double
@@ -158,6 +169,66 @@ struct MCPModelConfiguration: Codable, Sendable {
     var referenceMode: MCPReferenceMode
     var contextPolicy: MCPContextPolicy
     var maximumToolCalls: Int
+}
+
+enum MCPModelCapability: String, Codable, CaseIterable, Hashable, Sendable {
+    case vision, guidedGeneration, reasoning, toolCalling
+}
+
+struct MCPCustomProviderConfiguration: Codable, Sendable {
+    var endpoint: String
+    var contextSize: Int
+    var capabilities: [MCPModelCapability]
+    var requestTimeoutSeconds: Double
+
+    init(_ configuration: EvaluationCustomProviderConfiguration) {
+        endpoint = configuration.endpoint
+        contextSize = configuration.contextSize
+        capabilities = [
+            configuration.supportsVision ? .vision : nil,
+            configuration.supportsGuidedGeneration ? .guidedGeneration : nil,
+            configuration.supportsReasoning ? .reasoning : nil,
+            configuration.supportsToolCalling ? .toolCalling : nil
+        ].compactMap { $0 }
+        requestTimeoutSeconds = configuration.requestTimeoutSeconds
+    }
+
+    var evaluationConfiguration: EvaluationCustomProviderConfiguration {
+        let declared = Set(capabilities)
+        return EvaluationCustomProviderConfiguration(
+            endpoint: endpoint,
+            contextSize: contextSize,
+            supportsVision: declared.contains(.vision),
+            supportsGuidedGeneration: declared.contains(.guidedGeneration),
+            supportsReasoning: declared.contains(.reasoning),
+            supportsToolCalling: declared.contains(.toolCalling),
+            requestTimeoutSeconds: requestTimeoutSeconds
+        )
+    }
+
+    var validationIssue: String? {
+        guard Set(capabilities).count == capabilities.count else {
+            return "Custom provider capabilities must be unique."
+        }
+        return evaluationConfiguration.validationIssue
+    }
+}
+
+struct MCPCoreAIConfiguration: Codable, Sendable {
+    var resourcesPath: String
+    var resourcesBookmark: Data?
+
+    init(_ configuration: EvaluationCoreAIConfiguration) {
+        resourcesPath = configuration.resourcesPath
+        resourcesBookmark = configuration.resourcesBookmark
+    }
+
+    var evaluationConfiguration: EvaluationCoreAIConfiguration {
+        EvaluationCoreAIConfiguration(
+            resourcesPath: resourcesPath,
+            resourcesBookmark: resourcesBookmark
+        )
+    }
 }
 
 struct MCPUploadAttachmentArguments: Codable, Sendable {
@@ -397,13 +468,24 @@ enum MCPToolCatalog {
                   !$0.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                       && $0.prompt.count <= 32_000
                       && $0.expected.count <= 32_000
+                      && $0.conversation?.validationIssue == nil
+                      && EvaluationFieldAssertions.validationIssue(
+                          assertions: $0.fieldAssertions ?? [],
+                          scoringMode: ScoringMode(rawValue: suite.scoringMode.rawValue)!
+                      ) == nil
               }),
               !suite.scoringMode.requiresExpected
                   || suite.cases.allSatisfy({ !$0.expected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
               Set(suite.cases.map(\MCPCaseDeclaration.id)).count == suite.cases.count,
               suite.name.count + suite.version.count + suite.instructions.count
                 + suite.rubricRequirements.reduce(0, { $0 + $1.count })
-                + suite.cases.reduce(0, { $0 + $1.name.count + $1.prompt.count + $1.expected.count }) <= 256_000,
+                + suite.cases.reduce(0, {
+                        $0 + $1.name.count + $1.prompt.count + $1.expected.count
+                        + ($1.conversation?.textCharacterCount ?? 0)
+                        + ($1.fieldAssertions ?? []).reduce(0) {
+                            $0 + $1.pointer.count + $1.expectedValue.count
+                        }
+                }) <= 256_000,
               suite.modelConfiguration.temperature.isFinite,
               (0...1).contains(suite.modelConfiguration.temperature),
               (1...1_000).contains(suite.modelConfiguration.topK),
@@ -411,6 +493,10 @@ enum MCPToolCatalog {
               (128...4_096).contains(suite.modelConfiguration.maximumResponseTokens),
               suite.modelConfiguration.maximumInputTokens.map({ (512...32_768).contains($0) }) ?? true,
               (1...4).contains(suite.modelConfiguration.maximumToolCalls),
+              suite.modelConfiguration.customProvider?.validationIssue == nil,
+              suite.modelConfiguration.coreAI.map({
+                  $0.resourcesPath.utf8.count <= 32_000
+              }) ?? true,
               suite.features?.validationIssue == nil
         else { throw MCPToolInputError.invalidArguments }
     }
@@ -485,6 +571,50 @@ enum MCPToolCatalog {
             "rubricRequirements": array(items: string(maximumLength: 4_000), minimum: 1, maximum: 4),
             "modelConfiguration": object(
                 properties: [
+                    "provider": string(enum: EvaluationModelProvider.allCases.map(\.rawValue)),
+                    "customProvider": object(
+                        properties: [
+                            "endpoint": string(
+                                "Explicit http://127.0.0.1:<port> generation endpoint.",
+                                maximumLength: 2_048
+                            ),
+                            "contextSize": integer(minimum: 1, maximum: 262_144),
+                            "capabilities": uniqueStringArray(
+                                enum: MCPModelCapability.allRawValues,
+                                maximum: MCPModelCapability.allCases.count
+                            ),
+                            "requestTimeoutSeconds": number(minimum: 0.1, maximum: 60)
+                        ],
+                        required: ["endpoint", "contextSize", "capabilities", "requestTimeoutSeconds"]
+                    ),
+                    "coreAI": object(
+                        properties: [
+                            "resourcesPath": string(
+                                "Path to the exported Core AI model resource folder.",
+                                maximumLength: 32_000
+                            ),
+                            "resourcesBookmark": string(
+                                "Optional base64-encoded security-scoped bookmark for the resource folder.",
+                                contentEncoding: "base64"
+                            )
+                        ],
+                        required: ["resourcesPath"]
+                    ),
+                    "customization": object(properties: [
+                        "useCase": string(enum: EvaluationSystemUseCase.allCases.map(\.rawValue)),
+                        "guardrails": string(enum: EvaluationGuardrails.allCases.map(\.rawValue)),
+                        "schemaPrompt": string(enum: EvaluationSchemaPromptPolicy.allCases.map(\.rawValue)),
+                        "toolCalling": string(enum: EvaluationToolCallingPolicy.allCases.map(\.rawValue)),
+                        "customReasoning": string(maximumLength: 128),
+                        "transcriptErrorPolicy": string(enum: EvaluationTranscriptErrorPolicy.allCases.map(\.rawValue)),
+                        "saveFullTranscript": boolean(),
+                        "prewarmPrefix": string(maximumLength: 4_096),
+                        "prewarmLeadSeconds": number(minimum: 0, maximum: 10),
+                        "visionTools": object(properties: [
+                            "ocrEnabled": boolean(), "barcodeEnabled": boolean()
+                        ], required: ["ocrEnabled", "barcodeEnabled"])
+                    ], required: ["useCase", "guardrails", "schemaPrompt", "toolCalling"]),
+                    "reasoningLevel": string(enum: EvaluationReasoningLevel.allCases.map(\.rawValue)),
                     "samplingMode": string(enum: MCPSamplingMode.allRawValues),
                     "temperatureEnabled": boolean(),
                     "temperature": number(minimum: 0, maximum: 1),
@@ -519,9 +649,21 @@ enum MCPToolCatalog {
                                     maximumLength: EvaluationCustomToolDefinition.maximumDescriptionCharacters
                                 ),
                                 "parameters": array(
-                                    items: schemaFieldSchema,
+                                    items: schemaFieldSchema(
+                                        remainingDepth: EvaluationFeatureConfiguration.maximumSchemaDepth
+                                    ),
                                     minimum: 0,
                                     maximum: EvaluationCustomToolDefinition.maximumParameters
+                                ),
+                                "schemaDefinitions": array(
+                                    items: schemaFieldSchema(
+                                        remainingDepth: EvaluationFeatureConfiguration.maximumSchemaDepth
+                                    ),
+                                    minimum: 0,
+                                    maximum: EvaluationCustomToolDefinition.maximumParameters
+                                ),
+                                "representNilExplicitlyInGeneratedContent": boolean(
+                                    "Include null for missing optional properties in the tool argument object."
                                 ),
                                 "mode": string(
                                     "Fixture returns a canned result. Local HTTP executes developer-configured code on an explicit loopback endpoint.",
@@ -554,14 +696,46 @@ enum MCPToolCatalog {
                                 "Instructions applied after a tool response.",
                                 maximumLength: EvaluationProfileConfiguration.maximumInstructionsBytes
                             ),
-                            "requireToolFirst": boolean()
+                            "requireToolFirst": boolean(),
+                            "afterToolSamplingMode": string(
+                                enum: EvaluationSamplingMode.allCases.map(\.rawValue)
+                            ),
+                            "afterToolTemperatureEnabled": boolean(),
+                            "afterToolTemperature": number(minimum: 0, maximum: 1),
+                            "afterToolSeedEnabled": boolean(),
+                            "afterToolSeed": integer("Unsigned after-tool sampling seed.", minimum: 0),
+                            "afterToolTopK": integer(minimum: 1, maximum: 1_000),
+                            "afterToolProbabilityThreshold": number(minimum: 0.01, maximum: 1),
+                            "afterToolMaximumResponseTokens": nullableInteger(minimum: 128, maximum: 4_096),
+                            "afterToolReasoningLevel": string(
+                                enum: EvaluationReasoningLevel.allCases.map(\.rawValue)
+                            ),
+                            "afterToolCustomReasoning": string(
+                                maximumLength: EvaluationProfileConfiguration.maximumCustomReasoningBytes
+                            ),
+                            "afterToolTranscriptErrorPolicy": string(
+                                enum: EvaluationTranscriptErrorPolicy.allCases.map(\.rawValue)
+                            )
                         ],
                         required: ["enabled", "name", "afterToolInstructions", "requireToolFirst"]
                     ),
+                    "spotlightSearch": spotlightSearchSchema,
                     "outputFields": array(
-                        items: schemaFieldSchema,
+                        items: schemaFieldSchema(
+                            remainingDepth: EvaluationFeatureConfiguration.maximumSchemaDepth
+                        ),
                         minimum: 0,
                         maximum: EvaluationFeatureConfiguration.maximumOutputFields
+                    ),
+                    "outputSchemaDefinitions": array(
+                        items: schemaFieldSchema(
+                            remainingDepth: EvaluationFeatureConfiguration.maximumSchemaDepth
+                        ),
+                        minimum: 0,
+                        maximum: EvaluationCustomToolDefinition.maximumParameters
+                    ),
+                    "outputRepresentNilExplicitlyInGeneratedContent": boolean(
+                        "Include null for missing optional properties in the response object."
                     ),
                     "prewarm": boolean("Prewarm the on-device Foundation Models session before timed generation."),
                     "streamResponse": boolean("Stream response snapshots while retaining the final generated response.")
@@ -574,7 +748,71 @@ enum MCPToolCatalog {
                         "id": uuid("Stable case UUID."),
                         "name": string("Case name."),
                         "prompt": string("Evaluation prompt.", maximumLength: 32_000),
-                        "expected": string("Expected or reference answer.", maximumLength: 32_000)
+                        "expected": string("Expected or reference answer.", maximumLength: 32_000),
+                        "fieldAssertions": array(
+                            items: object(
+                                properties: [
+                                    "id": uuid("Stable field assertion UUID."),
+                                    "pointer": string(
+                                        "JSON Pointer into the complete serialized response.",
+                                        maximumLength: EvaluationStore.maximumFieldCharacters
+                                    ),
+                                    "operation": string(
+                                        "Assertion operation.",
+                                        enum: EvaluationFieldAssertionOperation.allCases.map(\.rawValue)
+                                    ),
+                                    "expectedValue": string(
+                                        "JSON value or text used by the assertion operation.",
+                                        maximumLength: EvaluationStore.maximumFieldCharacters
+                                    )
+                                ],
+                                required: ["id", "pointer", "operation", "expectedValue"]
+                            ),
+                            minimum: 0,
+                            maximum: EvaluationFieldAssertions.maximumAssertions
+                        ),
+                        "conversation": object(
+                            properties: [
+                                "setupTurns": array(
+                                    items: object(
+                                        properties: [
+                                            "id": uuid("Stable setup-turn UUID."),
+                                            "prompt": string(
+                                                "Prompt generated before the scored prompt.",
+                                                maximumLength: EvaluationConversationConfiguration.maximumPromptCharacters
+                                            )
+                                        ],
+                                        required: ["id", "prompt"]
+                                    ),
+                                    minimum: 0,
+                                    maximum: EvaluationConversationConfiguration.maximumSetupTurns
+                                ),
+                                "restoredTranscriptJSON": string(
+                                    "Optional raw Foundation Models Transcript JSON used to seed history.",
+                                    maximumLength: EvaluationConversationConfiguration.maximumRestoredTranscriptCharacters
+                                ),
+                                "historyPolicy": string(enum: EvaluationHistoryPolicy.allCases.map(\.rawValue)),
+                                "retainedTurnCount": integer(
+                                    "Complete prompt-to-response turns retained before the scored prompt.",
+                                    minimum: 1,
+                                    maximum: EvaluationConversationConfiguration.maximumRetainedTurns
+                                ),
+                                "modelHistoryProjection": object(
+                                    properties: [
+                                        "policy": string(
+                                            enum: EvaluationModelHistoryProjectionPolicy.allCases.map(\.rawValue)
+                                        ),
+                                        "retainedTurnCount": integer(
+                                            "Complete turns exposed to the model on each request.",
+                                            minimum: 1,
+                                            maximum: EvaluationConversationConfiguration.maximumRetainedTurns
+                                        )
+                                    ],
+                                    required: ["policy", "retainedTurnCount"]
+                                )
+                            ],
+                            required: ["setupTurns", "historyPolicy", "retainedTurnCount"]
+                        )
                     ], required: ["id", "name", "prompt", "expected"]
                 ),
                 minimum: 1,
@@ -587,8 +825,111 @@ enum MCPToolCatalog {
         ]
     )
 
-    private static let schemaFieldSchema = object(
+    private static let spotlightSearchSchema = object(
         properties: [
+            "enabled": boolean(),
+            "fileSource": object(
+                properties: [
+                    "enabled": boolean(),
+                    "folderPath": string("Absolute local folder used by the Spotlight file source."),
+                    "maximumResults": integer(
+                        minimum: 1,
+                        maximum: EvaluationSpotlightSearchConfiguration.maximumResultCount
+                    ),
+                    "fetchedAttributes": spotlightAttributeSelectionSchema
+                ],
+                required: ["enabled", "folderPath", "maximumResults", "fetchedAttributes"]
+            ),
+            "coreSpotlightSource": object(
+                properties: [
+                    "enabled": boolean(),
+                    "maximumResults": integer(
+                        minimum: 1,
+                        maximum: EvaluationSpotlightSearchConfiguration.maximumResultCount
+                    ),
+                    "fetchedAttributes": spotlightAttributeSelectionSchema,
+                    "allowMail": boolean()
+                ],
+                required: ["enabled", "maximumResults", "fetchedAttributes", "allowMail"]
+            ),
+            "guidance": object(
+                properties: [
+                    "mode": string(enum: EvaluationSpotlightGuidanceMode.allRawValues),
+                    "focusedDomain": string(enum: EvaluationSpotlightContentDomain.allRawValues),
+                    "dynamicProfile": object(
+                        properties: [
+                            "textMatch": string(enum: EvaluationSpotlightGuidanceOption.allRawValues),
+                            "similarityMatch": string(enum: EvaluationSpotlightGuidanceOption.allRawValues),
+                            "numericMatch": string(enum: EvaluationSpotlightGuidanceOption.allRawValues),
+                            "dates": string(enum: EvaluationSpotlightGuidanceOption.allRawValues),
+                            "people": string(enum: EvaluationSpotlightGuidanceOption.allRawValues),
+                            "contentType": string(enum: EvaluationSpotlightGuidanceOption.allRawValues),
+                            "attributes": spotlightAttributeSelectionSchema
+                        ],
+                        required: [
+                            "textMatch", "similarityMatch", "numericMatch", "dates", "people",
+                            "contentType", "attributes"
+                        ]
+                    ),
+                    "outputFormat": string(enum: EvaluationSpotlightOutputFormat.allRawValues)
+                ],
+                required: ["mode", "focusedDomain", "dynamicProfile", "outputFormat"]
+            ),
+            "contactIdentity": object(
+                properties: [
+                    "enabled": boolean(),
+                    "displayName": string(
+                        maximumLength: EvaluationSpotlightSearchConfiguration.maximumIdentityValueCharacters
+                    ),
+                    "alternateNames": spotlightIdentityValuesSchema,
+                    "emailAddresses": spotlightIdentityValuesSchema,
+                    "phoneNumbers": spotlightIdentityValuesSchema
+                ],
+                required: [
+                    "enabled", "displayName", "alternateNames", "emailAddresses", "phoneNumbers"
+                ]
+            ),
+            "pipeline": object(
+                properties: ["deduplicateItems": boolean()],
+                required: ["deduplicateItems"]
+            ),
+            "maximumResponseSize": integer(
+                minimum: EvaluationSpotlightSearchConfiguration.minimumResponseSize,
+                maximum: EvaluationSpotlightSearchConfiguration.maximumAllowedResponseSize
+            )
+        ],
+        required: [
+            "enabled", "fileSource", "coreSpotlightSource", "guidance", "contactIdentity",
+            "pipeline", "maximumResponseSize"
+        ]
+    )
+
+    private static let spotlightAttributeSelectionSchema = object(
+        properties: [
+            "presets": uniqueStringArray(
+                enum: EvaluationSpotlightAttributePreset.allRawValues,
+                maximum: EvaluationSpotlightSearchConfiguration.maximumFetchAttributes
+            ),
+            "customAttributeNames": uniqueStringArray(
+                maximumLength: EvaluationSpotlightSearchConfiguration.maximumAttributeNameCharacters,
+                maximum: EvaluationSpotlightSearchConfiguration.maximumFetchAttributes
+            )
+        ],
+        required: ["presets", "customAttributeNames"]
+    )
+
+    private static let spotlightIdentityValuesSchema: MCPJSONValue = .object([
+        "type": .string("array"),
+        "items": string(
+            minimumLength: 1,
+            maximumLength: EvaluationSpotlightSearchConfiguration.maximumIdentityValueCharacters
+        ),
+        "minItems": .integer(0),
+        "maxItems": .integer(Int64(EvaluationSpotlightSearchConfiguration.maximumIdentityValuesPerKind))
+    ])
+
+    private static func schemaFieldSchema(remainingDepth: Int) -> MCPJSONValue {
+        var properties: [String: MCPJSONValue] = [
             "id": uuid("Stable schema field UUID."),
             "name": string(
                 "Schema field identifier.",
@@ -599,10 +940,53 @@ enum MCPToolCatalog {
                 maximumLength: EvaluationSchemaField.maximumDescriptionCharacters
             ),
             "type": string(enum: EvaluationSchemaFieldType.allRawValues),
-            "isOptional": boolean()
-        ],
-        required: ["id", "name", "description", "type", "isOptional"]
-    )
+            "isOptional": boolean(),
+            "enumValues": array(
+                items: object(
+                    properties: [
+                        "id": uuid("Stable choice UUID."),
+                        "value": string(maximumLength: EvaluationSchemaField.maximumEnumValueCharacters)
+                    ],
+                    required: ["id", "value"]
+                ),
+                minimum: 0,
+                maximum: EvaluationSchemaField.maximumEnumValues
+            ),
+            "constraints": object(
+                properties: [
+                    "stringPattern": string(maximumLength: EvaluationSchemaField.maximumPatternCharacters),
+                    "integerMinimum": integer(),
+                    "integerMaximum": integer(),
+                    "numberMinimum": number(),
+                    "numberMaximum": number(),
+                    "arrayMinimumCount": integer(
+                        minimum: 0,
+                        maximum: EvaluationSchemaField.maximumArrayElements
+                    ),
+                    "arrayMaximumCount": integer(
+                        minimum: 0,
+                        maximum: EvaluationSchemaField.maximumArrayElements
+                    )
+                ],
+                required: []
+            ),
+            "referenceName": string(maximumLength: EvaluationSchemaField.maximumNameCharacters),
+            "representNilExplicitlyInGeneratedContent": boolean(
+                "For object fields, include null for missing optional properties."
+            )
+        ]
+        properties["children"] = array(
+            items: remainingDepth > 1
+                ? schemaFieldSchema(remainingDepth: remainingDepth - 1)
+                : .object([:]),
+            minimum: 0,
+            maximum: remainingDepth > 1 ? EvaluationCustomToolDefinition.maximumParameters : 0
+        )
+        return object(
+            properties: properties,
+            required: ["id", "name", "description", "type", "isOptional"]
+        )
+    }
 
     private static func object(properties: [String: MCPJSONValue], required: [String]) -> MCPJSONValue {
         .object([
@@ -617,12 +1001,14 @@ enum MCPToolCatalog {
     private static func string(
         _ description: String? = nil,
         enum values: [String]? = nil,
+        minimumLength: Int? = nil,
         maximumLength: Int? = nil,
         contentEncoding: String? = nil
     ) -> MCPJSONValue {
         var schema: [String: MCPJSONValue] = ["type": .string("string")]
         if let description { schema["description"] = .string(description) }
         if let values { schema["enum"] = .array(values.map(MCPJSONValue.string)) }
+        if let minimumLength { schema["minLength"] = .integer(Int64(minimumLength)) }
         if let maximumLength { schema["maxLength"] = .integer(Int64(maximumLength)) }
         if let contentEncoding { schema["contentEncoding"] = .string(contentEncoding) }
         return .object(schema)
@@ -659,12 +1045,11 @@ enum MCPToolCatalog {
         ])
     }
 
-    private static func number(minimum: Double, maximum: Double) -> MCPJSONValue {
-        .object([
-            "type": .string("number"),
-            "minimum": .number(minimum),
-            "maximum": .number(maximum)
-        ])
+    private static func number(minimum: Double? = nil, maximum: Double? = nil) -> MCPJSONValue {
+        var schema: [String: MCPJSONValue] = ["type": .string("number")]
+        if let minimum { schema["minimum"] = .number(minimum) }
+        if let maximum { schema["maximum"] = .number(maximum) }
+        return .object(schema)
     }
 
     private static func array(items: MCPJSONValue, minimum: Int, maximum: Int) -> MCPJSONValue {
@@ -673,6 +1058,20 @@ enum MCPToolCatalog {
             "items": items,
             "minItems": .integer(Int64(minimum)),
             "maxItems": .integer(Int64(maximum))
+        ])
+    }
+
+    private static func uniqueStringArray(
+        enum values: [String]? = nil,
+        maximumLength: Int? = nil,
+        maximum: Int
+    ) -> MCPJSONValue {
+        .object([
+            "type": .string("array"),
+            "items": string(enum: values, maximumLength: maximumLength),
+            "minItems": .integer(0),
+            "maxItems": .integer(Int64(maximum)),
+            "uniqueItems": .bool(true)
         ])
     }
 }

@@ -14,7 +14,12 @@ struct FeatureConfigurationSummary: View {
 
                 Divider()
 
-                FeatureOutputConfiguration(fields: configuration.outputFields)
+                FeatureOutputConfiguration(
+                    fields: configuration.outputFields,
+                    definitions: configuration.outputSchemaDefinitions,
+                    representNilExplicitlyInGeneratedContent:
+                        configuration.outputRepresentNilExplicitlyInGeneratedContent
+                )
 
                 Divider()
 
@@ -78,6 +83,8 @@ private struct FeatureConfigurationFlags: View {
 
 private struct FeatureOutputConfiguration: View {
     let fields: [EvaluationSchemaField]
+    let definitions: [EvaluationSchemaField]
+    let representNilExplicitlyInGeneratedContent: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -88,29 +95,116 @@ private struct FeatureOutputConfiguration: View {
             if fields.isEmpty {
                 Text("Text")
             } else {
-                ForEach(fields) { field in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(field.name)
-                            .fontWeight(.medium)
-                        Text(typeTitle(for: field.type))
-                            .foregroundStyle(.secondary)
-                        if field.isOptional {
-                            Text("Optional")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .accessibilityElement(children: .combine)
+                FeatureSchemaSummary(fields: fields, definitions: definitions)
+                if representNilExplicitlyInGeneratedContent {
+                    Text("Missing optional properties use explicit nulls")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
     }
+}
 
-    private func typeTitle(for type: EvaluationSchemaFieldType) -> LocalizedStringResource {
-        switch type {
-        case .string: "Text"
-        case .integer: "Integer"
-        case .number: "Number"
-        case .boolean: "True or false"
+private struct FeatureSchemaSummary: View {
+    let fields: [EvaluationSchemaField]
+    let definitions: [EvaluationSchemaField]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(fields) { field in
+                FeatureSchemaFieldSummary(field: field, depth: 0)
+            }
+            if !definitions.isEmpty {
+                Text("\(definitions.count) reusable definitions")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 3)
+                ForEach(definitions) { definition in
+                    FeatureSchemaFieldSummary(field: definition, depth: 0)
+                }
+            }
+        }
+    }
+}
+
+private struct FeatureSchemaFieldSummary: View {
+    let field: EvaluationSchemaField
+    let depth: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(field.name)
+                    .fontWeight(.medium)
+                Text(field.type.title)
+                    .foregroundStyle(.secondary)
+                if field.isOptional {
+                    Text("Optional")
+                        .foregroundStyle(.secondary)
+                }
+                if let detail = fieldDetail {
+                    Text(detail)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .accessibilityElement(children: .combine)
+
+            if !field.children.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(field.children) { child in
+                        FeatureSchemaFieldSummary(field: child, depth: depth + 1)
+                    }
+                }
+                .padding(.leading, 14)
+            }
+        }
+        .padding(.leading, depth == 0 ? 0 : 4)
+    }
+
+    private var fieldDetail: String? {
+        switch field.type {
+        case .string:
+            field.constraints.stringPattern.isEmpty ? nil : "Pattern constrained"
+        case .integer:
+            boundsDescription(
+                minimum: field.constraints.integerMinimum.map { String($0) },
+                maximum: field.constraints.integerMaximum.map { String($0) }
+            )
+        case .number:
+            boundsDescription(
+                minimum: field.constraints.numberMinimum?.formatted(),
+                maximum: field.constraints.numberMaximum?.formatted()
+            )
+        case .enumeration:
+            "\(field.enumValues.count) values"
+        case .array:
+            boundsDescription(
+                minimum: field.constraints.arrayMinimumCount.map { String($0) },
+                maximum: field.constraints.arrayMaximumCount.map { String($0) },
+                label: "items"
+            )
+        case .union:
+            "\(field.children.count) choices"
+        case .reference:
+            "References \(field.referenceName)"
+        case .object:
+            field.representNilExplicitlyInGeneratedContent ? "Explicit nulls" : nil
+        case .boolean, .null, .imageReference:
+            nil
+        }
+    }
+
+    private func boundsDescription(
+        minimum: String?,
+        maximum: String?,
+        label: String = "range"
+    ) -> String? {
+        switch (minimum, maximum) {
+        case (.some(let minimum), .some(let maximum)): "\(label) \(minimum)...\(maximum)"
+        case (.some(let minimum), .none): "\(label) ≥ \(minimum)"
+        case (.none, .some(let maximum)): "\(label) ≤ \(maximum)"
+        case (.none, .none): nil
         }
     }
 }
@@ -141,6 +235,20 @@ private struct FeatureToolConfiguration: View {
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
+                        }
+
+                        if tool.representNilExplicitlyInGeneratedContent {
+                            Text("Missing optional argument properties use explicit nulls")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if !tool.parameters.isEmpty || !tool.schemaDefinitions.isEmpty {
+                            FeatureSchemaSummary(
+                                fields: tool.parameters,
+                                definitions: tool.schemaDefinitions
+                            )
+                            .padding(.top, 5)
                         }
                     }
                     .padding(9)

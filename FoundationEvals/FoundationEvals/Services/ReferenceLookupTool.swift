@@ -150,15 +150,18 @@ private enum ReferenceLookupError: LocalizedError {
 
 actor ReferenceToolRecorder {
     private let maximumCalls: Int
+    private let callLimiter: EvaluationToolCallLimiter?
     private var reservedCallCount = 0
     private var traces: [EvaluationToolCallTrace] = []
     private var ephemeralOutputs: [(callIndex: Int, text: String)] = []
 
-    init(maximumCalls: Int) {
+    init(maximumCalls: Int, callLimiter: EvaluationToolCallLimiter? = nil) {
         self.maximumCalls = max(1, min(maximumCalls, 4))
+        self.callLimiter = callLimiter
     }
 
-    func reserveCall() throws -> Int {
+    func reserveCall() async throws -> Int {
+        try await callLimiter?.beginCall()
         guard reservedCallCount < maximumCalls else { throw ReferenceLookupError.callLimitReached }
         reservedCallCount += 1
         return reservedCallCount
@@ -251,8 +254,8 @@ struct ReferenceLookupTool: Tool {
             output = "No matching passages were found."
         } else {
             output = results.map { result in
-                let filename = Self.boundedUTF8Prefix(result.filename, maximumBytes: 80)
-                return "--- BEGIN UNTRUSTED REFERENCE: \(filename) ---\n\(result.excerpt)\n--- END UNTRUSTED REFERENCE ---"
+                let filename = Self.filenameJSONLiteral(result.filename)
+                return "--- BEGIN UNTRUSTED REFERENCE ---\nfilenameJSON: \(filename)\n\(result.excerpt)\n--- END UNTRUSTED REFERENCE ---"
             }.joined(separator: "\n\n")
         }
         output = Self.boundedOutput(output)
@@ -279,6 +282,15 @@ struct ReferenceLookupTool: Tool {
             output,
             maximumBytes: maximumOutputUTF8Bytes - marker.utf8.count
         ) + marker
+    }
+
+    static func filenameJSONLiteral(_ filename: String) -> String {
+        let filename = boundedUTF8Prefix(filename, maximumBytes: 80)
+        guard let data = try? JSONEncoder().encode(filename) else { return "\"\"" }
+        return String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "\u{0085}", with: "\\u0085")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
     }
 
     private static func boundedUTF8Prefix(_ text: String, maximumBytes: Int) -> String {

@@ -71,6 +71,8 @@ struct EvaluationCaseAnalysis: Identifiable, Codable, Equatable, Sendable {
     var errorSampleCount: Int
     var scoredPassRate: Double?
     var repetitionVariation: EvaluationRepetitionVariation
+    var conversation: EvaluationConversationConfiguration? = nil
+    var fieldAssertions: [EvaluationFieldAssertion]? = nil
 }
 
 struct EvaluationRunAnalysis: Codable, Equatable, Sendable {
@@ -177,7 +179,9 @@ struct EvaluationRunAnalysis: Codable, Equatable, Sendable {
                 unscoredSampleCount: buckets.count(where: { $0 == .unscored }),
                 errorSampleCount: buckets.count(where: { $0 == .error }),
                 scoredPassRate: scored == 0 ? nil : Double(passed) / Double(scored),
-                repetitionVariation: variation
+                repetitionVariation: variation,
+                conversation: definition.conversation,
+                fieldAssertions: definition.fieldAssertions
             )
         }
     }
@@ -312,6 +316,27 @@ struct EvaluationRunComparison: Codable, Equatable, Sendable {
         meanComparableCasePassRateDelta = deltas.isEmpty ? nil : deltas.reduce(0, +) / Double(deltas.count)
     }
 
+    private static func sameConversation(
+        _ lhs: EvaluationConversationConfiguration?, _ rhs: EvaluationConversationConfiguration?
+    ) -> Bool {
+        let lhs = lhs ?? EvaluationConversationConfiguration()
+        let rhs = rhs ?? EvaluationConversationConfiguration()
+        return lhs.setupTurns.map(\.prompt) == rhs.setupTurns.map(\.prompt)
+            && lhs.restoredTranscriptJSON == rhs.restoredTranscriptJSON
+            && lhs.historyPolicy == rhs.historyPolicy
+            && (lhs.historyPolicy != .retainRecentCompleteTurns || lhs.retainedTurnCount == rhs.retainedTurnCount)
+            && (lhs.modelHistoryProjection ?? .init()) == (rhs.modelHistoryProjection ?? .init())
+    }
+
+    private static func sameAssertions(_ lhs: [EvaluationFieldAssertion]?, _ rhs: [EvaluationFieldAssertion]?) -> Bool {
+        let lhs = lhs ?? []
+        let rhs = rhs ?? []
+        return lhs.count == rhs.count && zip(lhs, rhs).allSatisfy {
+            $0.pointer == $1.pointer && $0.operation == $1.operation
+                && ($0.operation == .exists || $0.expectedValue == $1.expectedValue)
+        }
+    }
+
     private static func incompatibilities(current: EvaluationRun, baseline: EvaluationRun) -> [String] {
         var reasons: [String] = []
         if current.suiteID != baseline.suiteID { reasons.append("The runs belong to different suites.") }
@@ -404,7 +429,10 @@ struct EvaluationRunComparison: Codable, Equatable, Sendable {
                     issue: .missingFromBaselineRun
                 )
             }
-            guard currentCase.prompt == baselineCase.prompt, currentCase.expected == baselineCase.expected else {
+            guard currentCase.prompt == baselineCase.prompt,
+                  currentCase.expected == baselineCase.expected,
+                  Self.sameConversation(currentCase.conversation, baselineCase.conversation),
+                  Self.sameAssertions(currentCase.fieldAssertions, baselineCase.fieldAssertions) else {
                 return EvaluationCaseComparison(
                     caseID: caseID,
                     caseName: name,
@@ -476,17 +504,23 @@ private struct CaseDefinition {
     var name: String
     var prompt: String
     var expected: String
+    var conversation: EvaluationConversationConfiguration?
+    var fieldAssertions: [EvaluationFieldAssertion]?
 
     init(_ evaluationCase: EvaluationCase) {
         name = evaluationCase.name
         prompt = evaluationCase.prompt
         expected = evaluationCase.expected
+        conversation = evaluationCase.conversation
+        fieldAssertions = evaluationCase.fieldAssertions
     }
 
     init(_ result: EvaluationSampleResult) {
         name = result.caseName
         prompt = result.prompt
         expected = result.expected
+        conversation = nil
+        fieldAssertions = result.fieldAssertionResults?.map(\.assertion)
     }
 }
 

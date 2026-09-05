@@ -4,13 +4,17 @@ struct FeatureTraceSection: View {
     let trace: EvaluationFeatureTrace
 
     var body: some View {
-        DisclosureGroup("Foundation Models feature trace") {
+        DisclosureGroup {
             VStack(alignment: .leading, spacing: 12) {
                 if let firstContentMilliseconds = trace.firstContentMilliseconds {
                     FeatureTraceMetricRow(
                         label: "First visible content",
                         value: "\(firstContentMilliseconds.formatted(.number.precision(.fractionLength(0)))) ms"
                     )
+                }
+
+                if let conversation = trace.conversation {
+                    ConversationTraceSection(trace: conversation)
                 }
 
                 if !trace.profileEvents.isEmpty {
@@ -20,10 +24,19 @@ struct FeatureTraceSection: View {
                 if !trace.customToolCalls.isEmpty {
                     FeatureToolCalls(calls: trace.customToolCalls)
                 }
+                if let calls = trace.builtinToolCalls, !calls.isEmpty {
+                    BuiltinToolCallsSection(calls: calls)
+                }
+                if let spotlightSearch = trace.spotlightSearch {
+                    SpotlightSearchTraceView(trace: spotlightSearch)
+                }
 
                 if trace.firstContentMilliseconds == nil,
                    trace.profileEvents.isEmpty,
-                   trace.customToolCalls.isEmpty {
+                   trace.customToolCalls.isEmpty,
+                   trace.builtinToolCalls?.isEmpty != false,
+                   trace.spotlightSearch == nil,
+                   trace.conversation == nil {
                     Text("No profile transition, streamed content, or custom tool call was recorded for this sample.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -36,8 +49,31 @@ struct FeatureTraceSection: View {
                 }
             }
             .padding(.top, 10)
+        } label: {
+            Text("Foundation Models feature trace")
         }
+        .disclosureGroupStyle(TraceDisclosureStyle(title: "Foundation Models feature trace"))
         .font(.callout)
+    }
+}
+
+private struct BuiltinToolCallsSection: View {
+    let calls: [EvaluationBuiltinToolTrace]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Image tool calls").font(.headline)
+            ForEach(calls) { call in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(call.toolName).fontWeight(.semibold)
+                    FeatureTraceValue(label: "Arguments", value: call.argumentsJSON)
+                    FeatureTraceValue(label: "Output", value: call.output ?? "No output recorded")
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 8))
+            }
+            Text("The framework transcript does not provide duration or outcome metadata for these built-in tools.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -46,7 +82,7 @@ private struct FeatureProfileEvents: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("Profile transitions")
+            Text("Profile lifecycle")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 

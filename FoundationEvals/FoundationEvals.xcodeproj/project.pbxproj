@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AFC28B6E304A00010023273E /* Hummingbird in Frameworks */ = {isa = PBXBuildFile; productRef = AFC28B6D304A00010023273E /* Hummingbird */; };
+		AFC28B70304B00010023273E /* CoreAILM in Frameworks */ = {isa = PBXBuildFile; productRef = AFC28B72304B00010023273E /* CoreAILM */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -55,6 +56,7 @@
 		AFC28B43304733170023273E /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				AFC28B70304B00010023273E /* CoreAILM in Frameworks */,
 				AFC28B6E304A00010023273E /* Hummingbird in Frameworks */,
 			);
 		};
@@ -109,6 +111,7 @@
 			);
 			name = FoundationEvals;
 			packageProductDependencies = (
+				AFC28B72304B00010023273E /* CoreAILM */,
 				AFC28B6D304A00010023273E /* Hummingbird */,
 			);
 			productName = FoundationEvals;
@@ -190,6 +193,7 @@
 			mainGroup = AFC28B3D304733160023273E;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				AFC28B71304B00010023273E /* XCRemoteSwiftPackageReference "coreai-models" */,
 				AFC28B6C304A00010023273E /* XCRemoteSwiftPackageReference "hummingbird" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -596,6 +600,14 @@
 				minimumVersion = 2.26.0;
 			};
 		};
+		AFC28B71304B00010023273E /* XCRemoteSwiftPackageReference "coreai-models" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/coreai-models.git";
+			requirement = {
+				kind = revision;
+				revision = 684ae8e6a6766ff1dcb3dfa9c598b7eef44d2b43;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -603,6 +615,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AFC28B6C304A00010023273E /* XCRemoteSwiftPackageReference "hummingbird" */;
 			productName = Hummingbird;
+		};
+		AFC28B72304B00010023273E /* CoreAILM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AFC28B71304B00010023273E /* XCRemoteSwiftPackageReference "coreai-models" */;
+			productName = CoreAILM;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
