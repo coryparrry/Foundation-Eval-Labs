@@ -1,6 +1,6 @@
 # Foundation Evals
 
-A small native macOS app for running repeatable evaluations against Apple's on-device Foundation Model without working in Xcode.
+A native macOS app for running repeatable evaluations, inspecting execution traces, and comparing saved runs against Apple's on-device Foundation Model without working in Xcode.
 
 ## Run it
 
@@ -22,9 +22,9 @@ The app itself uses the system `FoundationModels` framework. It does not link th
 
 ## Agent control with MCP
 
-Open the app's **Settings**, choose **Install in Codex**, authorize your Codex configuration folder (normally `~/.codex`), then restart Codex. Keep Foundation Evals running while an agent uses the connector.
+Open the app's **Settings**, choose **Connect to Codex**, then restart Codex. The app writes a managed entry directly to `~/.codex/config.toml`. Keep Foundation Evals running while an agent uses the connector.
 
-The authenticated loopback endpoint supports MCP `2025-11-25` and `2026-07-28`. Agents can replace the ordered suite, upload and remove bounded references, start/poll/cancel runs, list or delete saved runs, and read attachment or canonical run resources. The port defaults to `17873`; a conflict stops the connector and is shown in Settings instead of changing the installed URL.
+The local, unauthenticated loopback endpoint uses standard MCP `2025-06-18`, with host and origin checks. Agents can replace the ordered suite, upload and remove bounded references, start/poll/cancel runs, list or delete saved runs, and read attachment or canonical run resources. Agents can also call `eval_analyze_run` with a saved `runID` and optional `baselineRunID` to inspect coverage, repeatability, performance, and compatible case comparisons without another model request. The port is fixed at `17873`; a conflict stops the connector and is shown in Settings instead of changing the installed URL.
 
 ## What it does
 
@@ -39,6 +39,14 @@ The authenticated loopback endpoint supports MCP `2025-11-25` and `2026-07-28`. 
 - Saves searchable run history locally in Application Support, supports confirmed local deletion, and exports complete JSON reports.
 - Filters run results in a compact list, shows one selected result at a time, and provides one-click response copying.
 - Emits metadata-only `OSSignposter` intervals for Instruments correlation.
+
+## Comparing and investigating runs
+
+Open a saved run to inspect coverage, per-case repeatability, and subject/judge usage. Choose a saved baseline to compare matching cases under the same scoring contract. Changed cases, missing samples, and incompatible scoring are reported explicitly. Observed differences are descriptive; a small number of repetitions does not establish statistical significance.
+
+New samples include measured preparation, generation, and scoring stages plus reference-tool durations. Older runs remain readable and show unavailable timing where it was not recorded.
+
+See [evaluation design and research](docs/evaluation-design.md) for the rationale and remaining opportunities.
 
 ## Evaluation practice
 

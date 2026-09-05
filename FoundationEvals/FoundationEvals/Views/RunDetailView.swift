@@ -35,6 +35,7 @@ private enum ResultFilter: String, CaseIterable, Identifiable {
 
 struct RunDetailView: View {
     let run: EvaluationRun
+    let baselineRuns: [EvaluationRun]
     @State private var exportDocument = JSONDocument()
     @State private var isExporting = false
     @State private var exportError: String?
@@ -44,6 +45,7 @@ struct RunDetailView: View {
             LazyVStack(alignment: .leading, spacing: 22) {
                 RunOverviewHeader(run: run)
                 RunSummaryGrid(run: run)
+                RunAnalysisSection(run: run, baselineRuns: baselineRuns)
                 RunConfigurationSection(run: run)
                 ResultsSection(run: run)
             }
@@ -493,11 +495,7 @@ private struct ResultDetail: View {
                 )
             }
 
-            if let toolCalls = result.toolCalls, !toolCalls.isEmpty {
-                ToolTraceSection(toolCalls: toolCalls)
-            }
-
-            ResultTraceFooter(result: result)
+            SampleTraceSection(result: result)
         }
         .textSelection(.enabled)
     }
@@ -640,57 +638,6 @@ private struct ErrorBanner: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.red.opacity(0.08), in: .rect(cornerRadius: 9))
-    }
-}
-
-private struct ResultTraceFooter: View {
-    let result: EvaluationSampleResult
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Divider()
-            Text("Response: \(result.durationMilliseconds.formatted(.number.precision(.fractionLength(0)))) ms · \(result.usage.inputTokens) input · \(result.usage.outputTokens) output · \(result.usage.reasoningTokens) reasoning · \(result.usage.cachedInputTokens) cached")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-
-            if let judgeDuration = result.judgeDurationMilliseconds {
-                let judgeUsage = result.judgeUsage ?? EvaluationUsage()
-                Text("AI judge: \(judgeDuration.formatted(.number.precision(.fractionLength(0)))) ms · \(judgeUsage.inputTokens) input · \(judgeUsage.outputTokens) output · \(judgeUsage.reasoningTokens) reasoning · \(judgeUsage.cachedInputTokens) cached")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-
-private struct ToolTraceSection: View {
-    let toolCalls: [EvaluationToolCallTrace]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Reference tool activity")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            ForEach(Array(toolCalls.enumerated()), id: \.offset) { _, call in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: call.outcome == "completed" ? "checkmark.circle" : "magnifyingglass.circle")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    Text("Call \(call.callIndex) · \(call.toolName) · \(call.outcome) · \(call.matchedFiles.isEmpty ? "no matched files" : call.matchedFiles.joined(separator: ", ")) · \(call.outputCharacterCount) output characters")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .accessibilityElement(children: .combine)
-            }
-
-            Text("Queries and returned reference passages are intentionally omitted from the saved trace.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 8))
     }
 }
 

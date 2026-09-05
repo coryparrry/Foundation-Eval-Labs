@@ -1,5 +1,18 @@
 # Worklog
 
+## 2026-09-05 evaluation analysis and tracing
+
+- Added saved-run baseline comparison, explicit incomplete/incompatible evidence, per-case repetition patterns, p50/p95 subject latency, and separate subject/judge token summaries.
+- Added measured preparation/generation/scoring and tool durations; failed requests preserve available usage and tool evidence. Legacy reports remain readable.
+- Added `eval_analyze_run` and fixed MCP resource error codes plus unexpected listener-exit and stop-during-start recovery.
+- Research and remaining opportunities: `docs/evaluation-design.md`, based on Apple documentation read through Xcode MCP and primary evaluation/telemetry sources.
+- Validation: Xcode MCP BuildProject(buildForTesting: true) passed. RunSomeTests batches passed 22/22 and 31/31 (50 distinct tests, three overlap); two final targeted reruns passed after review corrections. Includes real loopback socket coverage. Independent review findings were fixed.
+- Native evidence: two real on-device example runs completed and persisted. UI baseline comparison showed unchanged 1/1 scored; measured trace showed 2,472 ms preparation, 3,597 ms generation, 6,597 ms scoring on the second run. Subject 108 tokens and judge 766 tokens matched live MCP analysis. These are smoke-run observations, not a model-quality benchmark.
+- Xcode RunCodeSnippet timed out and left a stale app instance; closed it and verified the current build in the native interface.
+- Delivery: current non-main branch retained; no remote is configured, so push/PR creation is unavailable. Unrelated staged `.codegraph/.gitignore` preserved.
+
+## Earlier work
+
 - Current task: completed the requested simple local MCP contract. Bearer authentication, Keychain storage, credential rotation, custom protocol dialects, and generated authorization headers are removed; loopback-only binding and host/origin checks remain.
 - Evidence: 27 focused MCP/installer tests pass, including version negotiation and real loopback socket coverage. The final build launched as the sole `127.0.0.1:17873` listener. A fresh `codex exec` discovered `foundation-evals` and successfully called `eval_get_state`, returning “My Foundation Model Eval” at revision `e3b66ec47bf4dae6a2d159cfe9fc9ea194a3aac2e94d91a2fc51be4c70e62231`.
 

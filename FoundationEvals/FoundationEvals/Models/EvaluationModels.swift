@@ -267,6 +267,12 @@ struct EvaluationUsage: Codable, Sendable {
     }
 }
 
+struct EvaluationSampleTiming: Codable, Sendable {
+    var preparationMilliseconds: Double?
+    var generationMilliseconds: Double?
+    var scoringMilliseconds: Double?
+}
+
 struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var id = UUID()
     var caseID: UUID
@@ -290,6 +296,7 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var judgeErrorCategory: String?
     var judgeErrorMessage: String?
     var toolCalls: [EvaluationToolCallTrace]? = nil
+    var timing: EvaluationSampleTiming? = nil
 }
 
 struct EvaluationToolCallTrace: Codable, Sendable {
@@ -298,6 +305,7 @@ struct EvaluationToolCallTrace: Codable, Sendable {
     var matchedFiles: [String]
     var outputCharacterCount: Int
     var outcome: String
+    var durationMilliseconds: Double? = nil
 }
 
 struct EvaluationAttachmentTrace: Codable, Sendable {

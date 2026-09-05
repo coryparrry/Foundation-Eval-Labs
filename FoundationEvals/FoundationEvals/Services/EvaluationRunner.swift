@@ -278,7 +278,18 @@ actor EvaluationRunner {
         let tools: [any Tool] = suite.modelConfiguration.referenceMode == .lookupTool
             ? [ReferenceLookupTool(index: ReferenceSearchIndex(attachments: suite.attachments), recorder: recorder)]
             : []
+        let session = LanguageModelSession(
+            model: model,
+            tools: tools,
+            instructions: suite.instructions.isEmpty ? nil : Instructions(suite.instructions)
+        )
         var effectivePrompt: String?
+        var generationStarted: ContinuousClock.Instant?
+        var timing = EvaluationSampleTiming(
+            preparationMilliseconds: nil,
+            generationMilliseconds: nil,
+            scoringMilliseconds: nil
+        )
 
         do {
             let prepared = try await preparedPrompt(
@@ -289,11 +300,8 @@ actor EvaluationRunner {
                 tools: tools
             )
             effectivePrompt = prepared.text
-            let session = LanguageModelSession(
-                model: model,
-                tools: tools,
-                instructions: suite.instructions.isEmpty ? nil : Instructions(suite.instructions)
-            )
+            timing.preparationMilliseconds = Self.milliseconds(since: started)
+            generationStarted = ContinuousClock.now
             let response = try await session.respond(
                 to: prepared.prompt,
                 options: suite.modelConfiguration.generationOptions,
@@ -307,11 +315,15 @@ actor EvaluationRunner {
             )
             signposter.endInterval("Model request", interval)
 
+            if let generationStarted {
+                timing.generationMilliseconds = Self.milliseconds(since: generationStarted)
+            }
             let subjectDuration = Self.milliseconds(since: started)
             let usage = Self.usage(from: response.usage)
             let reasoningText = Self.reasoningText(from: response.transcriptEntries)
             let toolCalls = await recorder.snapshot()
             let toolEvidence = await recorder.evidenceText()
+            let scoringStarted = ContinuousClock.now
             let scoring = await score(
                 response: response.content,
                 evaluationCase: evaluationCase,
@@ -323,6 +335,7 @@ actor EvaluationRunner {
                 contextSize: contextSize,
                 toolEvidence: toolEvidence
             )
+            timing.scoringMilliseconds = Self.milliseconds(since: scoringStarted)
 
             return EvaluationSampleResult(
                 caseID: evaluationCase.id,
@@ -345,10 +358,16 @@ actor EvaluationRunner {
                 errorMessage: nil,
                 judgeErrorCategory: scoring.errorCategory,
                 judgeErrorMessage: scoring.errorMessage,
-                toolCalls: toolCalls.isEmpty ? nil : toolCalls
+                toolCalls: toolCalls.isEmpty ? nil : toolCalls,
+                timing: timing
             )
         } catch {
             signposter.endInterval("Model request", interval)
+            if let generationStarted {
+                timing.generationMilliseconds = Self.milliseconds(since: generationStarted)
+            } else {
+                timing.preparationMilliseconds = Self.milliseconds(since: started)
+            }
             let traceError = Self.traceError(error)
             let toolCalls = await recorder.snapshot()
             return EvaluationSampleResult(
@@ -363,14 +382,15 @@ actor EvaluationRunner {
                 score: nil,
                 rationale: nil,
                 durationMilliseconds: Self.milliseconds(since: started),
-                usage: EvaluationUsage(),
+                usage: Self.usage(from: session.usage),
                 judgeDurationMilliseconds: nil,
                 judgeUsage: nil,
                 errorCategory: traceError.category,
                 errorMessage: traceError.message,
                 judgeErrorCategory: nil,
                 judgeErrorMessage: nil,
-                toolCalls: toolCalls.isEmpty ? nil : toolCalls
+                toolCalls: toolCalls.isEmpty ? nil : toolCalls,
+                timing: timing
             )
         }
     }

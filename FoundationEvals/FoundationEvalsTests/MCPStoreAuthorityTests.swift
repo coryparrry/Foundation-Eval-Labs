@@ -163,6 +163,48 @@ struct MCPStoreAuthorityTests {
         #expect(outcome(duplicate) == "duplicate")
     }
 
+    @MainActor
+    @Test func analysisReadsSavedRunsWithoutMutatingSuiteOrStartingModel() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "")
+        let baseline = makeRun(case: evaluationCase, resultCount: 1, plannedCount: 1)
+        var current = baseline
+        current.id = UUID()
+        store.runs = [current, baseline]
+        let revision = store.suiteRevision
+        let authority = MCPStoreAuthority.make(store: store)
+        let call = try MCPToolCatalog.parse(name: "eval_analyze_run", arguments: .object([
+            "runID": .string(current.id.uuidString),
+            "baselineRunID": .string(baseline.id.uuidString)
+        ]))
+        let response = await authority.call(call)
+        #expect(!response.isError)
+        #expect(response.structuredContent.objectValue?["analysis"] != nil)
+        #expect(response.structuredContent.objectValue?["comparison"] != nil)
+        #expect(store.suiteRevision == revision)
+        #expect(store.activeRun == nil)
+        #expect(store.runs.count == 2)
+
+        let unknownBaseline = await authority.call(.analyzeRun(.init(runID: current.id, baselineRunID: UUID())))
+        #expect(unknownBaseline.isError)
+        let unknownRun = await authority.call(.analyzeRun(.init(runID: UUID(), baselineRunID: nil)))
+        #expect(unknownRun.isError)
+    }
+
+    @Test func analysisRejectsInvalidIdentifiersAndUnknownOptions() throws {
+        for arguments: MCPJSONValue in [
+            .object(["runID": .string("invalid")]),
+            .object(["runID": .string(UUID().uuidString), "baselineRunID": .integer(1)]),
+            .object(["runID": .string(UUID().uuidString), "runModel": .bool(true)])
+        ] {
+            #expect(throws: MCPToolInputError.self) {
+                try MCPToolCatalog.parse(name: "eval_analyze_run", arguments: arguments)
+            }
+        }
+    }
+
     private func makeRun(case evaluationCase: EvaluationCase, resultCount: Int, plannedCount: Int) -> EvaluationRun {
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
         return EvaluationRun(

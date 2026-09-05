@@ -45,6 +45,8 @@ enum MCPStoreAuthority {
                 return mutation(duplicate ? "duplicate" : "committed", ["run": try operationJSON(operation)])
             case .getRun(let arguments):
                 return try getRun(arguments, store: store)
+            case .analyzeRun(let arguments):
+                return try analyzeRun(arguments, store: store)
             case .listRuns(let arguments):
                 return try listRuns(arguments, store: store)
             case .cancelRun(let arguments):
@@ -168,6 +170,23 @@ enum MCPStoreAuthority {
             "skipped": .array([]),
             "nextCursor": page.nextCursor
         ])])
+    }
+
+    private static func analyzeRun(_ arguments: MCPAnalyzeRunArguments, store: EvaluationStore) throws -> MCPToolPayload {
+        guard let run = store.run(with: arguments.runID) else {
+            if store.activeRun?.id == arguments.runID {
+                return .failure(code: "run_not_finished", message: "Poll eval_get_run until the run finishes before analyzing it.")
+            }
+            throw EvaluationStoreError.resourceNotFound("Run")
+        }
+        var output: [String: MCPJSONValue] = ["analysis": try json(EvaluationRunAnalysis(run: run))]
+        if let baselineID = arguments.baselineRunID {
+            guard let baseline = store.run(with: baselineID) else {
+                throw EvaluationStoreError.resourceNotFound("Saved baseline run")
+            }
+            output["comparison"] = try json(EvaluationRunComparison(current: run, baseline: baseline))
+        }
+        return readPayload(output)
     }
 
     private static func listRuns(_ arguments: MCPListRunsArguments, store: EvaluationStore) throws -> MCPToolPayload {

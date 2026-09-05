@@ -20,7 +20,14 @@ struct ContentView: View {
                 SuiteEditorView(store: store)
             case .run(let id):
                 if let run = store.run(with: id) {
-                    RunDetailView(run: run)
+                    RunDetailView(
+                        run: run,
+                        baselineRuns: store.runs.filter {
+                            $0.id != run.id
+                                && $0.suiteID == run.suiteID
+                                && $0.startedAt < run.startedAt
+                        }
+                    )
                 } else {
                     ContentUnavailableView(
                         "Run Not Found",

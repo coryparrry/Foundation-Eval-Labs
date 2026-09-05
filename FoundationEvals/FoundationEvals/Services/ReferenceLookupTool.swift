@@ -164,7 +164,12 @@ actor ReferenceToolRecorder {
         return reservedCallCount
     }
 
-    func record(callIndex: Int, results: [ReferenceSearchResult], output: String) {
+    func record(
+        callIndex: Int,
+        results: [ReferenceSearchResult],
+        output: String,
+        durationMilliseconds: Double? = nil
+    ) {
         ephemeralOutputs.append((callIndex, output))
         traces.append(
             EvaluationToolCallTrace(
@@ -172,7 +177,21 @@ actor ReferenceToolRecorder {
                 callIndex: callIndex,
                 matchedFiles: results.map(\.filename),
                 outputCharacterCount: output.count,
-                outcome: results.isEmpty ? "no matches" : "completed"
+                outcome: results.isEmpty ? "no matches" : "completed",
+                durationMilliseconds: durationMilliseconds
+            )
+        )
+    }
+
+    func recordRejectedCall(callIndex: Int, durationMilliseconds: Double) {
+        traces.append(
+            EvaluationToolCallTrace(
+                toolName: ReferenceLookupTool.toolName,
+                callIndex: callIndex,
+                matchedFiles: [],
+                outputCharacterCount: 0,
+                outcome: "rejected",
+                durationMilliseconds: durationMilliseconds
             )
         )
     }
@@ -208,11 +227,24 @@ struct ReferenceLookupTool: Tool {
     }
 
     func call(arguments: ReferenceLookupArguments) async throws -> String {
-        let query = arguments.query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { throw ReferenceLookupError.emptyQuery }
-        guard query.count <= 200 else { throw ReferenceLookupError.queryTooLong }
-
+        let started = ContinuousClock.now
         let callIndex = try await recorder.reserveCall()
+        let query = arguments.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            await recorder.recordRejectedCall(
+                callIndex: callIndex,
+                durationMilliseconds: Self.milliseconds(since: started)
+            )
+            throw ReferenceLookupError.emptyQuery
+        }
+        guard query.count <= 200 else {
+            await recorder.recordRejectedCall(
+                callIndex: callIndex,
+                durationMilliseconds: Self.milliseconds(since: started)
+            )
+            throw ReferenceLookupError.queryTooLong
+        }
+
         let results = index.search(query: query, maximumResults: arguments.maximumResults)
         var output: String
         if results.isEmpty {
@@ -224,8 +256,20 @@ struct ReferenceLookupTool: Tool {
             }.joined(separator: "\n\n")
         }
         output = Self.boundedOutput(output)
-        await recorder.record(callIndex: callIndex, results: results, output: output)
+        await recorder.record(
+            callIndex: callIndex,
+            results: results,
+            output: output,
+            durationMilliseconds: Self.milliseconds(since: started)
+        )
         return output
+    }
+
+    private static func milliseconds(since started: ContinuousClock.Instant) -> Double {
+        let duration = started.duration(to: .now)
+        let components = duration.components
+        return Double(components.seconds) * 1_000
+            + Double(components.attoseconds) / 1_000_000_000_000_000
     }
 
     private static func boundedOutput(_ output: String) -> String {

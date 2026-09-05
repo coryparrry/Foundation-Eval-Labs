@@ -98,6 +98,7 @@ enum MCPToolCall: Sendable {
     case startRun(MCPStartRunArguments)
     case getRun(MCPGetRunArguments)
     case listRuns(MCPListRunsArguments)
+    case analyzeRun(MCPAnalyzeRunArguments)
     case cancelRun(MCPCancelRunArguments)
     case deleteRun(MCPDeleteRunArguments)
 }
@@ -180,6 +181,11 @@ struct MCPGetRunArguments: Codable, Sendable {
     var runID: UUID
     var cursor: String?
     var limit: Int?
+}
+
+struct MCPAnalyzeRunArguments: Codable, Sendable {
+    var runID: UUID
+    var baselineRunID: UUID?
 }
 
 struct MCPListRunsArguments: Codable, Sendable {
@@ -277,6 +283,14 @@ enum MCPToolCatalog {
             ], required: [], readOnly: true
         ),
         tool(
+            "eval_analyze_run", "Analyze evaluation run",
+            "Summarize a saved run's coverage, per-case repeatability, latency and subject/judge token usage. Optionally compare a saved baseline, reporting incompatible cases and incomplete evidence explicitly. Does not run the model.",
+            properties: [
+                "runID": uuid("Saved candidate run UUID."),
+                "baselineRunID": uuid("Optional saved baseline run UUID.")
+            ], required: ["runID"], readOnly: true
+        ),
+        tool(
             "eval_cancel_run", "Cancel evaluation run",
             "Request cooperative cancellation of the identified active run; poll eval_get_run for its terminal state.",
             properties: ["runID": uuid("Run UUID.")], required: ["runID"], idempotent: true
@@ -347,6 +361,8 @@ enum MCPToolCatalog {
                     throw MCPToolInputError.invalidArguments
                 }
                 return .listRuns(value)
+            case "eval_analyze_run":
+                return .analyzeRun(try arguments.decode(MCPAnalyzeRunArguments.self))
             case "eval_cancel_run":
                 return .cancelRun(try arguments.decode(MCPCancelRunArguments.self))
             case "eval_delete_run":
