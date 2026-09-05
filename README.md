@@ -30,9 +30,11 @@ Requirements:
 - A Mac that supports Apple Intelligence
 - Apple Intelligence enabled and the on-device model downloaded
 
-1. Download the latest notarized release of **Foundation Evals**.
-2. Move **Foundation Evals.app** to your **Applications** folder.
-3. Open the app and check that the model is ready.
+1. Download and open the latest **Foundation Evals.dmg**.
+2. Drag **Foundation Evals** onto the **Applications** shortcut in the window.
+3. Eject the **Foundation Evals** disk, then open the app from **Applications** and check that the model is ready.
+
+The app is signed with Developer ID and notarized by Apple.
 
 Xcode is only needed to build from source.
 
