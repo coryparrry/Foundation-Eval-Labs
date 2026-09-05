@@ -7,7 +7,7 @@
 
 > Test Apple's Foundation Models. Inspect every run. Compare what changed.
 
-A native macOS app for building repeatable evaluation suites, inspecting responses and execution traces, and comparing results as you refine prompts, settings, and tools.
+A native macOS app with a built-in MCP server that lets your coding agent build evaluation suites, run Apple's Foundation Models, inspect responses and execution traces, and compare results—all from your agent workflow. Review every run in the app as you refine prompts, settings, and tools.
 
 [Install](#-install) · [First evaluation](#-run-your-first-evaluation) · [Models and tools](#-models-and-tools) · [Agent integration](#-connect-an-agent) · [Build from source](#-build-from-source)
 
