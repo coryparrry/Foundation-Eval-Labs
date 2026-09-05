@@ -70,7 +70,6 @@ private enum SuiteEditorPage: String, CaseIterable, Identifiable {
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
     @State private var selectedPage = SuiteEditorPage.cases
-    @FocusState private var focusedPage: SuiteEditorPage?
     @State private var selectedCaseID: UUID?
 
     var body: some View {
@@ -83,38 +82,13 @@ struct SuiteEditorView: View {
                         LiveResponseSection(response: response)
                     }
 
-                    HStack(spacing: 24) {
+                    Picker("Editor page", selection: $selectedPage) {
                         ForEach(SuiteEditorPage.allCases) { page in
-                            Button {
-                                selectedPage = page
-                                focusedPage = page
-                            } label: {
-                                Text(page.title)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(selectedPage == page ? Color.accentColor : .secondary)
-                                    .padding(.vertical, 12)
-                                    .contentShape(Rectangle())
-                                    .overlay(alignment: .bottom) {
-                                        Rectangle()
-                                            .fill(selectedPage == page ? Color.accentColor : .clear)
-                                            .frame(height: 2)
-                                    }
-                            }
-                            .buttonStyle(.plain)
-                            .focusable()
-                            .focused($focusedPage, equals: page)
-                            .accessibilityAddTraits(selectedPage == page ? .isSelected : [])
+                            Text(page.title).tag(page)
                         }
-                        Spacer(minLength: 0)
                     }
-                    .overlay(alignment: .bottom) {
-                        Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 0.5)
-                    }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityLabel("Editor page")
+                    .pickerStyle(.segmented)
                     .accessibilityIdentifier("Editor page")
-                    .onKeyPress(.leftArrow) { movePage(by: -1) }
-                    .onKeyPress(.rightArrow) { movePage(by: 1) }
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 28)
@@ -147,14 +121,6 @@ struct SuiteEditorView: View {
             case .failure(let error): store.notice = error.localizedDescription
             }
         }
-    }
-
-    private func movePage(by offset: Int) -> KeyPress.Result {
-        let pages = SuiteEditorPage.allCases
-        guard let index = pages.firstIndex(of: focusedPage ?? selectedPage) else { return .ignored }
-        selectedPage = pages[(index + offset + pages.count) % pages.count]
-        focusedPage = selectedPage
-        return .handled
     }
 
     private func selectFirstCaseIfNeeded() {
@@ -333,7 +299,7 @@ private struct RunReadinessPanel: View {
 
     private func statusColor(blocker: String?) -> Color {
         if store.isRunning || store.isProcessingFiles { return .accentColor }
-        return blocker == nil ? .green : .orange
+        return blocker == nil ? .secondary : .orange
     }
 }
 
@@ -896,7 +862,7 @@ private struct ModelStatusBadge: View {
             systemImage: status.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
         )
         .font(.callout.weight(.medium))
-        .foregroundStyle(status.isAvailable ? Color.green : Color.orange)
+        .foregroundStyle(status.isAvailable ? Color.secondary : Color.orange)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(.quaternary.opacity(0.7), in: .capsule)

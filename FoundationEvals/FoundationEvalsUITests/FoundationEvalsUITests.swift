@@ -6,29 +6,6 @@ final class FoundationEvalsUITests: XCTestCase {
     }
 
     @MainActor
-    func testWorkbenchPageNavigation() throws {
-        let app = XCUIApplication()
-        let storage = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: storage) }
-        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage", storage.path]
-        app.launch()
-        defer { app.terminate() }
-        app.activate()
-        app.menuBars.menuBarItems["Evaluation"].click()
-        app.menuItems["Show Suite Editor"].click()
-        XCTAssertTrue(app.buttons["Instructions"].waitForExistence(timeout: 5))
-        app.buttons["Instructions"].click()
-        XCTAssertTrue(app.staticTexts["Model instructions"].waitForExistence(timeout: 2))
-        app.typeKey(.rightArrow, modifierFlags: [])
-        XCTAssertTrue(app.staticTexts["Scoring and repetitions"].waitForExistence(timeout: 2))
-        app.typeKey(.leftArrow, modifierFlags: [])
-        XCTAssertTrue(app.staticTexts["Model instructions"].waitForExistence(timeout: 2))
-        app.buttons["Cases"].click()
-        XCTAssertTrue(app.buttons["Add Case"].isHittable)
-        XCTAssertTrue(app.buttons["Run"].exists)
-    }
-
-    @MainActor
     func testSuiteEditorShowsPrimaryRunControls() throws {
         let app = XCUIApplication()
         let storage = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -70,10 +47,10 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Start Server"].exists)
         app.typeKey("w", modifierFlags: .command)
 
-        app.buttons["Instructions"].click()
+        app.radioButtons["Instructions"].click()
         XCTAssertTrue(app.buttons["Add Files"].exists)
 
-        app.buttons["Model"].click()
+        app.radioButtons["Model"].click()
         XCTAssertTrue(app.popUpButtons["Model provider"].exists)
         XCTAssertTrue(app.popUpButtons["Sampling"].exists)
         XCTAssertFalse(app.popUpButtons["System model use case"].exists)
@@ -81,7 +58,7 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertTrue(app.popUpButtons["System model use case"].exists)
         XCTAssertTrue(app.popUpButtons["System model guardrails"].exists)
 
-        app.buttons["Scoring"].click()
+        app.radioButtons["Scoring"].click()
         XCTAssertTrue(app.staticTexts["Scoring and repetitions"].exists)
         XCTAssertTrue(app.radioButtons["AI rubric"].exists)
 
@@ -129,7 +106,7 @@ final class FoundationEvalsUITests: XCTestCase {
         app.typeKey("a", modifierFlags: .command)
         caseName.typeText("Selection regression case")
 
-        app.buttons["Scoring"].click()
+        app.radioButtons["Scoring"].click()
         let scoringCase = app.popUpButtons["Scoring case selector"]
         XCTAssertTrue(scoringCase.waitForExistence(timeout: 2))
         XCTAssertEqual(scoringCase.value as? String, "Selection regression case")
@@ -137,12 +114,12 @@ final class FoundationEvalsUITests: XCTestCase {
         // Selecting a different scoring target must also change the prompt editor's case.
         scoringCase.click()
         app.menuItems["Example"].click()
-        app.buttons["Cases"].click()
+        app.radioButtons["Cases"].click()
         XCTAssertTrue(caseName.waitForExistence(timeout: 2))
         XCTAssertEqual(caseName.value as? String, "Example")
 
         // Returning to Scoring must preserve that explicit choice as well.
-        app.buttons["Scoring"].click()
+        app.radioButtons["Scoring"].click()
         XCTAssertTrue(scoringCase.waitForExistence(timeout: 2))
         XCTAssertEqual(scoringCase.value as? String, "Example")
     }
