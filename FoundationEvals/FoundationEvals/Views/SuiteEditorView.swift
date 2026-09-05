@@ -70,6 +70,7 @@ private enum SuiteEditorPage: String, CaseIterable, Identifiable {
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
     @State private var selectedPage = SuiteEditorPage.cases
+    @FocusState private var focusedPage: SuiteEditorPage?
     @State private var selectedCaseID: UUID?
 
     var body: some View {
@@ -82,13 +83,38 @@ struct SuiteEditorView: View {
                         LiveResponseSection(response: response)
                     }
 
-                    Picker("Editor page", selection: $selectedPage) {
+                    HStack(spacing: 24) {
                         ForEach(SuiteEditorPage.allCases) { page in
-                            Text(page.title).tag(page)
+                            Button {
+                                selectedPage = page
+                                focusedPage = page
+                            } label: {
+                                Text(page.title)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(selectedPage == page ? Color.accentColor : .secondary)
+                                    .padding(.vertical, 12)
+                                    .contentShape(Rectangle())
+                                    .overlay(alignment: .bottom) {
+                                        Rectangle()
+                                            .fill(selectedPage == page ? Color.accentColor : .clear)
+                                            .frame(height: 2)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .focusable()
+                            .focused($focusedPage, equals: page)
+                            .accessibilityAddTraits(selectedPage == page ? .isSelected : [])
                         }
+                        Spacer(minLength: 0)
                     }
-                    .pickerStyle(.segmented)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 0.5)
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Editor page")
                     .accessibilityIdentifier("Editor page")
+                    .onKeyPress(.leftArrow) { movePage(by: -1) }
+                    .onKeyPress(.rightArrow) { movePage(by: 1) }
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 28)
@@ -121,6 +147,14 @@ struct SuiteEditorView: View {
             case .failure(let error): store.notice = error.localizedDescription
             }
         }
+    }
+
+    private func movePage(by offset: Int) -> KeyPress.Result {
+        let pages = SuiteEditorPage.allCases
+        guard let index = pages.firstIndex(of: focusedPage ?? selectedPage) else { return .ignored }
+        selectedPage = pages[(index + offset + pages.count) % pages.count]
+        focusedPage = selectedPage
+        return .handled
     }
 
     private func selectFirstCaseIfNeeded() {
@@ -158,15 +192,15 @@ private struct SuiteOverviewHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("FOUNDATION MODEL EVALUATION SUITE")
+            Text("EVALUATION WORKBENCH")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .tracking(0.6)
+                .tracking(1.8)
 
             HStack(alignment: .firstTextBaseline, spacing: 16) {
                 TextField("Suite name", text: $store.draftSuite.name)
                     .textFieldStyle(.plain)
-                    .font(.title.bold())
+                    .font(.system(size: 30, weight: .semibold, design: .rounded))
                     .accessibilityLabel("Suite name")
 
                 Spacer(minLength: 12)
@@ -894,9 +928,10 @@ struct EditorSection<Content: View>: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 11) {
                 Image(systemName: systemImage)
-                    .font(.title3)
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.tint)
-                    .frame(width: 24)
+                    .frame(width: 30, height: 30)
+                    .background(Color.accentColor.opacity(0.08), in: .rect(cornerRadius: 5))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -913,9 +948,9 @@ struct EditorSection<Content: View>: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: .rect(cornerRadius: 14))
+        .background(.background, in: .rect(cornerRadius: 6))
         .overlay {
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 6)
                 .stroke(Color.secondary.opacity(0.14))
         }
     }

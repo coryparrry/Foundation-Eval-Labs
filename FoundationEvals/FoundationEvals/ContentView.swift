@@ -107,6 +107,24 @@ private struct RunHistorySidebar: View {
         .frame(minWidth: 250)
         .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 340)
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search runs")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "waveform.path")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("FOUNDATION")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(2)
+                    Text("Evaluation lab")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                Spacer()
+            }
+            .padding(18)
+            .overlay(alignment: .bottom) { Divider() }
+            .accessibilityElement(children: .combine)
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SettingsLink {
                 Label("MCP Connector", systemImage: "network")

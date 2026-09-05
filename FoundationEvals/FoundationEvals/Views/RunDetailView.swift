@@ -100,11 +100,11 @@ private struct RunOverviewHeader: View {
             Text("EVALUATION RUN")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .tracking(0.6)
+                .tracking(1.8)
 
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(run.suiteName)
-                    .font(.largeTitle.bold())
+                    .font(.system(size: 30, weight: .semibold, design: .rounded))
                 RunStatusBadge(run: run)
                 Spacer()
             }
@@ -162,7 +162,7 @@ private struct RunSummaryGrid: View {
     let run: EvaluationRun
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 175), spacing: 1)], spacing: 1) {
             MetricCard(
                 title: "Scored pass rate",
                 value: run.passRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—",
@@ -191,11 +191,11 @@ private struct RunSummaryGrid: View {
             )
             MetricCard(title: "Tokens", value: run.totalTokens.formatted(), symbol: "number")
         }
-        .padding(16)
-        .background(.thinMaterial, in: .rect(cornerRadius: 14))
+        .background(Color(nsColor: .separatorColor))
+        .clipShape(.rect(cornerRadius: 6))
         .overlay {
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.secondary.opacity(0.12))
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.secondary.opacity(0.16))
         }
     }
 }
@@ -253,9 +253,9 @@ private struct RunConfigurationSection: View {
         }
         .font(.headline)
         .padding(18)
-        .background(.thinMaterial, in: .rect(cornerRadius: 14))
+        .background(.background, in: .rect(cornerRadius: 6))
         .overlay {
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 6)
                 .stroke(Color.secondary.opacity(0.14))
         }
     }
@@ -699,14 +699,18 @@ private struct MetricCard: View {
     let symbol: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
             Label(title, systemImage: symbol)
-                .font(.caption)
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.title2.bold().monospacedDigit())
+                .font(.system(size: 27, weight: .medium, design: .monospaced))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(.background)
         .accessibilityElement(children: .combine)
     }
 }
