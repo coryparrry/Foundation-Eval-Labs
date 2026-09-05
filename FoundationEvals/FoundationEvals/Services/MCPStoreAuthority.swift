@@ -117,7 +117,7 @@ enum MCPStoreAuthority {
                 "plannedSamples": .integer(Int64(plannedSamples)),
                 "plannedModelRequests": .integer(Int64(saturatedProduct(
                     plannedSamples,
-                    suite.scoringMode == .modelJudge ? 2 : 1
+                    suite.needsModelJudge ? 3 : 1
                 ))),
                 "plannedToolCalls": .integer(Int64(
                     saturatedProduct(

@@ -26,7 +26,7 @@ enum ScoringMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .containsExpected:
             "Pass when the response contains the required literal text, ignoring case and accents."
         case .modelJudge:
-            "Use a separate call to the selected model provider with fixed judge settings. The judge scores 1–4; 3 or 4 passes."
+            "Use AI for free-form requirements and exact: \"text\" for deterministic exact-output requirements. Scores are 1–4; every requirement must score at least 3 to pass."
         }
     }
 
@@ -43,7 +43,7 @@ enum ScoringMode: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .exactMatch: "Example: Paris — the generated response must be exactly this text."
         case .containsExpected: "Example: Paris — this is literal text, not a regular expression."
-        case .modelJudge: "Give the judge a known-good answer when correctness can be verified. An exact match passes deterministically without asking the model judge."
+        case .modelJudge: "Give the judge a known-good answer when correctness can be verified. Use Exact text scoring for deterministic equality checks. The AI rubric checks every requirement, including when the response matches this reference."
         case .review: ""
         }
     }
@@ -170,7 +170,7 @@ enum EvaluationContextPolicy: String, Codable, CaseIterable, Identifiable, Senda
 }
 
 struct EvaluationModelConfiguration: Codable, Equatable, Sendable {
-    static let currentBehaviorVersion = "foundation-evals-v6"
+    static let currentBehaviorVersion = "foundation-evals-v8"
 
     var provider: EvaluationModelProvider = .onDevice
     var reasoningLevel: EvaluationReasoningLevel = .automatic
@@ -214,6 +214,10 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
         )
     ]
     var attachments: [EvaluationAttachment] = []
+
+    var needsModelJudge: Bool {
+        scoringMode == .modelJudge && rubricCriteria.contains { EvaluationExactCriterion.expectedText(in: $0) == nil }
+    }
 
     var rubricCriteria: [String] {
         criteria
@@ -300,6 +304,7 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var toolCalls: [EvaluationToolCallTrace]? = nil
     var timing: EvaluationSampleTiming? = nil
     var featureTrace: EvaluationFeatureTrace? = nil
+    var judgeTrace: EvaluationJudgeTrace? = nil
 }
 
 struct EvaluationToolCallTrace: Codable, Sendable {

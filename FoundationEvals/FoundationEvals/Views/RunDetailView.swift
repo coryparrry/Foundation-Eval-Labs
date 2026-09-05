@@ -177,7 +177,7 @@ private struct RunSummaryGrid: View {
             MetricCard(title: "Issues", value: run.errorCount.formatted(), symbol: "exclamationmark.triangle")
             if let averageScore = run.averageScore {
                 MetricCard(
-                    title: "Average AI score",
+                    title: "Average rubric score",
                     value: "\(averageScore.formatted(.number.precision(.fractionLength(1)))) / 4",
                     symbol: "sparkles"
                 )
@@ -477,7 +477,7 @@ private struct ResultDetail: View {
 
             if let rationale = result.rationale {
                 LabeledText(
-                    label: scoringMode == .modelJudge ? "AI judge rationale" : "Scoring rationale",
+                    label: "Scoring rationale",
                     text: rationale
                 )
             }
@@ -500,6 +500,7 @@ private struct ResultDetail: View {
 
             SampleTraceSection(result: result)
             if let trace = result.featureTrace { FeatureTraceSection(trace: trace) }
+            if let trace = result.judgeTrace { JudgeEvidenceSection(trace: trace) }
         }
         .textSelection(.enabled)
     }

@@ -167,7 +167,7 @@ final class EvaluationStore {
     }
 
     var plannedRequestCount: Int {
-        plannedSampleCount * (draftSuite.scoringMode == .modelJudge ? 2 : 1)
+        plannedSampleCount * (draftSuite.needsModelJudge ? 3 : 1)
     }
 
     var plannedToolCallLimit: Int {
@@ -693,7 +693,7 @@ final class EvaluationStore {
         }
         let allocation = configuration.contextAllocation(
             contextSize: SystemLanguageModel.default.contextSize,
-            includesModelJudge: candidate.scoringMode == .modelJudge,
+            includesModelJudge: candidate.needsModelJudge,
             customToolOutputReserve: candidate.features.tools.isEmpty ? 0 : configuration.maximumToolCalls * EvaluationCustomTool.contextTokenReservePerCall
         )
         if allocation.effectiveInputLimit < 512 {

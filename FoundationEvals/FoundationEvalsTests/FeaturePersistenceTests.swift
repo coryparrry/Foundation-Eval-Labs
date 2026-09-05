@@ -52,6 +52,11 @@ struct FeaturePersistenceTests {
                 upper = midpoint
             } catch { lower = midpoint }
         }
+        // A deterministic rule is never sent to the AI judge, even in a mixed rubric.
+        var mixedSuite = suite
+        mixedSuite.criteria = "exact: \"\(String(repeating: "LONG_LITERAL ", count: 200))\"\n" + suite.criteria
+        _ = try await runner.preparedPrompt(for: mixedSuite.cases[0], suite: mixedSuite, images: [],
+                                            contextSize: upper, tools: [])
         suite.features.profile.enabled = true
         suite.features.profile.afterToolInstructions = String(repeating: "Use uppercase. ", count: 40)
         let profileTokens = try await SystemLanguageModel.default.tokenCount(

@@ -67,3 +67,5 @@ Sources:
 - [Optimizing key-value caching](https://developer.apple.com/documentation/foundationmodels/optimizing-key-value-caching-in-language-model-sessions)
 - [Multimodal prompting](https://developer.apple.com/documentation/foundationmodels/analyzing-images-with-multimodal-prompting)
 - [Private Cloud Compute](https://developer.apple.com/documentation/foundationmodels/adding-server-side-intelligence-with-private-cloud-compute)
+
+See [validated judge evidence and trace coverage](judge-validation.md) for how rubric contradictions are handled and what complete public transcripts can expose.

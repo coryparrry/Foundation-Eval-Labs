@@ -253,10 +253,13 @@ private struct RunReadinessPanel: View {
             return blocker
         }
         if store.draftSuite.scoringMode == .modelJudge {
+            if !store.draftSuite.needsModelJudge {
+                return requestSummary + " All requirements use deterministic exact-text checks."
+            }
             let quotaNote = store.draftSuite.modelConfiguration.provider == .privateCloudCompute
                 ? " It uses an additional cloud request and quota for each response."
                 : ""
-            return requestSummary + " The AI rubric uses the selected provider with fixed greedy decoding and tools off." + quotaNote
+            return requestSummary + " The AI rubric uses greedy decoding with tools off, with at most one correction if its exact-text evidence is contradictory." + quotaNote
         }
         return requestSummary
     }
@@ -266,7 +269,7 @@ private struct RunReadinessPanel: View {
         let toolSuffix = store.plannedToolCallLimit > 0
             ? " · up to \(store.plannedToolCallLimit) tool calls"
             : ""
-        return "\(responseLabel) · \(store.plannedRequestCount) model request\(store.plannedRequestCount == 1 ? "" : "s") · \(provider)\(toolSuffix)."
+        return "\(responseLabel) · up to \(store.plannedRequestCount) model request\(store.plannedRequestCount == 1 ? "" : "s") · \(provider)\(toolSuffix)."
     }
 
     private func statusSymbol(blocker: String?) -> String {
