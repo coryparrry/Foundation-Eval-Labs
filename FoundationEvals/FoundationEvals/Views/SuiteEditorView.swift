@@ -52,6 +52,7 @@ private enum SuiteEditorPage: String, CaseIterable, Identifiable {
     case instructions
     case scoring
     case model
+    case features
 
     var id: Self { self }
 
@@ -61,6 +62,7 @@ private enum SuiteEditorPage: String, CaseIterable, Identifiable {
         case .instructions: "Instructions"
         case .scoring: "Scoring"
         case .model: "Model"
+        case .features: "Features"
         }
     }
 }
@@ -131,6 +133,8 @@ struct SuiteEditorView: View {
             ScoringSection(store: store)
         case .model:
             ModelControlsSection(store: store)
+        case .features:
+            FeatureControlsView(store: store)
         }
     }
 }
@@ -260,7 +264,7 @@ private struct RunReadinessPanel: View {
     private var requestSummary: String {
         let provider = store.draftSuite.modelConfiguration.provider.title
         let toolSuffix = store.plannedToolCallLimit > 0
-            ? " · up to \(store.plannedToolCallLimit) local reference-tool calls"
+            ? " · up to \(store.plannedToolCallLimit) tool calls"
             : ""
         return "\(responseLabel) · \(store.plannedRequestCount) model request\(store.plannedRequestCount == 1 ? "" : "s") · \(provider)\(toolSuffix)."
     }

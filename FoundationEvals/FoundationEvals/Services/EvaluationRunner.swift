@@ -219,7 +219,8 @@ actor EvaluationRunner {
 
         let allocation = suite.modelConfiguration.contextAllocation(
             contextSize: contextSize,
-            includesModelJudge: suite.scoringMode == .modelJudge
+            includesModelJudge: suite.scoringMode == .modelJudge,
+            customToolOutputReserve: suite.features.tools.isEmpty ? 0 : suite.modelConfiguration.maximumToolCalls * EvaluationCustomTool.contextTokenReservePerCall
         )
         return EvaluationRun(
             id: runID,
@@ -249,15 +250,15 @@ actor EvaluationRunner {
                 configuration: suite.modelConfiguration,
                 modelDisplayName: modelName,
                 capabilities: model.capabilities.evaluationNames,
-                toolNames: suite.modelConfiguration.referenceMode == .lookupTool
-                    ? [ReferenceLookupTool.toolName]
-                    : [],
+                toolNames: (suite.modelConfiguration.referenceMode == .lookupTool
+                    ? [ReferenceLookupTool.toolName] : []) + suite.features.tools.map(\.name),
                 effectiveInputTokenLimit: allocation.effectiveInputLimit,
                 reservedToolOutputTokens: allocation.toolOutputReserve,
                 reservedJudgeOverheadTokens: allocation.judgeOverheadReserve,
                 inputTokenCountingMethod: suite.modelConfiguration.provider == .onDevice
                     ? "System model tokenizer"
-                    : "System model tokenizer estimate"
+                    : "System model tokenizer estimate",
+                features: suite.features
             )
         )
     }
@@ -275,14 +276,10 @@ actor EvaluationRunner {
         let signpostID = signposter.makeSignpostID()
         let interval = signposter.beginInterval("Model request", id: signpostID)
         let recorder = ReferenceToolRecorder(maximumCalls: suite.modelConfiguration.maximumToolCalls)
-        let tools: [any Tool] = suite.modelConfiguration.referenceMode == .lookupTool
-            ? [ReferenceLookupTool(index: ReferenceSearchIndex(attachments: suite.attachments), recorder: recorder)]
-            : []
-        let session = LanguageModelSession(
-            model: model,
-            tools: tools,
-            instructions: suite.instructions.isEmpty ? nil : Instructions(suite.instructions)
-        )
+        let customRecorder = EvaluationCustomToolRecorder(maximumCalls: suite.modelConfiguration.maximumToolCalls)
+        let profileRecorder = EvaluationProfileRecorder()
+        var session: LanguageModelSession?
+        var featureTrace = EvaluationFeatureTrace()
         var effectivePrompt: String?
         var generationStarted: ContinuousClock.Instant?
         var timing = EvaluationSampleTiming(
@@ -292,6 +289,16 @@ actor EvaluationRunner {
         )
 
         do {
+            var tools: [any Tool] = suite.modelConfiguration.referenceMode == .lookupTool
+                ? [ReferenceLookupTool(index: ReferenceSearchIndex(attachments: suite.attachments), recorder: recorder)] : []
+            tools += try EvaluationCustomTool.makeTools(definitions: suite.features.tools, recorder: customRecorder)
+            let activeSession = suite.features.profile.enabled
+                ? EvaluationDynamicProfile.makeSession(model: model, instructions: suite.instructions,
+                    tools: tools, configuration: suite.features.profile, recorder: profileRecorder)
+                : LanguageModelSession(model: model, tools: tools,
+                    instructions: suite.instructions.isEmpty ? nil : Instructions(suite.instructions))
+            session = activeSession
+            if suite.features.prewarm { activeSession.prewarm() }
             let prepared = try await preparedPrompt(
                 for: evaluationCase,
                 suite: suite,
@@ -302,17 +309,12 @@ actor EvaluationRunner {
             effectivePrompt = prepared.text
             timing.preparationMilliseconds = Self.milliseconds(since: started)
             generationStarted = ContinuousClock.now
-            let response = try await session.respond(
-                to: prepared.prompt,
-                options: suite.modelConfiguration.generationOptions,
-                contextOptions: suite.modelConfiguration.contextOptions,
-                metadata: [
-                    "evalRunID": runID.uuidString,
-                    "evalCaseID": evaluationCase.id.uuidString,
-                    "repetition": repetition,
-                    "estimatedInputTokens": prepared.tokenCount
-                ]
+            let response = try await EvaluationFeatureResponse.generate(
+                session: activeSession, prompt: prepared.prompt, suite: suite,
+                metadata: ["evalRunID": runID.uuidString, "evalCaseID": evaluationCase.id.uuidString,
+                           "repetition": repetition, "estimatedInputTokens": prepared.tokenCount]
             )
+            featureTrace.firstContentMilliseconds = response.firstContentMilliseconds
             signposter.endInterval("Model request", interval)
 
             if let generationStarted {
@@ -322,13 +324,23 @@ actor EvaluationRunner {
             let usage = Self.usage(from: response.usage)
             let reasoningText = Self.reasoningText(from: response.transcriptEntries)
             let toolCalls = await recorder.snapshot()
-            let toolEvidence = await recorder.evidenceText()
+            featureTrace.customToolCalls = await customRecorder.snapshot()
+            featureTrace.profileEvents = await profileRecorder.snapshot()
+            let referenceEvidence = await recorder.evidenceText()
+            let customEvidence = suite.features.tools.isEmpty ? nil : await customRecorder.evidenceText()
+            let evidenceParts = [referenceEvidence, customEvidence].compactMap { $0 }.filter { !$0.isEmpty }
+            let toolEvidence = evidenceParts.isEmpty ? nil : evidenceParts.joined(separator: "\n\n")
+            var scoringSuite = suite
+            if await profileRecorder.transitioned {
+                scoringSuite.instructions = [suite.instructions, suite.features.profile.afterToolInstructions]
+                    .filter { !$0.isEmpty }.joined(separator: "\n\n")
+            }
             let scoringStarted = ContinuousClock.now
             let scoring = await score(
                 response: response.content,
                 evaluationCase: evaluationCase,
                 effectivePrompt: prepared.text,
-                suite: suite,
+                suite: scoringSuite,
                 runID: runID,
                 images: images,
                 model: model,
@@ -359,7 +371,8 @@ actor EvaluationRunner {
                 judgeErrorCategory: scoring.errorCategory,
                 judgeErrorMessage: scoring.errorMessage,
                 toolCalls: toolCalls.isEmpty ? nil : toolCalls,
-                timing: timing
+                timing: timing,
+                featureTrace: featureTrace
             )
         } catch {
             signposter.endInterval("Model request", interval)
@@ -369,6 +382,8 @@ actor EvaluationRunner {
                 timing.preparationMilliseconds = Self.milliseconds(since: started)
             }
             let traceError = Self.traceError(error)
+            featureTrace.customToolCalls = await customRecorder.snapshot()
+            featureTrace.profileEvents = await profileRecorder.snapshot()
             let toolCalls = await recorder.snapshot()
             return EvaluationSampleResult(
                 caseID: evaluationCase.id,
@@ -382,7 +397,7 @@ actor EvaluationRunner {
                 score: nil,
                 rationale: nil,
                 durationMilliseconds: Self.milliseconds(since: started),
-                usage: Self.usage(from: session.usage),
+                usage: session.map { Self.usage(from: $0.usage) } ?? EvaluationUsage(),
                 judgeDurationMilliseconds: nil,
                 judgeUsage: nil,
                 errorCategory: traceError.category,
@@ -390,7 +405,8 @@ actor EvaluationRunner {
                 judgeErrorCategory: nil,
                 judgeErrorMessage: nil,
                 toolCalls: toolCalls.isEmpty ? nil : toolCalls,
-                timing: timing
+                timing: timing,
+                featureTrace: featureTrace
             )
         }
     }
@@ -512,7 +528,7 @@ actor EvaluationRunner {
         }
     }
 
-    private func preparedPrompt(
+    func preparedPrompt(
         for evaluationCase: EvaluationCase,
         suite: EvaluationSuite,
         images: [ImageEvaluationInput],
@@ -524,12 +540,17 @@ actor EvaluationRunner {
             ? 0
             : try await tokenCounter.tokenCount(for: Instructions(suite.instructions))
         let toolTokens = tools.isEmpty ? 0 : try await tokenCounter.tokenCount(for: tools)
+        let schemaTokens = suite.features.outputFields.isEmpty ? 0 : try await tokenCounter.tokenCount(
+            for: EvaluationSchemaBuilder.schema(fields: suite.features.outputFields, name: "EvaluationOutput"))
+        let profileTokens = suite.features.profile.enabled ? try await tokenCounter.tokenCount(
+            for: Instructions(suite.features.profile.afterToolInstructions)) : 0
         let allocation = suite.modelConfiguration.contextAllocation(
             contextSize: contextSize,
-            includesModelJudge: suite.scoringMode == .modelJudge
+            includesModelJudge: suite.scoringMode == .modelJudge,
+            customToolOutputReserve: suite.features.tools.isEmpty ? 0 : suite.modelConfiguration.maximumToolCalls * EvaluationCustomTool.contextTokenReservePerCall
         )
         let inputCeiling = allocation.effectiveInputLimit
-        let promptBudget = max(1, inputCeiling - instructionTokens - toolTokens)
+        let promptBudget = inputCeiling - instructionTokens - toolTokens - schemaTokens - profileTokens
         let availableTextCharacters = suite.attachments
             .filter { $0.kind == .text }
             .compactMap(\.text)
@@ -563,17 +584,22 @@ actor EvaluationRunner {
 
         guard tokenCount <= promptBudget else {
             throw EvaluationRunnerError.inputTooLarge(
-                tokens: tokenCount + instructionTokens + toolTokens,
+                tokens: tokenCount + instructionTokens + toolTokens + schemaTokens + profileTokens,
                 budget: inputCeiling
             )
         }
         if suite.scoringMode == .modelJudge {
+            var judgeAdmissionSuite = suite
+            if suite.features.profile.enabled {
+                judgeAdmissionSuite.instructions = [suite.instructions, suite.features.profile.afterToolInstructions]
+                    .filter { !$0.isEmpty }.joined(separator: "\n\n")
+            }
             let minimumJudgePrompt = Self.prompt(
                 text: Self.judgePrompt(
                     response: "",
                     evaluationCase: evaluationCase,
                     effectivePrompt: effectiveText,
-                    suite: suite,
+                    suite: judgeAdmissionSuite,
                     toolEvidence: nil
                 ),
                 images: images
@@ -591,7 +617,7 @@ actor EvaluationRunner {
                 throw EvaluationRunnerError.inputTooLarge(tokens: worstCaseJudgeInput, budget: judgeInputBudget)
             }
         }
-        return (prompt, effectiveText, tokenCount + instructionTokens + toolTokens)
+        return (prompt, effectiveText, tokenCount + instructionTokens + toolTokens + schemaTokens + profileTokens)
     }
 
     static func judgePrompt(

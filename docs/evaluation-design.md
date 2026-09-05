@@ -26,7 +26,7 @@ Compare quality alongside completion, errors, latency, and token consumption. A 
 - Multiple assertions and structured-output grading need a versioned scoring contract rather than adding ambiguous string checks.
 - Importing traces from another app needs a documented ingestion schema and a clear separation between observed production traces and controlled evaluations.
 - OpenTelemetry export is useful for interoperability, but adopting its evolving GenAI conventions and a backend is unnecessary for the current local workflow. Do not label app JSON as OTLP.
-- Multi-turn and arbitrary custom-tool evaluations need reproducible environment setup and outcome checks; they are not equivalent to adding more single-turn prompts.
+- Multi-turn scenarios and direct ingestion of another app’s traces still need their own execution and scoring contracts. Custom fixture/HTTP tools, dynamic profiles, guided output, and performance modes are now implemented; see [Foundation Models experiments](foundation-model-features.md).
 
 ## Research sources
 

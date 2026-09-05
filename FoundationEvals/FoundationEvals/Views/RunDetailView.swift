@@ -224,6 +224,9 @@ private struct RunConfigurationSection: View {
                         label: "Execution contract",
                         text: "\(execution.behaviorVersion) · capabilities: \(execution.capabilities.joined(separator: ", ")) · tools: \(execution.toolNames.isEmpty ? "none" : execution.toolNames.joined(separator: ", "))"
                     )
+                    if let features = execution.features {
+                        FeatureConfigurationSummary(configuration: features)
+                    }
                 }
                 if run.scoringMode == .modelJudge {
                     LabeledText(label: "AI rubric requirements", text: run.criteria)
@@ -496,6 +499,7 @@ private struct ResultDetail: View {
             }
 
             SampleTraceSection(result: result)
+            if let trace = result.featureTrace { FeatureTraceSection(trace: trace) }
         }
         .textSelection(.enabled)
     }

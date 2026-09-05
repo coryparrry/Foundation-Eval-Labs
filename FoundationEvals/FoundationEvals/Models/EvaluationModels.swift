@@ -170,7 +170,7 @@ enum EvaluationContextPolicy: String, Codable, CaseIterable, Identifiable, Senda
 }
 
 struct EvaluationModelConfiguration: Codable, Equatable, Sendable {
-    static let currentBehaviorVersion = "foundation-evals-v5"
+    static let currentBehaviorVersion = "foundation-evals-v6"
 
     var provider: EvaluationModelProvider = .onDevice
     var reasoningLevel: EvaluationReasoningLevel = .automatic
@@ -205,6 +205,7 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
     var scoringMode = ScoringMode.modelJudge
     var repetitions = 1
     var modelConfiguration = EvaluationModelConfiguration()
+    var features = EvaluationFeatureConfiguration()
     var cases = [
         EvaluationCase(
             name: "Example",
@@ -224,7 +225,7 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, instructions, criteria, scoringMode, repetitions, modelConfiguration, cases, attachments
+        case id, name, version, instructions, criteria, scoringMode, repetitions, modelConfiguration, features, cases, attachments
     }
 
     init(from decoder: Decoder) throws {
@@ -239,6 +240,7 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
         repetitions = try container.decodeIfPresent(Int.self, forKey: .repetitions) ?? defaults.repetitions
         modelConfiguration = try container.decodeIfPresent(EvaluationModelConfiguration.self, forKey: .modelConfiguration)
             ?? defaults.modelConfiguration
+        features = try container.decodeIfPresent(EvaluationFeatureConfiguration.self, forKey: .features) ?? defaults.features
         cases = try container.decodeIfPresent([EvaluationCase].self, forKey: .cases) ?? defaults.cases
         attachments = try container.decodeIfPresent([EvaluationAttachment].self, forKey: .attachments) ?? defaults.attachments
     }
@@ -297,6 +299,7 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var judgeErrorMessage: String?
     var toolCalls: [EvaluationToolCallTrace]? = nil
     var timing: EvaluationSampleTiming? = nil
+    var featureTrace: EvaluationFeatureTrace? = nil
 }
 
 struct EvaluationToolCallTrace: Codable, Sendable {
@@ -332,6 +335,7 @@ struct EvaluationExecutionTrace: Codable, Sendable {
     var reservedToolOutputTokens: Int? = nil
     var reservedJudgeOverheadTokens: Int? = nil
     var inputTokenCountingMethod: String? = nil
+    var features: EvaluationFeatureConfiguration? = nil
 }
 
 struct EvaluationRun: Identifiable, Codable, Sendable {

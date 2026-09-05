@@ -171,9 +171,9 @@ final class EvaluationStore {
     }
 
     var plannedToolCallLimit: Int {
-        draftSuite.modelConfiguration.referenceMode == .lookupTool
-            ? plannedSampleCount * draftSuite.modelConfiguration.maximumToolCalls
-            : 0
+        let allowances = (draftSuite.modelConfiguration.referenceMode == .lookupTool ? 1 : 0)
+            + (draftSuite.features.tools.isEmpty ? 0 : 1)
+        return plannedSampleCount * draftSuite.modelConfiguration.maximumToolCalls * allowances
     }
 
     var runBlocker: String? {
@@ -591,6 +591,16 @@ final class EvaluationStore {
         includeModelReadiness: Bool = true
     ) -> String? {
         let configuration = candidate.modelConfiguration
+        if let issue = candidate.features.validationIssue { return issue }
+        if candidate.features.tools.contains(where: { $0.name == ReferenceLookupTool.toolName }) {
+            return "Custom tools must not use the reserved reference lookup name."
+        }
+        if !candidate.features.tools.isEmpty, !SystemLanguageModel.default.capabilities.contains(.toolCalling) {
+            return "The current model does not support custom tool calls."
+        }
+        if !candidate.features.outputFields.isEmpty, !SystemLanguageModel.default.capabilities.contains(.guidedGeneration) {
+            return "The current model does not support guided output."
+        }
         if candidate.modelConfiguration.provider != .onDevice {
             return "Only the on-device model is available for evaluation runs."
         }
@@ -667,6 +677,9 @@ final class EvaluationStore {
            !SystemLanguageModel.default.capabilities.contains(.reasoning) {
             return "The on-device model does not support explicit reasoning levels. Choose Automatic."
         }
+        if !candidate.features.tools.isEmpty, !(1...4).contains(configuration.maximumToolCalls) {
+            return "The tool call limit must be between one and four calls per response."
+        }
         if configuration.referenceMode == .lookupTool {
             if !SystemLanguageModel.default.capabilities.contains(.toolCalling) {
                 return "The selected model does not support tool calling."
@@ -680,7 +693,8 @@ final class EvaluationStore {
         }
         let allocation = configuration.contextAllocation(
             contextSize: SystemLanguageModel.default.contextSize,
-            includesModelJudge: candidate.scoringMode == .modelJudge
+            includesModelJudge: candidate.scoringMode == .modelJudge,
+            customToolOutputReserve: candidate.features.tools.isEmpty ? 0 : configuration.maximumToolCalls * EvaluationCustomTool.contextTokenReservePerCall
         )
         if allocation.effectiveInputLimit < 512 {
             return "Reduce the response limit or reference-tool call limit so at least 512 input tokens remain."
@@ -940,6 +954,7 @@ final class EvaluationStore {
             scoringMode: suite.scoringMode,
             repetitions: suite.repetitions,
             modelConfiguration: suite.modelConfiguration,
+            features: suite.features,
             cases: suite.cases,
             attachments: suite.attachments.map {
                 RevisionAttachment(
@@ -1143,6 +1158,7 @@ private struct SuiteRevisionPayload: Codable {
     var scoringMode: ScoringMode
     var repetitions: Int
     var modelConfiguration: EvaluationModelConfiguration
+    var features: EvaluationFeatureConfiguration
     var cases: [EvaluationCase]
     var attachments: [RevisionAttachment]
 }

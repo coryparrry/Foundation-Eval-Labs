@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-09-05 custom tools, profiles and guided output
+
+- Checked the current Foundation Models documentation through Xcode MCP and the installed SDK 27 beta 6 interface. Added `docs/foundation-model-features.md` with a feature inventory, real setup instructions, current constraints and official sources.
+- Implemented configurable fixture and loopback HTTP custom tools with runtime argument schemas; 1–4 shared custom calls, bounded request/response bodies and token limits, cancellation, and durable argument/output/error evidence. Added a runnable order-service example.
+- Implemented actual DynamicProfile transitions: tools available initially, optional required first tool, post-tool instructions, tools removed after completion, per-session state and lifecycle traces. The AI judge sees the effective post-transition instructions; preflight reserves their cost.
+- Added guided output fields, streaming first-visible-content timing and session prewarming. Suites and run snapshots retain the configuration. Baseline comparisons flag changed features, and legacy suites/reports remain readable.
+- Extended MCP suite configuration/state with strict feature declarations, omission preservation for legacy clients, accurate tool workload counts and published limits. Added the native Features editor, saved configuration summary and sample feature traces.
+- Validation: 55 distinct focused tests passed across Xcode MCP targeted runs; the final changed-feature batch passed 19/19. Coverage includes legacy persistence, semantic revision changes, MCP roundtrip/schema bounds, shared tool limits, cancellation, HTTP failures/redirect policy, oversized arguments rejected before execution, output limits, and a tokenizer-calibrated judge admission boundary. `git diff --check` and Python example syntax parsing passed. Independent integration reviews found and resolved budget, workload and validation issues.
+- Real runtime evidence: fixture + required dynamic profile + streamed guided JSON returned `{"status": "shipped"}`; an actual HTTP handler received `orderID: A-104` and returned `delivered` through both nonstreamed guided output and streamed text. Lifecycle traces showed initial profile, tool output, then the post-tool profile. Native UI verified tool creation, profile controls, successful call details and failed-endpoint evidence. Original suite configuration was restored after experiments.
+- Model-quality finding: the profile correctly returned `DELIVERY VERIFIED`, but the AI rubric model scored it 2 while quoting the identical required text. The app retained this contradiction and the verdict. Exact requirements should use deterministic scoring; this smoke run does not establish judge calibration.
+- Negative runtime evidence: an unavailable loopback endpoint produced `toolCallFailed`, a failed call with arguments/duration/error, and only the initial profile event. No fabricated response or post-tool transition was recorded.
+- Final packaging: `./script/build_and_run.sh --verify` passed from clean DerivedData after the final budget fixes. Removed File Provider-added FinderInfo from the generated bundle; `codesign --verify --strict --deep` passed. The packaged app executed `examples/order_tool_server.py` through the real HTTP bridge, produced guided JSON status `delivered`, and recorded both profile activations. Original suite restored.
+- Delivery: task remains on `codex/swift-mcp-eval-control`; no Git remote is configured. Unrelated staged `.codegraph/.gitignore` is preserved.
+
 ## 2026-09-05 evaluation analysis and tracing
 
 - Added saved-run baseline comparison, explicit incomplete/incompatible evidence, per-case repetition patterns, p50/p95 subject latency, and separate subject/judge token summaries.

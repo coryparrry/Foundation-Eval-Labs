@@ -117,6 +117,8 @@ struct MCPSuiteDeclaration: Codable, Sendable {
     var repetitions: Int
     var rubricRequirements: [String]
     var modelConfiguration: MCPModelConfiguration
+    /// Omitted by legacy clients. The authority preserves the currently stored value in that case.
+    var features: EvaluationFeatureConfiguration? = nil
     var cases: [MCPCaseDeclaration]
 }
 
@@ -223,12 +225,12 @@ enum MCPToolCatalog {
     static let definitions: [MCPToolDefinition] = [
         tool(
             "eval_get_state", "Get evaluation state",
-            "Read the shared suite, revision, readiness, limits, capabilities, attachments, and active run.",
+            "Read the shared suite, Foundation Models feature configuration, revision, readiness, limits, capabilities, attachments, and active run.",
             properties: [:], required: [], readOnly: true
         ),
         tool(
             "eval_replace_suite", "Replace evaluation suite",
-            "Atomically replace all editable suite fields and ordered cases while preserving suite identity and attachments.",
+            "Atomically replace editable suite fields and ordered cases while preserving suite identity and attachments. Include suite.features to replace the Foundation Models feature configuration; omit it to preserve the current configuration.",
             properties: [
                 "expectedRevision": string("Revision returned by eval_get_state."),
                 "confirmDeletes": boolean("Must be true when existing cases are omitted."),
@@ -333,6 +335,9 @@ enum MCPToolCatalog {
                 guard object.isEmpty else { throw MCPToolInputError.invalidArguments }
                 return .getState
             case "eval_replace_suite":
+                if arguments.objectValue?["suite"]?.objectValue?["features"] == .null {
+                    throw MCPToolInputError.invalidArguments
+                }
                 let value = try arguments.decode(MCPReplaceSuiteArguments.self)
                 try validate(value)
                 return .replaceSuite(value)
@@ -405,7 +410,8 @@ enum MCPToolCatalog {
               (0.01...1).contains(suite.modelConfiguration.probabilityThreshold),
               (128...4_096).contains(suite.modelConfiguration.maximumResponseTokens),
               suite.modelConfiguration.maximumInputTokens.map({ (512...32_768).contains($0) }) ?? true,
-              (1...4).contains(suite.modelConfiguration.maximumToolCalls)
+              (1...4).contains(suite.modelConfiguration.maximumToolCalls),
+              suite.features?.validationIssue == nil
         else { throw MCPToolInputError.invalidArguments }
     }
 
@@ -498,6 +504,70 @@ enum MCPToolCatalog {
                     "contextPolicy", "maximumToolCalls"
                 ]
             ),
+            "features": object(
+                properties: [
+                    "tools": array(
+                        items: object(
+                            properties: [
+                                "id": uuid("Stable custom tool UUID."),
+                                "name": string(
+                                    "Foundation Models tool identifier.",
+                                    maximumLength: EvaluationCustomToolDefinition.maximumNameCharacters
+                                ),
+                                "description": string(
+                                    "Description provided to the model.",
+                                    maximumLength: EvaluationCustomToolDefinition.maximumDescriptionCharacters
+                                ),
+                                "parameters": array(
+                                    items: schemaFieldSchema,
+                                    minimum: 0,
+                                    maximum: EvaluationCustomToolDefinition.maximumParameters
+                                ),
+                                "mode": string(
+                                    "Fixture returns a canned result. Local HTTP executes developer-configured code on an explicit loopback endpoint.",
+                                    enum: EvaluationCustomToolMode.allRawValues
+                                ),
+                                "fixtureResponse": string(
+                                    "Canned result returned in fixture mode.",
+                                    maximumLength: EvaluationCustomToolDefinition.maximumOutputBytes
+                                ),
+                                "endpoint": string(
+                                    "Explicit http://127.0.0.1:<port> endpoint used in localHTTP mode. Remote and implicit endpoints are rejected.",
+                                    maximumLength: EvaluationCustomToolDefinition.maximumEndpointCharacters
+                                )
+                            ],
+                            required: [
+                                "id", "name", "description", "parameters", "mode", "fixtureResponse", "endpoint"
+                            ]
+                        ),
+                        minimum: 0,
+                        maximum: EvaluationFeatureConfiguration.maximumTools
+                    ),
+                    "profile": object(
+                        properties: [
+                            "enabled": boolean(),
+                            "name": string(
+                                "Profile name.",
+                                maximumLength: EvaluationProfileConfiguration.maximumNameCharacters
+                            ),
+                            "afterToolInstructions": string(
+                                "Instructions applied after a tool response.",
+                                maximumLength: EvaluationProfileConfiguration.maximumInstructionsBytes
+                            ),
+                            "requireToolFirst": boolean()
+                        ],
+                        required: ["enabled", "name", "afterToolInstructions", "requireToolFirst"]
+                    ),
+                    "outputFields": array(
+                        items: schemaFieldSchema,
+                        minimum: 0,
+                        maximum: EvaluationFeatureConfiguration.maximumOutputFields
+                    ),
+                    "prewarm": boolean("Prewarm the on-device Foundation Models session before timed generation."),
+                    "streamResponse": boolean("Stream response snapshots while retaining the final generated response.")
+                ],
+                required: ["tools", "profile", "outputFields", "prewarm", "streamResponse"]
+            ),
             "cases": array(
                 items: object(
                     properties: [
@@ -515,6 +585,23 @@ enum MCPToolCatalog {
             "name", "version", "instructions", "scoringMode", "repetitions", "rubricRequirements",
             "modelConfiguration", "cases"
         ]
+    )
+
+    private static let schemaFieldSchema = object(
+        properties: [
+            "id": uuid("Stable schema field UUID."),
+            "name": string(
+                "Schema field identifier.",
+                maximumLength: EvaluationSchemaField.maximumNameCharacters
+            ),
+            "description": string(
+                "Schema field description.",
+                maximumLength: EvaluationSchemaField.maximumDescriptionCharacters
+            ),
+            "type": string(enum: EvaluationSchemaFieldType.allRawValues),
+            "isOptional": boolean()
+        ],
+        required: ["id", "name", "description", "type", "isOptional"]
     )
 
     private static func object(properties: [String: MCPJSONValue], required: [String]) -> MCPJSONValue {

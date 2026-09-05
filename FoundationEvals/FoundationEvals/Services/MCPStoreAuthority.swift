@@ -18,7 +18,7 @@ enum MCPStoreAuthority {
             case .replaceSuite(let arguments):
                 let before = store.suiteRevision
                 let revision = try store.replaceSuite(
-                    suite(from: arguments.suite),
+                    suite(from: arguments.suite, current: store.suite),
                     expectedRevision: arguments.expectedRevision,
                     confirmDeletes: arguments.confirmDeletes == true
                 )
@@ -99,6 +99,8 @@ enum MCPStoreAuthority {
         let modelStatus = store.modelStatus(for: suite)
         let capabilities = store.selectedModelCapabilities(for: suite)
         let plannedSamples = saturatedProduct(suite.cases.count, suite.repetitions)
+        let toolCallFamilies = (suite.modelConfiguration.referenceMode == .lookupTool ? 1 : 0)
+            + (suite.features.tools.isEmpty ? 0 : 1)
         let active = try store.activeRun.map { try operationJSON(store.runStatus(id: $0.id)!) } ?? .null
         return readPayload([
             "revision": .string(try store.currentSuiteRevision()),
@@ -118,9 +120,10 @@ enum MCPStoreAuthority {
                     suite.scoringMode == .modelJudge ? 2 : 1
                 ))),
                 "plannedToolCalls": .integer(Int64(
-                    suite.modelConfiguration.referenceMode == .lookupTool
-                        ? saturatedProduct(plannedSamples, suite.modelConfiguration.maximumToolCalls)
-                        : 0
+                    saturatedProduct(
+                        saturatedProduct(plannedSamples, suite.modelConfiguration.maximumToolCalls),
+                        toolCallFamilies
+                    )
                 ))
             ]),
             "limits": .object([
@@ -135,7 +138,30 @@ enum MCPStoreAuthority {
                 "maximumExtractedTextCharacters": .integer(Int64(EvaluationStore.maximumExtractedTextCharacters)),
                 "maximumTextOrPDFBytes": .integer(Int64(EvaluationStore.maximumTextFileBytes)),
                 "maximumImageBytes": .integer(Int64(EvaluationStore.maximumImageBytes)),
-                "maximumHTTPRequestBytes": .integer(16 * 1_024 * 1_024)
+                "maximumHTTPRequestBytes": .integer(16 * 1_024 * 1_024),
+                "maximumCustomTools": .integer(Int64(EvaluationFeatureConfiguration.maximumTools)),
+                "maximumToolParameters": .integer(Int64(EvaluationCustomToolDefinition.maximumParameters)),
+                "maximumOutputFields": .integer(Int64(EvaluationFeatureConfiguration.maximumOutputFields)),
+                "maximumFeatureIdentifierCharacters": .integer(Int64(EvaluationSchemaField.maximumNameCharacters)),
+                "maximumToolDescriptionCharacters": .integer(Int64(
+                    EvaluationCustomToolDefinition.maximumDescriptionCharacters
+                )),
+                "maximumSchemaFieldDescriptionCharacters": .integer(Int64(
+                    EvaluationSchemaField.maximumDescriptionCharacters
+                )),
+                "maximumProfileNameCharacters": .integer(Int64(
+                    EvaluationProfileConfiguration.maximumNameCharacters
+                )),
+                "maximumAfterToolInstructionsBytes": .integer(Int64(
+                    EvaluationProfileConfiguration.maximumInstructionsBytes
+                )),
+                "maximumToolEndpointCharacters": .integer(Int64(
+                    EvaluationCustomToolDefinition.maximumEndpointCharacters
+                )),
+                "maximumToolOutputBytes": .integer(Int64(EvaluationCustomToolDefinition.maximumOutputBytes)),
+                "maximumCustomToolOutputTokens": .integer(Int64(EvaluationCustomTool.maximumOutputTokens)),
+                "maximumCustomToolArgumentTokens": .integer(Int64(EvaluationCustomTool.maximumArgumentTokens)),
+                "maximumToolArgumentsBytes": .integer(Int64(EvaluationCustomToolDefinition.maximumArgumentBytes))
             ]),
             "activeRun": active
         ])
@@ -243,7 +269,10 @@ enum MCPStoreAuthority {
         ])
     }
 
-    private static func suite(from declaration: MCPSuiteDeclaration) -> EvaluationSuite {
+    private static func suite(
+        from declaration: MCPSuiteDeclaration,
+        current: EvaluationSuite
+    ) -> EvaluationSuite {
         var suite = EvaluationSuite()
         suite.name = declaration.name
         suite.version = declaration.version
@@ -270,6 +299,7 @@ enum MCPStoreAuthority {
         configuration.contextPolicy = EvaluationContextPolicy(rawValue: declaration.modelConfiguration.contextPolicy.rawValue)!
         configuration.maximumToolCalls = declaration.modelConfiguration.maximumToolCalls
         suite.modelConfiguration = configuration
+        suite.features = declaration.features ?? current.features
         return suite
     }
 
@@ -296,6 +326,7 @@ enum MCPStoreAuthority {
                 "contextPolicy": .string(configuration.contextPolicy.rawValue),
                 "maximumToolCalls": .integer(Int64(configuration.maximumToolCalls))
             ]),
+            "features": featureJSON(suite.features),
             "cases": .array(suite.cases.map { item in
                 .object([
                     "id": .string(item.id.uuidString),
@@ -304,6 +335,41 @@ enum MCPStoreAuthority {
                     "expected": .string(item.expected)
                 ])
             })
+        ])
+    }
+
+    private static func featureJSON(_ features: EvaluationFeatureConfiguration) -> MCPJSONValue {
+        .object([
+            "tools": .array(features.tools.map { tool in
+                .object([
+                    "id": .string(tool.id.uuidString),
+                    "name": .string(tool.name),
+                    "description": .string(tool.description),
+                    "parameters": .array(tool.parameters.map(schemaFieldJSON)),
+                    "mode": .string(tool.mode.rawValue),
+                    "fixtureResponse": .string(tool.fixtureResponse),
+                    "endpoint": .string(tool.endpoint)
+                ])
+            }),
+            "profile": .object([
+                "enabled": .bool(features.profile.enabled),
+                "name": .string(features.profile.name),
+                "afterToolInstructions": .string(features.profile.afterToolInstructions),
+                "requireToolFirst": .bool(features.profile.requireToolFirst)
+            ]),
+            "outputFields": .array(features.outputFields.map(schemaFieldJSON)),
+            "prewarm": .bool(features.prewarm),
+            "streamResponse": .bool(features.streamResponse)
+        ])
+    }
+
+    private static func schemaFieldJSON(_ field: EvaluationSchemaField) -> MCPJSONValue {
+        .object([
+            "id": .string(field.id.uuidString),
+            "name": .string(field.name),
+            "description": .string(field.description),
+            "type": .string(field.type.rawValue),
+            "isOptional": .bool(field.isOptional)
         ])
     }
 

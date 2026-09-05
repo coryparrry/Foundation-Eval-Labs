@@ -338,7 +338,8 @@ struct EvaluationRunComparison: Codable, Equatable, Sendable {
         if current.suiteVersion != baseline.suiteVersion { warnings.append(.suiteVersionChanged) }
         if current.instructions != baseline.instructions { warnings.append(.instructionsChanged) }
         if current.environment.model != baseline.environment.model { warnings.append(.subjectModelChanged) }
-        if current.execution?.configuration != baseline.execution?.configuration {
+        if current.execution?.configuration != baseline.execution?.configuration
+            || (current.execution?.features ?? .init()) != (baseline.execution?.features ?? .init()) {
             warnings.append(.modelConfigurationChanged)
         }
         if current.execution == nil || baseline.execution == nil {

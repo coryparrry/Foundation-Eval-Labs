@@ -34,11 +34,12 @@ extension EvaluationModelConfiguration {
 
     func contextAllocation(
         contextSize: Int,
-        includesModelJudge: Bool
+        includesModelJudge: Bool,
+        customToolOutputReserve: Int = 0
     ) -> (effectiveInputLimit: Int, toolOutputReserve: Int, judgeOverheadReserve: Int) {
-        let toolOutputReserve = referenceMode == .lookupTool
+        let toolOutputReserve = (referenceMode == .lookupTool
             ? maximumToolCalls * ReferenceLookupTool.contextTokenReservePerCall
-            : 0
+            : 0) + customToolOutputReserve
         let subjectAvailableInput = contextSize - maximumResponseTokens - toolOutputReserve
         let judgeOverheadReserve = includesModelJudge
             ? Self.judgeResponseTokenReserve + Self.judgeFixedTokenReserve + maximumResponseTokens + toolOutputReserve
