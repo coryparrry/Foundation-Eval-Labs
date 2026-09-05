@@ -101,6 +101,8 @@ xcodebuild -project FoundationEvals/FoundationEvals.xcodeproj \
 
 UI tests require an interactive Mac. The optional Core AI inference test requires compatible model resources.
 
+GitHub CI compiles the app and test bundles; its current macOS 26 runner cannot execute tests requiring macOS 27. See the [release guide](docs/releasing.md) for signing setup and the automated DMG release workflow.
+
 ## 📄 License
 
 Foundation Evals is released under the [MIT License](LICENSE). Dependencies retain their own licenses; see [third-party notices](FoundationEvals/FoundationEvals/Resources/THIRD_PARTY_NOTICES.txt). Separately supplied model resources have their own terms.

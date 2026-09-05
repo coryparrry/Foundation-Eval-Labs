@@ -3,3 +3,16 @@
 dist/
 FoundationEvals/FoundationEvals.xcodeproj/xcuserdata/
 FoundationEvals/FoundationEvals.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Keep only the public guides and release instructions.
+/docs/*
+!/docs/coreai-provider.md
+!/docs/custom-provider-protocol.md
+!/docs/foundation-model-features.md
+!/docs/releasing.md
+
+# Local signing material.
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
