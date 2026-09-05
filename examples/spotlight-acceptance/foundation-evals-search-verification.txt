@@ -1,5 +1,0 @@
-Foundation Evals Spotlight Search Verification
-
-This document is a controlled local fixture for verifying that Foundation Evals can retrieve a result from an explicitly selected folder.
-
-Verification code: codeSEARCH-842

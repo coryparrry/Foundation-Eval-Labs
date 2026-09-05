@@ -1,51 +1,20 @@
-# Core AI provider integration
+# Use a Core AI model
 
-FoundationEvals links Apple's `CoreAILM` Swift package product and imports the
-`CoreAILanguageModels` module. The model entry point is:
+Foundation Evals can evaluate a local model exported for Apple's Core AI runtime. Model resources are supplied separately; the app does not download them for you.
 
-```swift
-let model = try await CoreAILanguageModel(resourcesAt: resourcesURL, mode: .eager)
-```
+## Choose and load a model
 
-The app uses eager loading so a run never reports readiness from metadata alone.
-Only after the engine and tokenizer load successfully does the loader expose the
-model name, declared context length, loaded model capabilities, and model asset
-size.
+1. Open the suite's **Model** page and set **Model provider** to **Core AI model**.
+2. Click **Choose Folder…** and select the exported resource folder. Selecting a folder starts loading it. You can also enter a path in **Model resource folder** and click **Load Model**.
+3. Wait for the loaded model name, context window, and capabilities to appear. Loading can take time and use substantial memory.
+4. Configure the suite for the capabilities the model reports, then run it. Use **Reload Model** to load the selected configuration again, or **Clear** to remove the selection.
 
-## Pinned revision
+The folder must contain `metadata.json`, the model assets it references, and the required tokenizer resources. Select the exported folder itself, rather than a parent directory or a single model file. See [Apple's coreai-models project](https://github.com/apple/coreai-models) for the export tooling.
 
-The dependency is pinned to Apple commit
-`684ae8e6a6766ff1dcb3dfa9c598b7eef44d2b43`, the final revision before the
-package added a conflicting exact Hummingbird dependency.
+## Readiness and saved access
 
-The `0.2.0` tag cannot compile against the installed Xcode 27 beta 6 Foundation
-Models SDK. It uses the former labeled `LanguageModelCapabilities(capabilities:)`
-initializer and former `prewarm(transcript:) throws` executor requirement. Beta 6
-provides `LanguageModelCapabilities(_:)` and requires
-`prewarm(model:transcript:)`. Apple adopted those signatures after 0.2.0 in
-commit `5ed9981303b38d5a44aa6b45509bc4f6945029f5`.
+The app loads the engine and tokenizer before reporting readiness. An existing folder or readable metadata alone is not enough. Missing assets, malformed metadata, inaccessible folders, and loading failures appear as errors in the model controls.
 
-The selected revision includes that SDK migration, lazy/eager resource loading,
-the public `LanguageBundle.maxContextLength` metadata API, and exact XGrammar
-`0.2.2`. It does not include the later package-level Hummingbird `2.22.0` exact
-constraint, which conflicts with FoundationEvals' direct Hummingbird `2.26.0`
-requirement.
+The suite stores the selected resource path and a bookmark for folders chosen through the picker. If access expires or the folder moves, choose it again. The model files stay in their original folder.
 
-Primary sources:
-
-- [Apple coreai-models](https://github.com/apple/coreai-models)
-- [CoreAILanguageModel source](https://github.com/apple/coreai-models/blob/684ae8e6a6766ff1dcb3dfa9c598b7eef44d2b43/swift/Sources/CoreAILanguageModels/LanguageModel/CoreAILanguageModel.swift)
-- [LanguageBundle source](https://github.com/apple/coreai-models/blob/684ae8e6a6766ff1dcb3dfa9c598b7eef44d2b43/swift/Sources/CoreAILanguageModels/Bundle/LanguageBundle.swift)
-- [Foundation Models API migration](https://github.com/apple/coreai-models/commit/5ed9981303b38d5a44aa6b45509bc4f6945029f5)
-
-## Resource boundary
-
-The picker accepts an exported Core AI resource folder. The folder must contain
-the `metadata.json` bundle description, referenced `.aimodel` assets, and the
-tokenizer resources required by the selected model. A security-scoped bookmark
-is stored with the suite configuration so the app can reopen a selected folder.
-
-No compatible model resources are checked into this repository or currently
-known on the host. Missing, inaccessible, non-folder, stale-bookmark, malformed,
-tokenizer, and engine-creation failures are surfaced as loading errors. Actual
-inference validation remains pending until a resource folder is selected.
+A successful load establishes that the runtime can open the model; it does not establish answer quality. Start with a small suite and inspect its outputs and traces. Check the resource provider's license before using or redistributing model files.
