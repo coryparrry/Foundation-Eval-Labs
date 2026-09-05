@@ -1,8 +1,28 @@
 # Foundation Evals
 
-A native macOS app for testing Apple's Foundation Models. Build repeatable evaluation suites, inspect responses and execution traces, and compare results as you refine prompts, settings, and tools.
+![macOS 27+](https://img.shields.io/badge/macOS-27%2B-111827?style=for-the-badge&logo=apple&logoColor=white)
+![Apple Foundation Models](https://img.shields.io/badge/Apple-Foundation_Models-2563eb?style=for-the-badge)
+![MCP](https://img.shields.io/badge/Agent_Integration-MCP-7c3aed?style=for-the-badge)
+[![MIT License](https://img.shields.io/badge/License-MIT-16a34a?style=for-the-badge)](LICENSE)
 
-## Install
+> Test Apple's Foundation Models. Inspect every run. Compare what changed.
+
+A native macOS app for building repeatable evaluation suites, inspecting responses and execution traces, and comparing results as you refine prompts, settings, and tools.
+
+[Install](#-install) · [First evaluation](#-run-your-first-evaluation) · [Models and tools](#-models-and-tools) · [Agent integration](#-connect-an-agent) · [Build from source](#-build-from-source)
+
+## ✨ What you can do
+
+| Capability | What it gives you |
+|---|---|
+| **Repeatable evaluations** | Test cases with shared instructions, attachments, and multiple repetitions. |
+| **Flexible scoring** | Exact matches, required text, AI rubrics, or response collection without scoring. |
+| **Execution traces** | Responses, score explanations, timing, token usage, and tool activity in one place. |
+| **Saved comparisons** | Run history, baseline comparisons, and JSON reports. |
+| **Models and tools** | Apple's on-device model, compatible Core AI models, custom HTTP providers, and configurable tools. |
+| **Agent integration** | An included MCP server for managing suites, running evaluations, and inspecting results. |
+
+## 🚀 Install
 
 Requirements:
 
@@ -16,7 +36,7 @@ Requirements:
 
 Xcode is only needed to build from source.
 
-## Run your first evaluation
+## 🧪 Run your first evaluation
 
 1. Open **Suite Editor** and enter the instructions shared by your test cases.
 2. Add cases with a prompt and, where appropriate, an expected response or reference answer. You can attach text, JSON, CSV, PDF, and image files as context.
@@ -33,13 +53,13 @@ Xcode is only needed to build from source.
 
 For AI rubrics, write one observable requirement per line and provide a verified reference answer for factual tasks. Inspect the judge's explanation alongside its score. Repetitions help reveal variation; a few runs do not establish statistical significance.
 
-## Models and tools
+## 🧰 Models and tools
 
 The default provider is Apple's on-device Foundation Model. You can also load a compatible [Core AI model](docs/coreai-provider.md) or connect a [custom local HTTP provider](docs/custom-provider-protocol.md).
 
 Use the **Features** page to configure custom tools, structured output, streaming, and tool workflows. The [tools and structured output guide](docs/foundation-model-features.md) includes a runnable local HTTP example.
 
-## Connect an agent
+## 🔌 Connect an agent
 
 Foundation Evals includes an MCP server so an agent can manage suites and references, run evaluations, inspect traces, and compare saved results.
 
@@ -53,13 +73,13 @@ The server provides an agent workflow guide during MCP initialization. Its HTTP 
 
 The connector listens only on this Mac and does not require credentials. Connected local clients can read and change evaluation data.
 
-## Your data
+## 🔒 Your data
 
 Suites, imported attachments, and run history are saved in `~/Library/Application Support/FoundationEvals/`. The app does not encrypt these files itself. Saved traces and JSON exports can include prompts, responses, reference content, and tool arguments and outputs; review them before sharing.
 
 On-device evaluations run locally. Custom HTTP providers and tools receive the content needed for their calls, and those separate services control any onward network use. Optional Private Cloud Compute uses Apple's network service when available. Spotlight tools can make matching local file content available to the selected model.
 
-## Build from source
+## 🛠️ Build from source
 
 Use Xcode 27 with its command-line tools selected. From the repository root:
 
@@ -79,6 +99,6 @@ xcodebuild -project FoundationEvals/FoundationEvals.xcodeproj \
 
 UI tests require an interactive Mac. The optional Core AI inference test requires compatible model resources.
 
-## License
+## 📄 License
 
 Foundation Evals is released under the [MIT License](LICENSE). Dependencies retain their own licenses; see [third-party notices](FoundationEvals/FoundationEvals/Resources/THIRD_PARTY_NOTICES.txt). Separately supplied model resources have their own terms.
