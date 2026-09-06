@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/readme-banner.png" alt="Foundation Evals logo on a coral and turquoise background." width="520" height="260">
+<img src=".github/assets/readme-banner.png" alt="Foundation Evals logo on a coral and turquoise background." width="960">
 
 **Put Apple's Foundation Models to the test.**
 
