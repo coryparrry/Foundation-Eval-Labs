@@ -71,6 +71,7 @@ struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
     @State private var selectedPage = SuiteEditorPage.cases
     @State private var selectedCaseID: UUID?
+    @FocusState private var isEditorFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -96,6 +97,10 @@ struct SuiteEditorView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
+        .focusable()
+        .focusEffectDisabled()
+        .focused($isEditorFocused)
+        .defaultFocus($isEditorFocused, true)
         .onAppear { selectFirstCaseIfNeeded() }
         .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
             selectFirstCaseIfNeeded()
