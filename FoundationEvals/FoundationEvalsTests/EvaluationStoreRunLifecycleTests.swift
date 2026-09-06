@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Testing
 @testable import FoundationEvals
 
@@ -137,36 +138,36 @@ struct EvaluationStoreRunLifecycleTests {
     }
 }
 
-private final class LifecycleCustomModelFixture {
-    let port: Int
-    private let process: Process
+private final class LifecycleCustomModelFixture: @unchecked Sendable {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "FoundationEvalsTests.LifecycleHTTPFixture")
+    private let ready = DispatchSemaphore(value: 0)
+    private(set) var port: UInt16 = 0
 
     init() throws {
-        let sourceFile = URL(fileURLWithPath: #filePath)
-        let repository = sourceFile
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let script = repository.appending(path: "examples/custom_model_fixture_server.py")
-        let output = Pipe()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = [script.path, "--port", "0", "--stream-delay", "0"]
-        process.standardOutput = output
-        process.standardError = output
-        try process.run()
-        self.process = process
-
-        let readyData = output.fileHandleForReading.availableData
-        guard let ready = String(data: readyData, encoding: .utf8),
-              let firstLine = ready.split(separator: "\n").first,
-              let endpoint = firstLine.split(separator: " ").last,
-              let port = URL(string: String(endpoint))?.port else {
-            process.terminate()
-            process.waitUntilExit()
-            throw LifecycleCustomModelFixtureError.invalidReadyMessage
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        listener.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.port = self.listener.port?.rawValue ?? 0
+                self.ready.signal()
+            case .failed:
+                self.ready.signal()
+            default:
+                break
+            }
         }
-        self.port = port
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.accept(connection)
+        }
+        listener.start(queue: queue)
+        guard ready.wait(timeout: .now() + 5) == .success, port != 0 else {
+            listener.cancel()
+            throw LifecycleCustomModelFixtureError.failedToListen
+        }
     }
 
     func endpoint(path: String) -> String {
@@ -174,12 +175,65 @@ private final class LifecycleCustomModelFixture {
     }
 
     func stop() {
-        guard process.isRunning else { return }
-        process.terminate()
-        process.waitUntilExit()
+        listener.cancel()
+    }
+
+    private func accept(_ connection: NWConnection) {
+        connection.start(queue: queue)
+        receiveRequest(on: connection, accumulated: Data())
+    }
+
+    private func receiveRequest(on connection: NWConnection, accumulated: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            var request = accumulated
+            if let data { request.append(data) }
+            guard error == nil else {
+                connection.cancel()
+                return
+            }
+            guard request.range(of: Data("\r\n\r\n".utf8)) != nil else {
+                if isComplete {
+                    connection.cancel()
+                } else {
+                    self.receiveRequest(on: connection, accumulated: request)
+                }
+                return
+            }
+            self.respond(to: request, on: connection)
+        }
+    }
+
+    private func respond(to request: Data, on connection: NWConnection) {
+        let requestLine = String(decoding: request, as: UTF8.self)
+            .components(separatedBy: "\r\n")
+            .first ?? ""
+        let body: String
+        if requestLine.contains(" /error ") {
+            body = #"{"kind":"error","code":"fixtureBackendFailure","message":"Deterministic fixture backend failure."}"# + "\n"
+        } else {
+            body = [
+                #"{"kind":"response","action":"append","content":"Deterministic fixture stream.","tokenCount":4}"#,
+                #"{"kind":"usage","usageTarget":"response","usage":{"inputTokens":12,"cachedInputTokens":0,"outputTokens":4,"reasoningTokens":0}}"#
+            ].joined(separator: "\n") + "\n"
+        }
+        let response = """
+            HTTP/1.1 200 OK\r
+            Content-Type: application/x-ndjson\r
+            Content-Length: \(body.utf8.count)\r
+            Connection: close\r
+            \r
+            \(body)
+            """
+        connection.send(
+            content: Data(response.utf8),
+            contentContext: .defaultMessage,
+            isComplete: true,
+            completion: .contentProcessed { _ in connection.cancel() }
+        )
     }
 }
 
 private enum LifecycleCustomModelFixtureError: Error {
-    case invalidReadyMessage
+    case failedToListen
 }
