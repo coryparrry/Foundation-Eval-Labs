@@ -59,6 +59,8 @@ struct FoundationEvalsApp: App {
         .defaultSize(width: 1_180, height: 780)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            // AppKit's Services scanner blocks accessibility menu inspection on a lower-QoS thread.
+            CommandGroup(replacing: .systemServices) { }
 
             CommandMenu("Evaluation") {
                 Button("Show Suite Editor") {
