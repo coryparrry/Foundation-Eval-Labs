@@ -7,6 +7,7 @@
 
 import AppKit
 import SwiftUI
+import Sparkle
 
 @main
 @MainActor
@@ -15,6 +16,9 @@ struct FoundationEvalsApp: App {
     @NSApplicationDelegateAdaptor(FoundationEvalsAppDelegate.self) private var appDelegate
     @State private var store: EvaluationStore
     @State private var mcpSettings: MCPSettingsController
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+    )
     private let mcpRuntime: FoundationEvalsMCPRuntime
 
     init() {
@@ -59,6 +63,9 @@ struct FoundationEvalsApp: App {
         .defaultSize(width: 1_180, height: 780)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesView(updater: updaterController.updater)
+            }
 
             CommandMenu("Evaluation") {
                 Button("Show Suite Editor") {
@@ -117,5 +124,18 @@ private final class FoundationEvalsAppDelegate: NSObject, NSApplicationDelegate 
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+}
+
+private struct CheckForUpdatesView: View {
+    let updater: SPUUpdater
+    @State private var canCheckForUpdates = false
+
+    var body: some View {
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .disabled(!canCheckForUpdates)
+            .onReceive(updater.publisher(for: \.canCheckForUpdates)) {
+                canCheckForUpdates = $0
+            }
     }
 }

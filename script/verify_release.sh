@@ -21,6 +21,6 @@ gh run view "$run_id" --repo "$repository" --json jobs > "$work/jobs.json"
 python3 script/release_validation.py checks "$work/jobs.json"
 filename="Foundation-Evals-${RELEASE_TAG#v}-macOS-arm64.dmg"
 gh release download "$RELEASE_TAG" --repo "$repository" --dir "$work" \
-  --pattern "$filename" --pattern SHA256SUMS.txt
+  --pattern "$filename" --pattern SHA256SUMS.txt --pattern appcast.xml
 bash script/verify_installer.sh "$work" "$RELEASE_TAG" "$commit"
 echo "Verified $RELEASE_TAG at $commit. Native macOS 27 launch testing remains a separate release check."
