@@ -15,6 +15,7 @@ struct FoundationEvalsApp: App {
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(FoundationEvalsAppDelegate.self) private var appDelegate
     @State private var store: EvaluationStore
+    @State private var telemetry: TelemetryController
     @State private var mcpSettings: MCPSettingsController
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
@@ -22,7 +23,11 @@ struct FoundationEvalsApp: App {
     private let mcpRuntime: FoundationEvalsMCPRuntime
 
     init() {
-        let store = EvaluationStore(supportDirectory: Self.acceptanceStorageDirectory)
+        let telemetry = TelemetryController(configuration: Self.telemetryConfiguration)
+        let store = EvaluationStore(
+            supportDirectory: Self.acceptanceStorageDirectory,
+            captureTelemetry: { telemetry.capture($0) }
+        )
         let runtime = FoundationEvalsMCPRuntime(store: store)
         let settings = MCPSettingsController(
             serverControl: MCPServerControl(
@@ -31,9 +36,22 @@ struct FoundationEvalsApp: App {
             )
         )
         runtime.settingsController = settings
+        _telemetry = State(initialValue: telemetry)
+        telemetry.capture(.appOpened)
         _store = State(initialValue: store)
         _mcpSettings = State(initialValue: settings)
         mcpRuntime = runtime
+    }
+
+    private static var telemetryConfiguration: TelemetryConfiguration? {
+        #if DEBUG
+        // Hosted tests must not inherit a developer's saved telemetry consent.
+        let environment = ProcessInfo.processInfo.environment
+        if environment["XCTestConfigurationFilePath"] != nil || environment["XCTestBundlePath"] != nil {
+            return nil
+        }
+        #endif
+        return .bundled
     }
 
     private static var acceptanceStorageDirectory: URL? {
@@ -105,7 +123,7 @@ struct FoundationEvalsApp: App {
         }
 
         Settings {
-            MCPSettingsView(controller: mcpSettings)
+            AppSettingsView(mcpSettings: mcpSettings, telemetry: telemetry)
         }
     }
 }

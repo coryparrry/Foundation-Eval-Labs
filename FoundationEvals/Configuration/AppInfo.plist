@@ -8,5 +8,9 @@
 	<string>https://github.com/coryparrry/Foundation-Eval-Labs/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>fpED/OlsZgCvLG9IgiEI0+/JmGjbwEkxmnwwkwymPgY=</string>
+	<key>PostHogProjectToken</key>
+	<string>phc_r7Y2URVyeAbu5eyZJjPHCU7RGDX4aTVCJqsUZrqSgahN</string>
+	<key>PostHogHost</key>
+	<string>https://eu.i.posthog.com</string>
 </dict>
 </plist>

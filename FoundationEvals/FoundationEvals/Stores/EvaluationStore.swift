@@ -41,6 +41,7 @@ final class EvaluationStore {
     var isProcessingFiles = false
     private(set) var activeRun: EvaluationActiveRun?
 
+    private let captureTelemetry: (TelemetryEvent) -> Void
     private let runner = EvaluationRunner()
     private let supportDirectory: URL
     private let attachmentsDirectory: URL
@@ -52,7 +53,11 @@ final class EvaluationStore {
     private var activeRunResults: [EvaluationSampleResult] = []
     private var unsavedRun: EvaluationRun?
 
-    init(supportDirectory customSupportDirectory: URL? = nil) {
+    init(
+        supportDirectory customSupportDirectory: URL? = nil,
+        captureTelemetry: @escaping (TelemetryEvent) -> Void = { _ in }
+    ) {
+        self.captureTelemetry = captureTelemetry
         let base = customSupportDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appending(path: "FoundationEvals", directoryHint: .isDirectory)
@@ -565,6 +570,7 @@ final class EvaluationStore {
             isRunning = true
             completedSamples = 0
             totalSamples = total
+            captureTelemetry(.evaluationStarted(caseCount: suiteSnapshot.cases.count, sampleCount: total))
             let images = imageInputs(for: suiteSnapshot)
 
             runTask = Task { [weak self] in
@@ -581,6 +587,11 @@ final class EvaluationStore {
                 ) { [weak self] result, completed, total in
                     await self?.updateProgress(runID: id, result: result, completed: completed, total: total)
                 }
+                captureTelemetry(.evaluationFinished(
+                    outcome: run.cancelled ? .cancelled : (run.terminationReason != nil || run.errorCount > 0 ? .failed : .completed),
+                    sampleCount: run.results.count,
+                    durationSeconds: run.completedAt.timeIntervalSince(run.startedAt)
+                ))
                 finish(run)
                 liveResponse = nil
             }
