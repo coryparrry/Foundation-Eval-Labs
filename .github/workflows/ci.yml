@@ -14,6 +14,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality:
+    name: Workflow and script checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate workflows
+        # actionlint has not listed GitHub's hosted Xcode 27 preview label yet.
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color -ignore 'label "xcode-27" is unknown'
+      - name: Check shell scripts
+        run: shellcheck script/*.sh
+      - name: Check Python examples
+        run: python3 -m compileall -q examples
+      - name: Test release validation
+        run: python3 -m unittest discover -s script/tests -v
+
+  regression:
+    name: Portable regression tests
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Execute production scoring and installer tests
+        run: swift test --enable-code-coverage
+
   build:
     name: Compile app and tests
     runs-on: xcode-27

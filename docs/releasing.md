@@ -1,38 +1,33 @@
 # Releases
 
-The [private GitHub repository](https://github.com/coryparrry/Foundation-Eval-Labs) runs two workflows:
+Signing and notarization run locally. GitHub-hosted runners execute portable regression tests, compile the macOS 27 app and its test bundles, validate workflows/scripts, and verify uploaded installers. No self-hosted runner or GitHub signing secrets are required.
 
-- **CI** checks script/example syntax and compiles the app and both test bundles on pull requests and pushes. GitHub's `xcode-27` runner currently runs macOS 26, so it cannot execute this macOS 27 app's tests. Run the tests locally using the README command before tagging a release.
-- **Release** builds a Developer ID archive, exports the app, creates a drag-to-Applications DMG, submits it to Apple, staples the accepted ticket, verifies the signatures and Gatekeeper assessment, and creates a **draft** GitHub Release with the DMG and SHA-256 checksum.
+## Validate a candidate
 
-## One-time signing setup
+1. Merge the candidate through a reviewed PR with all required CI checks passing. Wait for the **CI** push run on `main` at the exact candidate commit.
+2. On macOS 27 with Xcode 27, run the full native suite using the README command. UI tests require an interactive desktop. Exercise real model generation separately; hosted portable tests do not validate Apple Intelligence or Core AI inference.
+3. Tag that exact commit with `vMAJOR.MINOR.PATCH`. Package from its clean checkout. The helper archives committed source into a temporary directory and embeds its SHA in the signed app's `FoundationEvalsSourceCommit` property. Temporary build output avoids Finder metadata interfering with signing.
 
-In **Settings → Environments → release**, configure the following. Never commit signing keys or paste them into an issue or build log.
+## Package locally
 
-| Setting | Type | Value |
-|---|---|---|
-| `APPLE_TEAM_ID` | Variable | Your Apple Developer team ID. |
-| `CERTIFICATE_P12_BASE64` | Secret | Base64-encoded export of the **Developer ID Application** certificate and its private key, as a password-protected `.p12`. |
-| `CERTIFICATE_PASSWORD` | Secret | Password protecting that `.p12`. |
-| `NOTARY_KEY_P8` | Secret | Contents of the App Store Connect team API key `.p8` file. |
-| `NOTARY_KEY_ID` | Secret | ID of that API key. |
-| `NOTARY_ISSUER_ID` | Secret | Issuer ID for the team API key. |
+`script/release.sh` creates the archive, Developer ID signed DMG, Apple notarization ticket, and `SHA256SUMS.txt` under `dist/release`. Supply these environment variables from your local credential store; never commit them or upload them to GitHub:
 
-The Developer ID identity must belong to `APPLE_TEAM_ID`. Use a team API key with permission to submit notarizations. The runner imports credentials into a temporary keychain and removes its keychain and working files on exit. Secrets are only supplied to the release job; pull-request CI does not use them.
+| Variable | Value |
+|---|---|
+| `RELEASE_TAG` | `vMAJOR.MINOR.PATCH` matching the candidate tag. |
+| `BUILD_NUMBER` | Positive integer for this build. |
+| `APPLE_TEAM_ID` | Apple Developer team identifier. |
+| `CERTIFICATE_P12_BASE64` | Base64-encoded, password-protected Developer ID certificate/private-key export. |
+| `CERTIFICATE_PASSWORD` | Password for that export. |
+| `NOTARY_KEY_P8`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` | Local App Store Connect notarization credentials. |
 
-See [GitHub's Apple signing setup](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications) and [Apple's notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
+The helper uses a disposable keychain and restores the original keychain search list on exit. Run `bash script/release.sh` only when you intend to submit the installer to Apple. Packaging does not publish a GitHub release.
 
-## Create a release
+## Verify and publish
 
-1. Confirm CI passed for the commit and run the macOS 27 tests locally.
-2. Create and push a version tag on that commit:
+1. Create a **draft** GitHub release for the validated tag with the DMG and checksum. Tag creation no longer starts a signing job.
+2. In Actions, manually dispatch **Release verification** from the protected default branch, supplying the draft's tag. It requires all three current CI jobs to have succeeded on `main` at that tag commit, then downloads the assets and checks the checksum, Developer ID team, signatures, stapled ticket, Gatekeeper assessment, signed source SHA, version, architecture, and Applications shortcut. A legacy compile-only CI run is insufficient.
+3. Download and launch the draft installer on macOS 27; confirm its visible workflow. GitHub's macOS 26 runner cannot perform this launch check.
+4. Publish only after those checks pass. Publication automatically runs the same read-only verifier again. GitHub does not technically block the Publish button; completing the draft verification is a maintainer release requirement.
 
-   ```sh
-   git tag -a v1.0.0 -m "Foundation Evals 1.0.0"
-   git push origin v1.0.0
-   ```
-
-3. Wait for the **Release** workflow to finish. It uses the tag's version for the app and the workflow run number for the build number.
-4. Open the draft under **Releases**, review the notes, download and try the DMG, then choose **Publish release**.
-
-Tags must use `vMAJOR.MINOR.PATCH`. The workflow can also be dispatched against an existing tag. It fails if a release with that tag already exists, so it never silently replaces published assets. Keep the repository private until you intend its source and releases to be public; private release downloads require repository access.
+The verifier never creates, replaces, or deletes release assets. Published installers from before these CI gates retain their original validation evidence; they cannot satisfy the new source-check gate retrospectively. Keep the repository private until you intend its source and releases to be public. Private downloads require repository access.

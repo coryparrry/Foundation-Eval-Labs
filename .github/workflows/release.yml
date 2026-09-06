@@ -1,51 +1,37 @@
-name: Release
+name: Release verification
 
 on:
-  push:
-    tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft or published release tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-verification-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
+  verify:
+    name: Verify signed installer
     runs-on: xcode-27
-    timeout-minutes: 60
-    environment: release
-    permissions:
-      contents: write
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          # Always execute the protected verifier, including manual dispatches.
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - name: Build, sign, notarize, and verify DMG
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-          CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
-          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
-          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
-          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
-        run: bash script/release.sh
-      - name: Save verified installer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: Foundation-Evals-${{ github.ref_name }}
-          path: dist/release/*
-          if-no-files-found: error
-          retention-days: 14
-      - name: Create draft GitHub Release
+      - name: Verify source checks and downloaded installer
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          gh release create "$RELEASE_TAG" dist/release/* \
-            --verify-tag --draft --title "Foundation Evals $RELEASE_TAG" \
-            --generate-notes --notes-file .github/release-notes.md
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          EXPECTED_TEAM_ID: 3Z3955EFRE
+        run: bash script/verify_release.sh

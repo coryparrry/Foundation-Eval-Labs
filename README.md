@@ -110,7 +110,7 @@ xcodebuild -project FoundationEvals/FoundationEvals.xcodeproj \
 
 UI tests require an interactive Mac. The optional Core AI inference test requires compatible model resources.
 
-GitHub CI compiles the app and test bundles; its current macOS 26 runner cannot execute tests requiring macOS 27. See the [release guide](docs/releasing.md) for signing setup and the automated DMG release workflow.
+GitHub-hosted CI executes production scoring, structured-field assertion, and MCP installer tests with `swift test`, checks workflows/scripts, and compiles the full app and native test bundles. Its current macOS 26 image cannot execute the macOS 27 app or UI tests; run the native suite above before releasing. The portable package shares production source and existing test files with Xcode without lowering the app’s deployment target. See the [release guide](docs/releasing.md) for local signing and GitHub installer verification.
 
 ## License
 

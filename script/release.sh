@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CI only: credentials are imported into a disposable runner keychain.
-: "${RUNNER_TEMP:?Run from the Release workflow}"
+# Local packaging only: import credentials into a disposable keychain.
+# GitHub verifies the uploaded installer and never receives signing credentials.
+RUNNER_TEMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 : "${RELEASE_TAG:?Missing release tag}"
-: "${APPLE_TEAM_ID:?Configure APPLE_TEAM_ID in the release environment}"
-: "${CERTIFICATE_P12_BASE64:?Configure the release environment signing secrets}"
+: "${BUILD_NUMBER:?Set the positive integer build number}"
+: "${APPLE_TEAM_ID:?Set APPLE_TEAM_ID locally}"
+: "${CERTIFICATE_P12_BASE64:?Set local packaging credentials}"
 : "${CERTIFICATE_PASSWORD:?Missing CERTIFICATE_PASSWORD}"
 : "${NOTARY_KEY_P8:?Missing NOTARY_KEY_P8}"
 : "${NOTARY_KEY_ID:?Missing NOTARY_KEY_ID}"
@@ -14,17 +16,32 @@ if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo 'Release tags must have the form v1.0.0.' >&2
   exit 1
 fi
+if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+  echo 'BUILD_NUMBER must be a positive integer.' >&2
+  exit 1
+fi
 
 cd "$(dirname "$0")/.."
+source_commit="$(git rev-parse "$RELEASE_TAG^{commit}")"
+if [[ "$(git rev-parse HEAD)" != "$source_commit" || -n "$(git status --porcelain)" ]]; then
+  echo 'Package from a clean checkout of the exact release tag.' >&2
+  exit 1
+fi
 version="${RELEASE_TAG#v}"
 work="$(mktemp -d "$RUNNER_TEMP/foundation-evals-release.XXXXXX")"
 keychain="$work/signing.keychain-db"
 keychain_password="$(openssl rand -hex 24)"
-mounted=false
+existing_keychains=()
+keychain_list="$(security list-keychains -d user)"
+while IFS= read -r existing_keychain; do
+  existing_keychains+=("$existing_keychain")
+done < <(printf '%s\n' "$keychain_list" | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
 cleanup() {
-  if [[ "$mounted" == true ]]; then hdiutil detach "$work/mount" >/dev/null || true; fi
+  result=$?
+  security list-keychains -d user -s "${existing_keychains[@]}" || result=1
   security delete-keychain "$keychain" >/dev/null 2>&1 || true
   rm -rf "$work"
+  exit "$result"
 }
 trap cleanup EXIT
 umask 077
@@ -37,7 +54,7 @@ security import "$work/signing.p12" -P "$CERTIFICATE_PASSWORD" -t cert -f pkcs12
   -k "$keychain" -T /usr/bin/codesign -T /usr/bin/security
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
   -k "$keychain_password" "$keychain" >/dev/null
-security list-keychains -d user -s "$keychain"
+security list-keychains -d user -s "$keychain" "${existing_keychains[@]}"
 identity="$(security find-identity -v -p codesigning "$keychain" |
   awk -v team="($APPLE_TEAM_ID)" '/Developer ID Application:/ && index($0, team) {print $2}')"
 if [[ ! "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]; then
@@ -46,13 +63,17 @@ if [[ ! "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]; then
 fi
 
 xcodebuild -version
+mkdir "$work/source"
+git archive "$source_commit" | tar -x -C "$work/source"
 xcodebuild archive \
-  -project FoundationEvals/FoundationEvals.xcodeproj -scheme FoundationEvals \
+  -project "$work/source/FoundationEvals/FoundationEvals.xcodeproj" -scheme FoundationEvals \
   -configuration Release -destination 'generic/platform=macOS' \
+  -disableAutomaticPackageResolution \
   -derivedDataPath "$work/build" -archivePath "$work/FoundationEvals.xcarchive" \
   ARCHS=arm64 CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$identity" \
   DEVELOPMENT_TEAM="$APPLE_TEAM_ID" OTHER_CODE_SIGN_FLAGS=--timestamp \
-  MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER:-1}"
+  MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  INFOPLIST_KEY_FoundationEvalsSourceCommit="$source_commit"
 
 export APPLE_TEAM_ID
 python3 - "$work/ExportOptions.plist" "$identity" <<'PY'
@@ -86,16 +107,10 @@ if result.get('status') != 'Accepted':
     raise SystemExit('Notarization was not accepted; inspect the submission in Apple Notary.')
 PY
 xcrun stapler staple "$dmg"
-xcrun stapler validate "$dmg"
-spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
-mkdir "$work/mount"
-hdiutil attach -readonly -nobrowse -mountpoint "$work/mount" "$dmg"
-mounted=true
-codesign --verify --strict --deep "$work/mount/Foundation Evals.app"
-spctl --assess --type execute --verbose=2 "$work/mount/Foundation Evals.app"
-test "$(readlink "$work/mount/Applications")" = /Applications
-hdiutil detach "$work/mount"
-mounted=false
+mkdir "$work/verified"
+filename="$(basename "$dmg")"
+cp "$dmg" "$work/verified/"
+(cd "$work/verified" && shasum -a 256 "$filename" > SHA256SUMS.txt)
+EXPECTED_TEAM_ID="$APPLE_TEAM_ID" bash script/verify_installer.sh "$work/verified" "$RELEASE_TAG" "$source_commit"
 mkdir -p dist/release
-cp "$dmg" dist/release/
-(cd dist/release && shasum -a 256 "$(basename "$dmg")" > SHA256SUMS.txt)
+cp "$work/verified/$filename" "$work/verified/SHA256SUMS.txt" dist/release/
