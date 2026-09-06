@@ -7,6 +7,7 @@
 
 import AppKit
 import SwiftUI
+import Sparkle
 
 @main
 @MainActor
@@ -14,10 +15,15 @@ struct FoundationEvalsApp: App {
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(FoundationEvalsAppDelegate.self) private var appDelegate
     @State private var store: EvaluationStore
+    @State private var telemetry: TelemetryController
     @State private var mcpSettings: MCPSettingsController
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+    )
     private let mcpRuntime: FoundationEvalsMCPRuntime
 
     init() {
+        let telemetry = TelemetryController(configuration: Self.telemetryConfiguration)
         let store = EvaluationStore(supportDirectory: Self.acceptanceStorageDirectory)
         let runtime = FoundationEvalsMCPRuntime(store: store)
         let settings = MCPSettingsController(
@@ -27,9 +33,22 @@ struct FoundationEvalsApp: App {
             )
         )
         runtime.settingsController = settings
+        _telemetry = State(initialValue: telemetry)
+        telemetry.capture(.appOpened)
         _store = State(initialValue: store)
         _mcpSettings = State(initialValue: settings)
         mcpRuntime = runtime
+    }
+
+    private static var telemetryConfiguration: TelemetryConfiguration? {
+        #if DEBUG
+        // Hosted tests must not inherit a developer's saved telemetry consent.
+        let environment = ProcessInfo.processInfo.environment
+        if environment["XCTestConfigurationFilePath"] != nil || environment["XCTestBundlePath"] != nil {
+            return nil
+        }
+        #endif
+        return .bundled
     }
 
     private static var acceptanceStorageDirectory: URL? {
@@ -61,6 +80,9 @@ struct FoundationEvalsApp: App {
             CommandGroup(replacing: .newItem) { }
             // AppKit's Services scanner blocks accessibility menu inspection on a lower-QoS thread.
             CommandGroup(replacing: .systemServices) { }
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesView(updater: updaterController.updater)
+            }
 
             CommandMenu("Evaluation") {
                 Button("Show Suite Editor") {
@@ -100,7 +122,7 @@ struct FoundationEvalsApp: App {
         }
 
         Settings {
-            MCPSettingsView(controller: mcpSettings)
+            AppSettingsView(mcpSettings: mcpSettings, telemetry: telemetry)
         }
     }
 }
@@ -119,5 +141,18 @@ private final class FoundationEvalsAppDelegate: NSObject, NSApplicationDelegate 
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+}
+
+private struct CheckForUpdatesView: View {
+    let updater: SPUUpdater
+    @State private var canCheckForUpdates = false
+
+    var body: some View {
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .disabled(!canCheckForUpdates)
+            .onReceive(updater.publisher(for: \.canCheckForUpdates)) {
+                canCheckForUpdates = $0
+            }
     }
 }
