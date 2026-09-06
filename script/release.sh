@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local packaging only: import credentials into a disposable keychain.
-# GitHub verifies the uploaded installer and never receives signing credentials.
+# Package locally or on a trusted release runner using a disposable keychain.
 RUNNER_TEMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 : "${RELEASE_TAG:?Missing release tag}"
 : "${BUILD_NUMBER:?Set the positive integer build number}"
-: "${APPLE_TEAM_ID:?Set APPLE_TEAM_ID locally}"
-: "${CERTIFICATE_P12_BASE64:?Set local packaging credentials}"
+: "${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}"
+: "${CERTIFICATE_P12_BASE64:?Set packaging credentials}"
 : "${CERTIFICATE_PASSWORD:?Missing CERTIFICATE_PASSWORD}"
 : "${NOTARY_KEY_P8:?Missing NOTARY_KEY_P8}"
 : "${NOTARY_KEY_ID:?Missing NOTARY_KEY_ID}"
