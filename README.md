@@ -1,6 +1,6 @@
 <div align="center">
 
-# Foundation Evals
+<img src=".github/assets/social-preview.jpg" alt="Foundation Evals logo on a coral and turquoise background." width="960">
 
 **Put Apple's Foundation Models to the test.**
 
