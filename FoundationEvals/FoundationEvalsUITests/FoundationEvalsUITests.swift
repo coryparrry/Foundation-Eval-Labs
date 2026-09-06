@@ -134,4 +134,44 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertEqual(scoringCase.value as? String, "Example")
     }
 
+    @MainActor
+    func testCaseSearchKeepsEditorAndScoringSelectionAligned() throws {
+        let app = XCUIApplication()
+        let storage = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: storage) }
+        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage", storage.path]
+        app.launch()
+        defer { app.terminate() }
+        app.activate()
+        app.menuBars.menuBarItems["Evaluation"].click()
+        app.menuItems["Show Suite Editor"].click()
+        XCTAssertTrue(app.buttons["Add Case"].waitForExistence(timeout: 5))
+        app.buttons["Add Case"].click()
+        let name = app.textFields["Case name"]
+        name.click()
+        app.typeKey("a", modifierFlags: .command)
+        name.typeText("Search target")
+
+        let search = app.textFields["Search cases"]
+        search.click()
+        search.typeText("Example")
+        XCTAssertEqual(name.value as? String, "Example")
+        name.click()
+        app.typeKey("a", modifierFlags: .command)
+        name.typeText("Renamed case")
+        XCTAssertEqual(search.value as? String, "", "Editing out of a search preserves the visible editor")
+        app.radioButtons["Scoring"].click()
+        XCTAssertEqual(app.popUpButtons["Scoring case selector"].value as? String, "Renamed case")
+        app.radioButtons["Cases"].click()
+
+        search.click()
+        app.typeKey("a", modifierFlags: .command)
+        search.typeText("No matching case 582")
+        XCTAssertTrue(app.staticTexts["No matching cases"].exists)
+        XCTAssertFalse(name.exists, "An invisible case must not remain editable")
+        app.buttons["Add Case"].click()
+        XCTAssertTrue(name.waitForExistence(timeout: 2))
+        XCTAssertEqual(search.value as? String, "", "Selecting a new case clears an incompatible search")
+    }
+
 }
