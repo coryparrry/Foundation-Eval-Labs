@@ -6,6 +6,11 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
     private var storage: URL!
     private var fixture: LocalHTTPModelFixture!
 
+    @MainActor
+    private var runStatus: XCUIElement {
+        app.descendants(matching: .any)["Run status"]
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         storage = FileManager.default.temporaryDirectory
@@ -40,12 +45,11 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Cancel"].exists)
 
         fixture.finishResponse()
-        XCTAssertTrue(app.staticTexts["EVALUATION RUN"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Completed"].waitForExistence(timeout: 3))
-        let passRate = app.staticTexts.matching(
-            NSPredicate(format: "value BEGINSWITH %@ AND value CONTAINS %@", "Scored pass rate", "100%")
-        ).firstMatch
-        XCTAssertTrue(passRate.exists, app.debugDescription)
+        XCTAssertTrue(app.buttons["Export Run as JSON"].waitForExistence(timeout: 8))
+        XCTAssertTrue(runStatus.waitForExistence(timeout: 3))
+        XCTAssertEqual(runStatus.label, "Completed")
+        XCTAssertTrue(app.staticTexts["Scored pass rate"].exists, app.debugDescription)
+        XCTAssertTrue(app.staticTexts["100%"].firstMatch.exists, app.debugDescription)
 
         app.terminate()
         app = launchApp()
@@ -56,8 +60,8 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(savedRun.waitForExistence(timeout: 5), "The completed run must return in Run History after relaunch")
         savedRun.click()
-        XCTAssertTrue(app.staticTexts["EVALUATION RUN"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Completed"].exists)
+        XCTAssertTrue(app.buttons["Export Run as JSON"].waitForExistence(timeout: 3))
+        XCTAssertEqual(runStatus.label, "Completed")
     }
 
     @MainActor
@@ -71,8 +75,9 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         XCTAssertTrue(cancel.waitForExistence(timeout: 3))
         cancel.click()
 
-        XCTAssertTrue(app.staticTexts["EVALUATION RUN"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Cancelled"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Export Run as JSON"].waitForExistence(timeout: 8))
+        XCTAssertTrue(runStatus.waitForExistence(timeout: 3))
+        XCTAssertEqual(runStatus.label, "Cancelled")
         fixture.finishResponse()
     }
 
@@ -83,8 +88,9 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
 
         app.buttons["Run evaluation"].click()
         XCTAssertTrue(fixture.waitForRequest(timeout: 5), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["EVALUATION RUN"].waitForExistence(timeout: 8), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["Completed with issues"].waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.buttons["Export Run as JSON"].waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertTrue(runStatus.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertEqual(runStatus.label, "Completed with issues")
     }
 
     private func launchApp() -> XCUIApplication {
@@ -115,6 +121,9 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         app.radioButtons["Exact text"].click()
         let expected = app.textViews["Scoring expected text"]
         XCTAssertTrue(expected.waitForExistence(timeout: 3))
+        // The summary cards place the nested text editor below the initial viewport.
+        app.scrollViews.containing(.textField, identifier: "Suite name").firstMatch
+            .scroll(byDeltaX: 0, deltaY: -480)
         replaceText(in: expected, with: "Deterministic fixture stream.")
 
         app.radioButtons["Model"].click()

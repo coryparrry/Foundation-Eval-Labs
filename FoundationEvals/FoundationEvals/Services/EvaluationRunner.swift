@@ -86,7 +86,7 @@ actor EvaluationRunner {
             }
             let liveResponseObserver: EvaluationHTTPLiveResponseObserver?
             if suite.features.streamResponse {
-                liveResponseObserver = EvaluationHTTPLiveResponseObserver { update in
+                liveResponseObserver = EvaluationHTTPLiveResponseObserver { [caseNames] update in
                     guard let caseName = caseNames[update.caseID] else { return }
                     let turnName = update.role == "setup"
                         ? update.setupTurn.map { "Setup turn \($0)" } ?? "Setup turn"
