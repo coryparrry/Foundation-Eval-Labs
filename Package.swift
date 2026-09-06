@@ -1,0 +1,111 @@
+// swift-tools-version: 6.2
+import PackageDescription
+
+// This package deliberately exposes only deterministic production logic that can run on
+// GitHub's macOS 26 hosted runner. The macOS 27 app remains an independent Xcode target.
+let portableProductionSources = [
+    "MCP/Installer/CodexMCPInstaller.swift",
+    "Models/EvaluationFieldAssertion.swift",
+    "Models/EvaluationScoringTypes.swift",
+    "Services/EvaluationFieldAssertions.swift",
+    "Services/MetricScorer.swift",
+]
+
+let portableTestSources = [
+    "CodexMCPInstallerTests.swift",
+    "EvaluationFieldAssertionTests.swift",
+    "MetricScorerTests.swift",
+]
+
+let package = Package(
+    name: "FoundationEvalsPortable",
+    platforms: [.macOS(.v26)],
+    targets: [
+        .target(
+            name: "FoundationEvals",
+            path: "FoundationEvals/FoundationEvals",
+            exclude: [
+                "AppIcon.icon",
+                "Assets.xcassets",
+                "ContentView.swift",
+                "FoundationEvalsApp.swift",
+                "MCP/Installer/MCPSettingsController.swift",
+                "MCP/MCPJSON.swift",
+                "MCP/MCPProtocolHandler.swift",
+                "MCP/MCPServer.swift",
+                "MCP/MCPToolCatalog.swift",
+                "Models/EvaluationBuiltinToolTrace.swift",
+                "Models/EvaluationConversation.swift",
+                "Models/EvaluationCoreAIConfiguration.swift",
+                "Models/EvaluationFeatureConfiguration.swift",
+                "Models/EvaluationJudgeTrace.swift",
+                "Models/EvaluationLiveResponse.swift",
+                "Models/EvaluationModelCustomization.swift",
+                "Models/EvaluationModels.swift",
+                "Models/EvaluationRefusalTrace.swift",
+                "Models/EvaluationRunAnalysis.swift",
+                "Models/EvaluationSpotlightConfiguration.swift",
+                "Models/EvaluationTranscriptTrace.swift",
+                "Models/EvaluationVisionToolConfiguration.swift",
+                "Resources",
+                "Services/CoreAIModelLoader.swift",
+                "Services/EvaluationConversationRuntime.swift",
+                "Services/EvaluationCustomTool.swift",
+                "Services/EvaluationDynamicProfile.swift",
+                "Services/EvaluationExactCriterion.swift",
+                "Services/EvaluationFeatureResponse.swift",
+                "Services/EvaluationHTTPLanguageModel.swift",
+                "Services/EvaluationJudge.swift",
+                "Services/EvaluationRunner+Judge.swift",
+                "Services/EvaluationRunner+Prompt.swift",
+                "Services/EvaluationRunner+Support.swift",
+                "Services/EvaluationRunner.swift",
+                "Services/EvaluationSchemaBuilder.swift",
+                "Services/EvaluationSpotlightSearchRuntime.swift",
+                "Services/FoundationEvalsMCPRuntime.swift",
+                "Services/MCPStoreAuthority.swift",
+                "Services/ModelExecutionConfiguration.swift",
+                "Services/ReferenceLookupTool.swift",
+                "Stores",
+                "Support",
+                "Views",
+            ],
+            sources: portableProductionSources
+        ),
+        .testTarget(
+            name: "FoundationEvalsPortableTests",
+            dependencies: ["FoundationEvals"],
+            path: "FoundationEvals/FoundationEvalsTests",
+            exclude: [
+                "AccessibilitySelectionActionsTests.swift",
+                "AttachmentImportTests.swift",
+                "CoreAIModelLoaderTests.swift",
+                "CustomToolTests.swift",
+                "EvaluationConversationTests.swift",
+                "EvaluationDynamicProfileTests.swift",
+                "EvaluationExactCriterionTests.swift",
+                "EvaluationHTTPLanguageModelTests.swift",
+                "EvaluationJudgeTests.swift",
+                "EvaluationRunAnalysisTests.swift",
+                "EvaluationStoreRunLifecycleTests.swift",
+                "FeaturePersistenceTests.swift",
+                "FoundationEvalsTests.swift",
+                "ImageToolTests.swift",
+                "MCPFeatureTests.swift",
+                "MCPProtocolTests.swift",
+                "MCPProviderConfigurationTests.swift",
+                "MCPStoreAuthorityTests.swift",
+                "MCPTransportRegressionTests.swift",
+                "ModelCustomizationTests.swift",
+                "ReferenceLookupToolBoundaryTests.swift",
+                "RefusalExplanationTests.swift",
+                "RunBaselineSelectionTests.swift",
+                "SchemaCustomizationTests.swift",
+                "SpotlightSearchToolTests.swift",
+                "TraceTests.swift",
+                "TranscriptTraceTests.swift",
+            ],
+            sources: portableTestSources
+        ),
+    ]
+)

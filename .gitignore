@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+__pycache__/
 dist/
 FoundationEvals/FoundationEvals.xcodeproj/xcuserdata/
 FoundationEvals/FoundationEvals.xcodeproj/project.xcworkspace/xcuserdata/
