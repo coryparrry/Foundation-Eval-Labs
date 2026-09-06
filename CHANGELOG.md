@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/coryparrry/Foundation-Eval-Labs/compare/v1.1.0...v1.1.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* **app:** add signed updates and private launch statistics ([#16](https://github.com/coryparrry/Foundation-Eval-Labs/issues/16)) ([2353a78](https://github.com/coryparrry/Foundation-Eval-Labs/commit/2353a78657776a4f1df0026ee90d0b18330f03d4))
+* **updates:** enable automatic Sparkle updates ([#17](https://github.com/coryparrry/Foundation-Eval-Labs/issues/17)) ([b0a5b70](https://github.com/coryparrry/Foundation-Eval-Labs/commit/b0a5b709f827d4597ca71e5499ce95133b3222c2))
+
 ## [1.1.0](https://github.com/coryparrry/Foundation-Eval-Labs/compare/v1.0.0...v1.1.0) (2026-09-06)
 
 
