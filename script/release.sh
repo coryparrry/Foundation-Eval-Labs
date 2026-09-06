@@ -20,7 +20,8 @@ if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-cd "$(dirname "$0")/.."
+script_directory="$(cd "$(dirname "$0")" && pwd)"
+cd "${SOURCE_DIR:-$script_directory/..}"
 source_commit="$(git rev-parse "$RELEASE_TAG^{commit}")"
 if [[ "$(git rev-parse HEAD)" != "$source_commit" || -n "$(git status --porcelain)" ]]; then
   echo 'Package from a clean checkout of the exact release tag.' >&2
@@ -110,6 +111,6 @@ mkdir "$work/verified"
 filename="$(basename "$dmg")"
 cp "$dmg" "$work/verified/"
 (cd "$work/verified" && shasum -a 256 "$filename" > SHA256SUMS.txt)
-EXPECTED_TEAM_ID="$APPLE_TEAM_ID" bash script/verify_installer.sh "$work/verified" "$RELEASE_TAG" "$source_commit"
+EXPECTED_TEAM_ID="$APPLE_TEAM_ID" bash "$script_directory/verify_installer.sh" "$work/verified" "$RELEASE_TAG" "$source_commit"
 mkdir -p dist/release
 cp "$work/verified/$filename" "$work/verified/SHA256SUMS.txt" dist/release/
