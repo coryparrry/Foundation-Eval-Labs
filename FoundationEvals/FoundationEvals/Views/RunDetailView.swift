@@ -151,6 +151,9 @@ private struct RunStatusBadge: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(color.opacity(0.09), in: .capsule)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(title))
+            .accessibilityIdentifier("Run status")
     }
 }
 

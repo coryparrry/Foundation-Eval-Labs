@@ -262,6 +262,42 @@ struct EvaluationHTTPLanguageModelTests {
         #expect(completedMilliseconds - firstContentMilliseconds > 500)
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func runnerStreamingUpdatesRetainCaseNamesAcrossRepetitions() async throws {
+        let fixture = try RunningCustomModelFixture(streamDelay: 0.05)
+        defer { fixture.stop() }
+        let recorder = RunnerLiveResponseRecorder()
+        var suite = EvaluationSuite()
+        suite.scoringMode = .review
+        suite.repetitions = 2
+        suite.cases = [
+            EvaluationCase(name: "First case", prompt: "First prompt", expected: ""),
+            EvaluationCase(name: "Second case", prompt: "Second prompt", expected: "")
+        ]
+        suite.modelConfiguration.provider = .customHTTP
+        suite.modelConfiguration.customProviderSettings.endpoint = "http://127.0.0.1:\(fixture.port)/text"
+        suite.features.streamResponse = true
+
+        let run = await EvaluationRunner().run(
+            id: UUID(), suiteRevision: "test", startedAt: Date(), suite: suite, images: [],
+            liveResponse: { await recorder.record($0) }
+        ) { _, _, _ in }
+
+        #expect(run.results.count == 4)
+        #expect(run.results.allSatisfy { $0.response == "Deterministic fixture stream." })
+        let updates = await recorder.updates
+        for evaluationCase in suite.cases {
+            for repetition in 1...suite.repetitions {
+                let sampleUpdates = updates.filter {
+                    $0.caseID == evaluationCase.id && $0.repetition == repetition
+                }
+                #expect(sampleUpdates.contains { $0.content == "Deterministic " })
+                #expect(sampleUpdates.allSatisfy { $0.caseName == evaluationCase.name })
+                #expect(sampleUpdates.allSatisfy { $0.turnName == "Scored prompt" })
+            }
+        }
+    }
+
     @Test func providerFailuresKeepRunControlCategories() {
         #expect(
             EvaluationRunner.traceError(
@@ -379,6 +415,14 @@ private actor HTTPPartialResponseRecorder {
     private(set) var updates: [EvaluationHTTPLiveResponseUpdate] = []
 
     func record(_ update: EvaluationHTTPLiveResponseUpdate) {
+        updates.append(update)
+    }
+}
+
+private actor RunnerLiveResponseRecorder {
+    private(set) var updates: [EvaluationLiveResponse] = []
+
+    func record(_ update: EvaluationLiveResponse) {
         updates.append(update)
     }
 }
