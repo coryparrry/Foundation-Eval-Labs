@@ -18,10 +18,10 @@ struct AppSettingsView: View {
                     .disabled(!telemetry.isConfigured)
                     .accessibilityIdentifier("Share usage statistics")
 
-                    Text("Help improve Foundation Evals by sharing app opens, evaluation counts, run durations, and completion or failure outcomes with PostHog. Includes app and macOS versions and a random installation identifier.")
+                    Text("Share anonymous app-open statistics with PostHog. Includes only app and macOS versions and a random installation identifier, not your name, email, or Apple account.")
                         .foregroundStyle(.secondary)
 
-                    Text("Off by default. Prompts, responses, suite names, reference files, provider addresses, and credentials are never included. No screen recording or automatic interaction tracking.")
+                    Text("On by default. You can turn this off at any time. AI evaluations, inputs, outputs, results, and evaluation activity are not tracked. No files, credentials, screen recordings, or automatic interaction tracking.")
                         .foregroundStyle(.secondary)
 
                     Text("Turning this off stops new telemetry and clears queued events. Data already received by PostHog is not deleted.")

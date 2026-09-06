@@ -37,7 +37,8 @@ final class TelemetryController {
         self.defaults = defaults
         self.configuration = configuration
         self.makeClient = makeClient
-        isEnabled = defaults.bool(forKey: Self.consentKey) && configuration != nil
+        let preference = defaults.object(forKey: Self.consentKey) as? Bool ?? true
+        isEnabled = preference && configuration != nil
         if isEnabled, let configuration { client = makeClient(configuration) }
     }
 
@@ -99,7 +100,7 @@ private final class PostHogTelemetryClient: TelemetryClient {
     }
 
     func capture(_ event: TelemetryEvent) {
-        var properties = event.properties
+        var properties: [String: Any] = [:]
         properties["app_version"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
         properties["os_major"] = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
         sdk.capture(event.name, properties: properties)

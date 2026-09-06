@@ -6,7 +6,7 @@ import Testing
     private func defaults() -> UserDefaults { UserDefaults(suiteName: "TelemetryTests.\(UUID().uuidString)")! }
     private let configuration = TelemetryConfiguration(projectToken: "phc_test", host: "https://us.i.posthog.com")
 
-    @Test func freshStartupNeverCreatesClientOrCaptures() {
+    @Test func freshStartupEnablesAnonymousTelemetry() {
         let client = RecordingTelemetryClient()
         var creations = 0
         let controller = TelemetryController(defaults: defaults(), configuration: configuration) { _ in
@@ -14,13 +14,28 @@ import Testing
             return client
         }
         controller.capture(.appOpened)
+        #expect(controller.isEnabled)
+        #expect(creations == 1)
+        #expect(client.events == ["foundation_evals_app_opened"])
+    }
+
+    @Test func savedOptOutIsPreservedOnStartup() {
+        let defaults = defaults()
+        defaults.set(false, forKey: TelemetryController.consentKey)
+        var creations = 0
+        let controller = TelemetryController(defaults: defaults, configuration: configuration) { _ in
+            creations += 1
+            return RecordingTelemetryClient()
+        }
+        controller.capture(.appOpened)
         #expect(!controller.isEnabled)
         #expect(creations == 0)
-        #expect(client.events.isEmpty)
+        #expect(defaults.object(forKey: TelemetryController.consentKey) as? Bool == false)
     }
 
     @Test func consentTransitionsCreateOnceDiscardAndUseNewClient() {
         let defaults = defaults()
+        defaults.set(false, forKey: TelemetryController.consentKey)
         var clients: [RecordingTelemetryClient] = []
         let controller = TelemetryController(defaults: defaults, configuration: configuration) { _ in
             let client = RecordingTelemetryClient()
@@ -39,9 +54,9 @@ import Testing
         #expect(clients[0].events.count == 1)
         #expect(!defaults.bool(forKey: TelemetryController.consentKey))
         controller.setEnabled(true)
-        controller.capture(.evaluationStarted(caseCount: 2, sampleCount: 3))
+        controller.capture(.appOpened)
         #expect(clients.count == 2)
-        #expect(clients[1].events == ["foundation_evals_evaluation_started"])
+        #expect(clients[1].events == ["foundation_evals_app_opened"])
     }
 
     @Test func persistedConsentStartsClientButMissingConfigurationFailsClosed() {
@@ -62,18 +77,14 @@ import Testing
         #expect(creations == 1)
     }
 
-    @Test func eventAllowlistExcludesContentAndNormalizesCountsAndDuration() {
-        #expect(TelemetryEvent.allowedProperties(for: "$screen") == nil)
-        #expect(TelemetryEvent.allowedProperties(for: "$exception") == nil)
-        let event = TelemetryEvent.evaluationFinished(outcome: .failed, sampleCount: -1, durationSeconds: .infinity)
-        #expect(event.properties["outcome"] as? String == "failed")
-        #expect(event.properties["sample_count"] as? Int == 0)
-        #expect(event.properties["duration_seconds"] as? Double == 0)
-        for name in ["foundation_evals_app_opened", "foundation_evals_evaluation_started", "foundation_evals_evaluation_finished"] {
-            let allowed = TelemetryEvent.allowedProperties(for: name)!
-            #expect(allowed.isDisjoint(with: ["prompt", "response", "error", "provider_url", "$device_id", "$os_version", "$screen_name"]))
+    @Test func eventAllowlistRejectsEvaluationsAndContent() {
+        for name in ["$screen", "$exception", "foundation_evals_evaluation_started", "foundation_evals_evaluation_finished"] {
+            #expect(TelemetryEvent.allowedProperties(for: name) == nil)
         }
+        #expect(TelemetryEvent.allowedProperties(for: "foundation_evals_app_opened") ==
+                ["app_version", "os_major", "$process_person_profile", "$geoip_disable"])
     }
+
 }
 
 @MainActor private final class RecordingTelemetryClient: TelemetryClient {

@@ -18,8 +18,7 @@ struct EvaluationStoreRunLifecycleTests {
             prompt: "Return the fixture response.",
             expected: "Deterministic fixture stream."
         )
-        var telemetryEvents: [TelemetryEvent] = []
-        let store = EvaluationStore(supportDirectory: directory, captureTelemetry: { telemetryEvents.append($0) })
+        let store = EvaluationStore(supportDirectory: directory)
         store.draftSuite.name = "Lifecycle fixture"
         store.draftSuite.scoringMode = .exactMatch
         store.draftSuite.cases = [evaluationCase]
@@ -32,8 +31,6 @@ struct EvaluationStoreRunLifecycleTests {
         let started = try store.startRun(id: runID, expectedRevision: revision)
         #expect(started.phase == .running)
         #expect(started.totalSamples == 1)
-        _ = try store.startRun(id: runID, expectedRevision: revision)
-        #expect(telemetryEvents.count == 1, "Idempotent run requests must not duplicate telemetry")
 
         try await waitForRunToFinish(in: store)
 
@@ -46,14 +43,6 @@ struct EvaluationStoreRunLifecycleTests {
         #expect(result.status == .passed)
         #expect(result.errorCategory == nil)
         #expect(store.runStatus(id: runID)?.phase == .completed)
-        #expect(telemetryEvents.count == 2)
-        if case let .evaluationFinished(outcome, sampleCount, duration) = telemetryEvents.last {
-            #expect(outcome == .completed)
-            #expect(sampleCount == 1)
-            #expect(duration >= 0)
-        } else {
-            Issue.record("Expected completed evaluation telemetry")
-        }
         #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "active-run.json").path))
         #expect(FileManager.default.fileExists(
             atPath: directory.appending(path: "Runs/\(runID.uuidString).json").path
@@ -91,8 +80,7 @@ struct EvaluationStoreRunLifecycleTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let runID = UUID()
-        var telemetryEvents: [TelemetryEvent] = []
-        let store = EvaluationStore(supportDirectory: directory, captureTelemetry: { telemetryEvents.append($0) })
+        let store = EvaluationStore(supportDirectory: directory)
         store.draftSuite.scoringMode = .review
         store.draftSuite.repetitions = 2
         store.draftSuite.modelConfiguration.provider = .customHTTP
@@ -112,13 +100,6 @@ struct EvaluationStoreRunLifecycleTests {
         #expect(stopped.results.first?.status == .error)
         #expect(stopped.results.first?.errorCategory == "customProviderError")
         #expect(store.runStatus(id: runID)?.phase == .stopped)
-        #expect(telemetryEvents.count == 2)
-        if case let .evaluationFinished(outcome, sampleCount, _) = telemetryEvents.last {
-            #expect(outcome == .failed)
-            #expect(sampleCount == 1)
-        } else {
-            Issue.record("Expected failed evaluation telemetry")
-        }
 
         let reloadedStore = EvaluationStore(supportDirectory: directory)
         let reloadedRun = try #require(reloadedStore.run(with: runID))
@@ -134,37 +115,6 @@ struct EvaluationStoreRunLifecycleTests {
         #expect(analysis.errorSampleCount == 1)
         #expect(analysis.cases.first?.missingSampleCount == 1)
         #expect(analysis.cases.first?.errorSampleCount == 1)
-    }
-
-    @MainActor
-    @Test(.timeLimit(.minutes(1)))
-    func retryingRunPersistenceDoesNotDuplicateTelemetry() async throws {
-        let fixture = try LifecycleCustomModelFixture()
-        defer { fixture.stop() }
-        let directory = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        var events: [TelemetryEvent] = []
-        let store = EvaluationStore(supportDirectory: directory, captureTelemetry: { events.append($0) })
-        store.draftSuite.scoringMode = .review
-        store.draftSuite.modelConfiguration.provider = .customHTTP
-        store.draftSuite.modelConfiguration.customProviderSettings.endpoint = fixture.endpoint(path: "/text")
-        #expect(store.saveSuite())
-
-        let runsDirectory = directory.appending(path: "Runs")
-        try FileManager.default.removeItem(at: runsDirectory)
-        try Data("storage blocked".utf8).write(to: runsDirectory)
-        let id = UUID()
-        let revision = try store.currentSuiteRevision()
-        _ = try store.startRun(id: id, expectedRevision: revision)
-        try await waitForRunToFinish(in: store)
-        #expect(events.count == 2)
-        #expect(store.notice != nil)
-
-        try FileManager.default.removeItem(at: runsDirectory)
-        try FileManager.default.createDirectory(at: runsDirectory, withIntermediateDirectories: true)
-        _ = try store.startRun(id: id, expectedRevision: revision)
-        #expect(store.run(with: id) != nil)
-        #expect(events.count == 2, "Saving an already finished run must not repeat telemetry")
     }
 
     @MainActor
