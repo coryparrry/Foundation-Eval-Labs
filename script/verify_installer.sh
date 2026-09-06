@@ -50,3 +50,7 @@ spctl --assess --type execute --verbose=2 "$app"
 test "$(readlink "$mountpoint/Applications")" = /Applications
 python3 "$(dirname "$0")/release_validation.py" metadata "$app/Contents/Info.plist" "$version" "$expected_commit"
 test "$(lipo -archs "$app/Contents/MacOS/FoundationEvals")" = arm64
+
+signature="$(python3 "$(dirname "$0")/release_validation.py" appcast "$directory" "$app/Contents/Info.plist" "$tag")"
+public_key="$(plutil -extract SUPublicEDKey raw "$app/Contents/Info.plist")"
+swift "$(dirname "$0")/verify_update_signature.swift" "$dmg" "$public_key" "$signature"

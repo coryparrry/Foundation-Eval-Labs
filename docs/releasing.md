@@ -7,7 +7,7 @@
 1. Stages the GitHub release as a **draft** with its generated notes and exact source SHA.
 2. Waits for the successful `main` CI run at that exact commit and checks all required source jobs.
 3. Builds the app, signs it with Developer ID, creates the DMG, notarizes and staples it.
-4. Creates the version tag at the verified source if it does not already exist, uploads the DMG and `SHA256SUMS.txt`, then downloads and verifies both.
+4. Creates the version tag at the verified source if it does not already exist, uploads the DMG, `SHA256SUMS.txt`, and signed `appcast.xml`, then downloads and verifies all three.
 5. Publishes the release only after those checks pass.
 
 No separate packaging action is required. A missing signing secret, failed CI/build/notarization, source mismatch, failed upload, or failed download verification leaves the release unpublished. The installer is built from the release PR's source, never a previously generated local DMG. Build numbers default to that source's Git commit count, which increases as commits land on `main`.
@@ -42,6 +42,29 @@ Restrict the environment to the default branch and configure required reviewers 
 
 ## Package locally
 
-Local packaging remains available from a clean checkout of a release tag. Set `RELEASE_TAG`, a positive `BUILD_NUMBER`, `APPLE_TEAM_ID`, and the five signing variables above, then run `bash script/release.sh`. It produces the signed, notarized DMG and `SHA256SUMS.txt` in `dist/release` without publishing anything.
+Local packaging remains available from a clean checkout of a release tag. Set `RELEASE_TAG`, a positive `BUILD_NUMBER`, `APPLE_TEAM_ID`, and the five signing variables above, then run `bash script/release.sh`. It produces the signed, notarized DMG, `SHA256SUMS.txt`, and signed `appcast.xml` in `dist/release` without publishing anything.
 
 The verifier checks source CI, checksum, Developer ID team, signatures, stapled ticket, Gatekeeper, signed source SHA, version, architecture, and the Applications shortcut. Private downloads require repository access.
+
+## Sparkle updates
+
+The app uses Sparkle 2.9.6, offers **Check for Updates…** in the app menu,
+and uses Sparkle's standard permission prompt for scheduled checks. The feed is
+`https://github.com/coryparrry/Foundation-Eval-Labs/releases/latest/download/appcast.xml`.
+Each stable release must include its generated `appcast.xml` and be marked as the
+latest release. Drafts and prereleases do not advance this feed. Publish the feed
+and installer together; the feed points to that release's immutable download URL.
+
+The EdDSA private key is stored locally in the macOS login Keychain under the
+Sparkle account `foundation-evals`. Only the public key belongs in source control.
+Back up the private key securely using Sparkle's `generate_keys --account
+foundation-evals -x <secure-backup-path>` before changing machines; never commit
+the export. Packaging uses the pinned package's `generate_appcast` tool and this
+account to sign the final stapled DMG. Do not replace the key for routine releases.
+
+Before the first updater release, install an older Sparkle-enabled signed build
+in Applications and exercise **Check for Updates…**, download, installation, and
+relaunch against a newer signed build. Confirm version advancement and retained
+suites/history. A build that predates Sparkle requires one manual download; it
+cannot acquire the updater remotely. Build success alone does not prove this
+end-to-end update path.

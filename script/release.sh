@@ -111,6 +111,12 @@ mkdir "$work/verified"
 filename="$(basename "$dmg")"
 cp "$dmg" "$work/verified/"
 (cd "$work/verified" && shasum -a 256 "$filename" > SHA256SUMS.txt)
+# Sign the final, stapled installer with the configured Sparkle key.
+sparkle_bin="$work/build/SourcePackages/artifacts/sparkle/Sparkle/bin"
+"$sparkle_bin/generate_appcast" --account foundation-evals \
+  --maximum-deltas 0 \
+  --download-url-prefix "https://github.com/coryparrry/Foundation-Eval-Labs/releases/download/$RELEASE_TAG/" \
+  "$work/verified"
 EXPECTED_TEAM_ID="$APPLE_TEAM_ID" bash "$script_directory/verify_installer.sh" "$work/verified" "$RELEASE_TAG" "$source_commit"
 mkdir -p dist/release
-cp "$work/verified/$filename" "$work/verified/SHA256SUMS.txt" dist/release/
+cp "$work/verified/$filename" "$work/verified/SHA256SUMS.txt" "$work/verified/appcast.xml" dist/release/
