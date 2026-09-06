@@ -17,13 +17,17 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      source_sha: ${{ steps.release.outputs.sha }}
     permissions:
       contents: write
       issues: write
       pull-requests: write
       actions: write
     steps:
-      - name: Create release PR or publish merged release PR
+      - name: Create release PR or stage merged release as draft
         id: release
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         with:
@@ -37,3 +41,16 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_PR_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
         run: gh workflow run ci.yml --ref "$RELEASE_PR_BRANCH"
+
+  installer:
+    name: Build DMG and publish release
+    needs: release
+    if: needs.release.outputs.release_created == 'true'
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/package-installer.yml
+    with:
+      tag: ${{ needs.release.outputs.tag_name }}
+      source_sha: ${{ needs.release.outputs.source_sha }}
+    secrets: inherit
