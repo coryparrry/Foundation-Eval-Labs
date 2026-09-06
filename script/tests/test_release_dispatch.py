@@ -113,6 +113,7 @@ else:
     def test_upload_and_verify_existing_release(self):
         self.run_dispatch("publish")
         self.assertIn('"release", "upload"', self.calls())
+        self.assertIn('dist/release/appcast.xml', self.calls())
         self.assertIn('"release", "download"', self.calls())
         self.assertNotIn('"release", "create"', self.calls())
         self.assertIn('"release", "edit"', self.calls())

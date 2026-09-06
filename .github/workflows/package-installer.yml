@@ -9,19 +9,11 @@ on:
       source_sha:
         required: true
         type: string
-      build_number:
-        required: false
-        default: ''
-        type: string
   workflow_dispatch:
     inputs:
       tag:
         description: Pending draft release tag (vMAJOR.MINOR.PATCH)
         required: true
-        type: string
-      build_number:
-        description: Optional build number; defaults to source commit count
-        required: false
         type: string
 
 permissions:
@@ -44,7 +36,6 @@ jobs:
       SOURCE_DIR: ${{ github.workspace }}/source
       RELEASE_TAG: ${{ inputs.tag }}
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
-      BUILD_NUMBER: ${{ inputs.build_number }}
       RELEASE_BRANCH: ${{ github.event.repository.default_branch }}
       APPLE_TEAM_ID: 3Z3955EFRE
       EXPECTED_TEAM_ID: 3Z3955EFRE
@@ -86,19 +77,18 @@ jobs:
           persist-credentials: false
       - name: Set the installer build number
         run: |
-          if [[ -z "$BUILD_NUMBER" ]]; then
-            echo "BUILD_NUMBER=$(git -C "$SOURCE_DIR" rev-list --count HEAD)" >> "$GITHUB_ENV"
-          fi
+          echo "BUILD_NUMBER=$(git -C "$SOURCE_DIR" rev-list --count HEAD)" >> "$GITHUB_ENV"
       - name: Check signing configuration
         env:
           CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: |
           missing=0
-          for name in CERTIFICATE_P12_BASE64 CERTIFICATE_PASSWORD NOTARY_KEY_P8 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
+          for name in CERTIFICATE_P12_BASE64 CERTIFICATE_PASSWORD SPARKLE_PRIVATE_KEY NOTARY_KEY_P8 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Configure $name in the release environment (see docs/releasing.md)."
               missing=1
@@ -118,6 +108,7 @@ jobs:
         env:
           CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}

@@ -113,7 +113,12 @@ cp "$dmg" "$work/verified/"
 (cd "$work/verified" && shasum -a 256 "$filename" > SHA256SUMS.txt)
 # Sign the final, stapled installer with the configured Sparkle key.
 sparkle_bin="$work/build/SourcePackages/artifacts/sparkle/Sparkle/bin"
-"$sparkle_bin/generate_appcast" --account foundation-evals \
+sparkle_key_args=(--account foundation-evals)
+if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+  printf '%s' "$SPARKLE_PRIVATE_KEY" > "$work/sparkle.key"
+  sparkle_key_args=(--ed-key-file "$work/sparkle.key")
+fi
+"$sparkle_bin/generate_appcast" "${sparkle_key_args[@]}" \
   --maximum-deltas 0 \
   --download-url-prefix "https://github.com/coryparrry/Foundation-Eval-Labs/releases/download/$RELEASE_TAG/" \
   "$work/verified"

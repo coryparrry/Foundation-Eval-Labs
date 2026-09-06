@@ -67,7 +67,7 @@ else
   fi
   # No --clobber: existing assets must never be silently replaced.
   gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-    "dist/release/$filename" dist/release/SHA256SUMS.txt
+    "dist/release/$filename" dist/release/SHA256SUMS.txt dist/release/appcast.xml
   # Asset uploads with GITHUB_TOKEN do not trigger a verification workflow.
   bash "$script_directory/verify_release.sh"
   gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
