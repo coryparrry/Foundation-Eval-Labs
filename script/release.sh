@@ -73,7 +73,7 @@ xcodebuild archive \
   ARCHS=arm64 CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$identity" \
   DEVELOPMENT_TEAM="$APPLE_TEAM_ID" OTHER_CODE_SIGN_FLAGS=--timestamp \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-  INFOPLIST_KEY_FoundationEvalsSourceCommit="$source_commit"
+  FOUNDATION_EVALS_SOURCE_COMMIT="$source_commit"
 
 export APPLE_TEAM_ID
 python3 - "$work/ExportOptions.plist" "$identity" <<'PY'

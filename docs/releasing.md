@@ -5,7 +5,7 @@ Signing and notarization run locally. GitHub-hosted runners execute portable reg
 ## Validate a candidate
 
 1. Merge the candidate through a reviewed PR with all required CI checks passing. Wait for the **CI** push run on `main` at the exact candidate commit.
-2. On macOS 27 with Xcode 27, run the full native suite using the README command. UI tests require an interactive desktop. Exercise real model generation separately; hosted portable tests do not validate Apple Intelligence or Core AI inference.
+2. On macOS 27 with Xcode 27, run the full native suite using the README instructions. UI tests require an interactive desktop and a signed test runner. Exercise real model generation separately; hosted portable tests do not validate Apple Intelligence or Core AI inference.
 3. Tag that exact commit with `vMAJOR.MINOR.PATCH`. Package from its clean checkout. The helper archives committed source into a temporary directory and embeds its SHA in the signed app's `FoundationEvalsSourceCommit` property. Temporary build output avoids Finder metadata interfering with signing.
 
 ## Package locally

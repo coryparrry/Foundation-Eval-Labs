@@ -42,7 +42,10 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         fixture.finishResponse()
         XCTAssertTrue(app.staticTexts["EVALUATION RUN"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["Completed"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["100%"].exists)
+        let passRate = app.staticTexts.matching(
+            NSPredicate(format: "value BEGINSWITH %@ AND value CONTAINS %@", "Scored pass rate", "100%")
+        ).firstMatch
+        XCTAssertTrue(passRate.exists, app.debugDescription)
 
         app.terminate()
         app = launchApp()
@@ -58,7 +61,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
     }
 
     @MainActor
-    func testCancelPersistsCancelledRun() throws {
+    func testCancelShowsCancelledRun() throws {
         openSuiteEditor()
         configureSuite(name: "UI cancellation fixture", endpointPath: "/success")
 
@@ -79,9 +82,9 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         configureSuite(name: "UI provider failure fixture", endpointPath: "/failure")
 
         app.buttons["Run evaluation"].click()
-        XCTAssertTrue(fixture.waitForRequest(timeout: 5))
-        XCTAssertTrue(app.staticTexts["EVALUATION RUN"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Completed with issues"].waitForExistence(timeout: 3))
+        XCTAssertTrue(fixture.waitForRequest(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["EVALUATION RUN"].waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Completed with issues"].waitForExistence(timeout: 3), app.debugDescription)
     }
 
     private func launchApp() -> XCUIApplication {
@@ -100,6 +103,8 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         app.menuBars.menuBarItems["Evaluation"].click()
         app.menuItems["Show Suite Editor"].click()
         XCTAssertTrue(app.buttons["Run"].waitForExistence(timeout: 5))
+        let showSidebar = app.buttons["Show Sidebar"]
+        if showSidebar.exists { showSidebar.click() }
     }
 
     @MainActor
@@ -120,15 +125,23 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
 
         let endpoint = app.textFields["Custom provider endpoint"]
         XCTAssertTrue(endpoint.waitForExistence(timeout: 3))
-        replaceText(in: endpoint, with: "http://127.0.0.1:\(fixture.port)\(endpointPath)")
-        XCTAssertTrue(app.staticTexts["Ready to run"].waitForExistence(timeout: 3))
+        let endpointURL = "http://127.0.0.1:\(fixture.port)\(endpointPath)"
+        replaceText(in: endpoint, with: endpointURL)
+        XCTAssertEqual(endpoint.value as? String, endpointURL)
+        // End endpoint editing and bring the run controls back into view.
+        app.textFields["Suite name"].click()
+        XCTAssertTrue(app.staticTexts["Ready to run"].waitForExistence(timeout: 3), app.debugDescription)
     }
 
     @MainActor
     private func replaceText(in element: XCUIElement, with value: String) {
         element.click()
         element.typeKey("a", modifierFlags: .command)
-        element.typeText(value)
+        // Xcode 27's bulk text input drops colons on this keyboard layout.
+        for (index, part) in value.components(separatedBy: ":").enumerated() {
+            if index > 0 { element.typeKey(";", modifierFlags: .shift) }
+            if !part.isEmpty { element.typeText(part) }
+        }
     }
 }
 
@@ -138,17 +151,21 @@ private final class LocalHTTPModelFixture: @unchecked Sendable {
     private let ready = DispatchSemaphore(value: 0)
     private let requestReceived = DispatchSemaphore(value: 0)
     private let responseGate = DispatchSemaphore(value: 0)
+    private var listenerFailureDescription: String?
     private(set) var port: UInt16 = 0
 
     init() throws {
-        listener = try NWListener(using: .tcp, on: .any)
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
         listener.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
             case .ready:
                 self.port = self.listener.port?.rawValue ?? 0
                 self.ready.signal()
-            case .failed:
+            case .failed(let error):
+                self.listenerFailureDescription = error.localizedDescription
                 self.ready.signal()
             default:
                 break
@@ -158,9 +175,13 @@ private final class LocalHTTPModelFixture: @unchecked Sendable {
             self?.accept(connection)
         }
         listener.start(queue: queue)
-        guard ready.wait(timeout: .now() + 5) == .success, port != 0 else {
+        let readiness = ready.wait(timeout: .now() + 5)
+        guard readiness == .success, port != 0 else {
             listener.cancel()
-            throw FixtureError.failedToListen
+            let detail = readiness == .timedOut
+                ? "Timed out waiting for the loopback listener to become ready."
+                : listenerFailureDescription ?? "The loopback listener failed without a Network.framework error."
+            throw FixtureError.failedToListen(detail)
         }
     }
 
@@ -183,7 +204,7 @@ private final class LocalHTTPModelFixture: @unchecked Sendable {
     }
 
     private func receiveRequest(on connection: NWConnection, accumulated: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, _, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             var request = accumulated
             if let data { request.append(data) }
@@ -192,7 +213,11 @@ private final class LocalHTTPModelFixture: @unchecked Sendable {
                 return
             }
             guard request.range(of: Data("\r\n\r\n".utf8)) != nil else {
-                self.receiveRequest(on: connection, accumulated: request)
+                if isComplete {
+                    connection.cancel()
+                } else {
+                    self.receiveRequest(on: connection, accumulated: request)
+                }
                 return
             }
             self.respond(to: request, on: connection)
@@ -238,7 +263,14 @@ private final class LocalHTTPModelFixture: @unchecked Sendable {
         )
     }
 
-    private enum FixtureError: Error {
-        case failedToListen
+    private enum FixtureError: LocalizedError {
+        case failedToListen(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .failedToListen(let detail):
+                "Could not start the UI test loopback fixture: \(detail)"
+            }
+        }
     }
 }

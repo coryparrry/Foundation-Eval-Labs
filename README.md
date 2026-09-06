@@ -100,7 +100,7 @@ Use Xcode 27 with its command-line tools selected. From the repository root:
 
 This creates and opens a development build at `dist/Foundation Evals.app`. Quit the app before rebuilding. You can also open `FoundationEvals/FoundationEvals.xcodeproj` directly in Xcode.
 
-Run the tests with:
+Run the native tests on macOS 27 by opening the project in Xcode and choosing **Product > Test** with development signing configured. You can also use the command line:
 
 ```sh
 xcodebuild -project FoundationEvals/FoundationEvals.xcodeproj \
@@ -108,7 +108,7 @@ xcodebuild -project FoundationEvals/FoundationEvals.xcodeproj \
   -destination 'platform=macOS' test
 ```
 
-UI tests require an interactive Mac. The optional Core AI inference test requires compatible model resources.
+UI tests require an interactive Mac and a signed test runner. If macOS rejects a command-line UI runner before launch, run the tests directly from Xcode. The optional Core AI inference test requires compatible model resources.
 
 GitHub-hosted CI executes production scoring, structured-field assertion, and MCP installer tests with `swift test`, checks workflows/scripts, and compiles the full app and native test bundles. Its current macOS 26 image cannot execute the macOS 27 app or UI tests; run the native suite above before releasing. The portable package shares production source and existing test files with Xcode without lowering the app’s deployment target. See the [release guide](docs/releasing.md) for local signing and GitHub installer verification.
 

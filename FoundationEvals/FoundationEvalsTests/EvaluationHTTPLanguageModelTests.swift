@@ -395,6 +395,7 @@ private final class RunningCustomModelFixture {
             .deletingLastPathComponent()
         let script = repository.appending(path: "examples/custom_model_fixture_server.py")
         let output = Pipe()
+        let errors = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         process.arguments = [
@@ -403,18 +404,28 @@ private final class RunningCustomModelFixture {
             "--stream-delay", String(streamDelay)
         ]
         process.standardOutput = output
-        process.standardError = output
+        process.standardError = errors
         try process.run()
         self.process = process
 
         let readyData = output.fileHandleForReading.availableData
-        guard let ready = String(data: readyData, encoding: .utf8),
-              let firstLine = ready.split(separator: "\n").first,
-              let endpoint = firstLine.split(separator: " ").last,
-              let port = URL(string: String(endpoint))?.port else {
+        let ready = String(decoding: readyData, as: UTF8.self)
+        let port = ready
+            .split(separator: "\n")
+            .compactMap { line in
+                line.split(separator: " ").last.flatMap { URL(string: String($0))?.port }
+            }
+            .first
+        guard let port else {
             process.terminate()
             process.waitUntilExit()
-            throw RunningCustomModelFixtureError.invalidReadyMessage
+            let remainingOutput = output.fileHandleForReading.readDataToEndOfFile()
+            let errorOutput = errors.fileHandleForReading.readDataToEndOfFile()
+            throw RunningCustomModelFixtureError.invalidReadyMessage(
+                stdout: ready + String(decoding: remainingOutput, as: UTF8.self),
+                stderr: String(decoding: errorOutput, as: UTF8.self),
+                terminationStatus: process.terminationStatus
+            )
         }
         self.port = port
     }
@@ -426,8 +437,19 @@ private final class RunningCustomModelFixture {
     }
 }
 
-private enum RunningCustomModelFixtureError: Error {
-    case invalidReadyMessage
+private enum RunningCustomModelFixtureError: LocalizedError {
+    case invalidReadyMessage(stdout: String, stderr: String, terminationStatus: Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidReadyMessage(let stdout, let stderr, let terminationStatus):
+            """
+            The custom model fixture did not publish a valid ready endpoint (status \(terminationStatus)).
+            stdout: \(stdout.debugDescription)
+            stderr: \(stderr.debugDescription)
+            """
+        }
+    }
 }
 
 private extension ContinuousClock.Instant {

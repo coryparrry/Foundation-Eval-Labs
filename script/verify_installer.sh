@@ -48,8 +48,5 @@ app="$mountpoint/Foundation Evals.app"
 codesign --verify --strict --deep -R "=$requirement" "$app"
 spctl --assess --type execute --verbose=2 "$app"
 test "$(readlink "$mountpoint/Applications")" = /Applications
-test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
-if [[ -n "$expected_commit" ]]; then
-  test "$(/usr/libexec/PlistBuddy -c 'Print :FoundationEvalsSourceCommit' "$app/Contents/Info.plist")" = "$expected_commit"
-fi
+python3 "$(dirname "$0")/release_validation.py" metadata "$app/Contents/Info.plist" "$version" "$expected_commit"
 test "$(lipo -archs "$app/Contents/MacOS/FoundationEvals")" = arm64
