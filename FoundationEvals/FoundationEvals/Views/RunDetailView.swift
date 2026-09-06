@@ -42,17 +42,18 @@ struct RunDetailView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
+            LazyVStack(alignment: .leading, spacing: 20) {
                 RunOverviewHeader(run: run)
-                RunSummaryGrid(run: run)
-                RunAnalysisSection(run: run, baselineRuns: baselineRuns)
-                RunConfigurationSection(run: run)
+                RunSummaryDashboard(run: run)
                 ResultsSection(run: run)
                     .id(run.id)
+                RunAnalysisSection(run: run, baselineRuns: baselineRuns)
+                RunConfigurationSection(run: run)
             }
-            .padding(28)
-            .frame(maxWidth: 1_100, alignment: .leading)
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(Color.primary.opacity(0.025))
         .navigationTitle("Run Results")
         .toolbar {
             Button("Export Run as JSON", systemImage: "square.and.arrow.up") {
@@ -97,16 +98,11 @@ private struct RunOverviewHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("EVALUATION RUN")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(1.8)
-
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(run.suiteName)
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
-                RunStatusBadge(run: run)
+                    .font(.system(size: 26, weight: .semibold))
                 Spacer()
+                RunStatusBadge(run: run)
             }
 
             HStack(spacing: 10) {
@@ -150,53 +146,11 @@ private struct RunStatusBadge: View {
 
     var body: some View {
         Label(title, systemImage: symbol)
-            .font(.callout.weight(.semibold))
+            .font(.caption.weight(.medium))
             .foregroundStyle(color)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(color.opacity(0.09), in: .capsule)
-    }
-}
-
-private struct RunSummaryGrid: View {
-    let run: EvaluationRun
-
-    var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 175), spacing: 1)], spacing: 1) {
-            MetricCard(
-                title: "Scored pass rate",
-                value: run.passRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—",
-                symbol: "chart.bar.fill"
-            )
-            MetricCard(
-                title: "Completed",
-                value: "\(run.results.count) / \(run.plannedResultCount)",
-                symbol: "checklist"
-            )
-            MetricCard(title: "Passed", value: run.passedCount.formatted(), symbol: "checkmark.circle")
-            MetricCard(title: "Failed", value: run.failedCount.formatted(), symbol: "xmark.circle")
-            MetricCard(title: "Issues", value: run.errorCount.formatted(), symbol: "exclamationmark.triangle")
-            if let averageScore = run.averageScore {
-                MetricCard(
-                    title: "Average rubric score",
-                    value: "\(averageScore.formatted(.number.precision(.fractionLength(1)))) / 4",
-                    symbol: "sparkles"
-                )
-            }
-            MetricCard(
-                title: "Average latency",
-                value: Duration.milliseconds(run.averageDurationMilliseconds)
-                    .formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)),
-                symbol: "timer"
-            )
-            MetricCard(title: "Tokens", value: run.totalTokens.formatted(), symbol: "number")
-        }
-        .background(Color(nsColor: .separatorColor))
-        .clipShape(.rect(cornerRadius: 6))
-        .overlay {
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.secondary.opacity(0.16))
-        }
     }
 }
 
@@ -253,9 +207,9 @@ private struct RunConfigurationSection: View {
         }
         .font(.headline)
         .padding(18)
-        .background(.background, in: .rect(cornerRadius: 6))
+        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12))
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.secondary.opacity(0.14))
         }
     }
@@ -304,38 +258,48 @@ private struct ResultsSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
                 Text("Results")
-                    .font(.title2.bold())
+                    .font(.headline)
                     .accessibilityAddTraits(.isHeader)
                 Text(isFiltering ? "\(results.count) of \(run.results.count)" : "\(run.results.count)")
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.quaternary, in: .rect(cornerRadius: 4))
                 Spacer()
-            }
-
-            if !run.results.isEmpty {
-                HStack(spacing: 12) {
+                if !run.results.isEmpty {
                     Picker("Result filter", selection: $filter) {
                         ForEach(ResultFilter.allCases) { filter in
                             Text(filter.title).tag(filter)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 390)
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 110)
 
-                    Spacer()
-
-                    TextField("Search case, prompt, or response", text: $searchText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 290)
-                }
-
-                if isFiltering {
-                    Button("Clear filters") { clearFilters() }
-                        .accessibilityIdentifier("Clear result filters")
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.tertiary)
+                        TextField("Search results", text: $searchText)
+                            .textFieldStyle(.plain)
+                            .accessibilityLabel("Search case, prompt, or response")
+                        if isFiltering {
+                            Button("Clear filters", systemImage: "xmark.circle.fill") { clearFilters() }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("Clear result filters")
+                        }
+                    }
+                    .padding(8)
+                    .frame(width: 220)
+                    .background(Color.primary.opacity(0.035), in: .rect(cornerRadius: 6))
                 }
             }
+            .padding(18)
 
             if run.results.isEmpty {
                 ContentUnavailableView(
@@ -354,32 +318,64 @@ private struct ResultsSection: View {
                 )
                 .frame(maxWidth: .infinity, minHeight: 220)
             } else {
-                HStack(alignment: .top, spacing: 20) {
-                    List(results, selection: $selectedResultID) { result in
-                        ResultListRow(result: result, repetitions: run.repetitions)
-                            .tag(result.id)
+                Table(results, selection: $selectedResultID) {
+                    TableColumn("Case") { result in
+                        Text(result.caseName)
+                            .font(.system(size: 12, weight: .medium))
                     }
-                    .listStyle(.inset)
-                    .frame(width: 290)
-                    .accessibilityIdentifier("Result list")
-
-                    if let selectedResult {
-                        ScrollView {
-                            ResultDetail(
-                                result: selectedResult,
-                                scoringMode: run.scoringMode,
-                                repetitions: run.repetitions,
-                                passingScore: run.judgePassingScore ?? EvaluationSuite.judgePassingScore,
-                                modelConfiguration: run.execution?.configuration
-                            )
-                            .id(selectedResult.id)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.trailing, 8)
-                        }
+                    .width(min: 160, ideal: 300)
+                    TableColumn("Outcome") { result in
+                        ResultStatusLabel(result: result)
                     }
+                    .width(min: 90, ideal: 110)
+                    TableColumn("Score") { result in
+                        Text(result.score.map { "\($0) / 4" } ?? "—")
+                            .monospacedDigit()
+                            .foregroundStyle(result.score == nil ? Color.secondary : Color.accentColor)
+                    }
+                    .width(70)
+                    TableColumn("Latency") { result in
+                        Text(Duration.milliseconds(result.durationMilliseconds)
+                            .formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)))
+                            .monospacedDigit()
+                    }
+                    .width(min: 90, ideal: 110)
+                    TableColumn("Tokens") { result in
+                        Text(result.usage.totalTokens.formatted())
+                            .monospacedDigit()
+                    }
+                    .width(75)
+                    TableColumn("Repetition") { result in
+                        Text("\(result.repetition) / \(run.repetitions)")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .width(80)
                 }
-                .frame(height: 560)
+                .tableStyle(.inset(alternatesRowBackgrounds: true))
+                .frame(height: min(320, max(160, CGFloat(results.count) * 30 + 40)))
+                .accessibilityIdentifier("Result list")
+
+                if let selectedResult {
+                    Divider()
+                    ResultDetail(
+                        result: selectedResult,
+                        scoringMode: run.scoringMode,
+                        repetitions: run.repetitions,
+                        passingScore: run.judgePassingScore ?? EvaluationSuite.judgePassingScore,
+                        modelConfiguration: run.execution?.configuration
+                    )
+                    .id(selectedResult.id)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
+                }
             }
+        }
+        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12))
+        .clipShape(.rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
         }
         .onAppear { selectFirstResultIfNeeded() }
         .onChange(of: results.map(\.id)) { _, _ in
@@ -399,33 +395,14 @@ private struct ResultsSection: View {
     }
 }
 
-private struct ResultListRow: View {
+private struct ResultStatusLabel: View {
     let result: EvaluationSampleResult
-    let repetitions: Int
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            Image(systemName: statusSymbol)
-                .foregroundStyle(statusColor)
-                .padding(.top, 2)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(result.caseName)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    if repetitions > 1 {
-                        Text("Repetition \(result.repetition)")
-                    }
-                    Text(statusTitle)
-                    if let score = result.score {
-                        Text("\(score) / 4")
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .combine)
+        Label(statusTitle, systemImage: statusSymbol)
+            .font(.caption)
+            .foregroundStyle(statusColor)
+            .accessibilityElement(children: .combine)
     }
 
     private var statusTitle: String {
@@ -690,28 +667,6 @@ private struct ErrorBanner: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.red.opacity(0.08), in: .rect(cornerRadius: 9))
-    }
-}
-
-private struct MetricCard: View {
-    let title: LocalizedStringResource
-    let value: String
-    let symbol: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label(title, systemImage: symbol)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 27, weight: .medium, design: .monospaced))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .background(.background)
-        .accessibilityElement(children: .combine)
     }
 }
 

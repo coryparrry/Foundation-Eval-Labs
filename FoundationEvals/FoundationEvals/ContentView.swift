@@ -10,9 +10,10 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Bindable var store: EvaluationStore
+    @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             RunHistorySidebar(store: store)
         } detail: {
             switch store.selection {
@@ -37,7 +38,20 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(minWidth: 920, minHeight: 640)
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 1_000, minHeight: 700)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            WorkbenchStatusBar(store: store)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                SettingsLink {
+                    Label("MCP Connector", systemImage: "network")
+                }
+                .help("MCP Connector settings")
+            }
+        }
         .onChange(of: store.draftSuite) {
             store.saveSuite()
         }

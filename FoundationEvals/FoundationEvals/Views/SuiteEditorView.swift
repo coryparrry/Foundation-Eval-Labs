@@ -77,28 +77,21 @@ struct SuiteEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 18) {
                     SuiteOverviewHeader(store: store)
+                    SuiteDashboardCards(store: store)
                     RunReadinessPanel(store: store)
                     if let response = store.liveResponse, store.isRunning {
                         LiveResponseSection(response: response)
                     }
-
-                    Picker("Editor page", selection: $selectedPage) {
-                        ForEach(SuiteEditorPage.allCases) { page in
-                            Text(page.title).tag(page)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("Editor page")
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 28)
                 .padding(.bottom, 18)
-                .frame(maxWidth: 1_080, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 selectedPageContent
                     .padding(.horizontal, 28)
                     .padding(.bottom, 28)
-                    .frame(maxWidth: 1_080, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -107,8 +100,19 @@ struct SuiteEditorView: View {
         .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
             selectFirstCaseIfNeeded()
         }
-        .navigationTitle("Suite Editor")
+        .navigationTitle("Foundation Evals")
+        .background(Color.primary.opacity(0.025))
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Editor page", selection: $selectedPage) {
+                    ForEach(SuiteEditorPage.allCases) { page in
+                        Text(page.title).tag(page)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 500)
+                .accessibilityIdentifier("Editor page")
+            }
             RunToolbarContent(store: store)
         }
         .fileImporter(
@@ -158,15 +162,10 @@ private struct SuiteOverviewHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("EVALUATION WORKBENCH")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(1.8)
-
             HStack(alignment: .firstTextBaseline, spacing: 16) {
                 TextField("Suite name", text: $store.draftSuite.name)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .font(.system(size: 28, weight: .semibold))
                     .accessibilityLabel("Suite name")
 
                 Spacer(minLength: 12)
@@ -241,16 +240,16 @@ private struct RunReadinessPanel: View {
                     store.startRun()
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .controlSize(.regular)
                 .disabled(blocker != nil || store.isProcessingFiles)
                 .accessibilityIdentifier("Run evaluation")
             }
         }
         .padding(16)
-        .background(statusColor(blocker: blocker).opacity(0.08), in: .rect(cornerRadius: 12))
+        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
-                .stroke(statusColor(blocker: blocker).opacity(0.22))
+                .stroke(Color.secondary.opacity(0.12))
         }
         .accessibilityElement(children: .contain)
     }
@@ -622,6 +621,8 @@ private struct CasesSection: View {
                     .disabled(store.isRunning || store.isProcessingFiles)
             }
 
+            CaseOverviewTable(cases: store.draftSuite.cases, selection: $selectedCaseID)
+
             if let selectedCaseIndex {
                 EvaluationCaseEditor(
                     evaluationCase: $store.draftSuite.cases[selectedCaseIndex],
@@ -901,7 +902,7 @@ struct EditorSection<Content: View>: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.title3.weight(.semibold))
+                        .font(.headline)
                         .accessibilityAddTraits(.isHeader)
                     Text(sectionDescription)
                         .font(.callout)
@@ -914,9 +915,9 @@ struct EditorSection<Content: View>: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: .rect(cornerRadius: 6))
+        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12))
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.secondary.opacity(0.14))
         }
     }
