@@ -24,10 +24,7 @@ struct FoundationEvalsApp: App {
 
     init() {
         let telemetry = TelemetryController(configuration: Self.telemetryConfiguration)
-        let store = EvaluationStore(
-            supportDirectory: Self.acceptanceStorageDirectory,
-            captureTelemetry: { telemetry.capture($0) }
-        )
+        let store = EvaluationStore(supportDirectory: Self.acceptanceStorageDirectory)
         let runtime = FoundationEvalsMCPRuntime(store: store)
         let settings = MCPSettingsController(
             serverControl: MCPServerControl(

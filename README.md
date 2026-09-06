@@ -90,7 +90,7 @@ Suites, imported attachments, and run history are saved in `~/Library/Applicatio
 
 On-device evaluations run locally. Custom HTTP providers and tools receive the content needed for their calls, and those separate services control any onward network use. Optional Private Cloud Compute uses Apple's network service when available. Spotlight tools can make matching local file content available to the selected model.
 
-Optional usage telemetry is **off by default**. Enable it in **Settings → Privacy → Share usage statistics** to send app opens, evaluation counts, rounded run durations, and completion/failure/cancellation outcomes to PostHog, together with app/macOS versions and a random installation identifier. Prompts, responses, suite names, files, provider addresses, credentials, screen recordings, and automatic interaction tracking are excluded. Turning telemetry off clears pending events and resets the analytics identifier; it does not delete events already received by PostHog. See [telemetry details](docs/telemetry.md).
+Anonymous usage telemetry is **on by default** and can be turned off at any time in **Settings → Privacy → Share usage statistics**. It sends only app-open events, app/macOS versions, and a random installation identifier to PostHog. The identifier is not linked to your name, email, or Apple account. **AI evaluations, inputs, outputs, results, and evaluation activity are not tracked.** Prompts, responses, suite names, files, provider addresses, credentials, screen recordings, and automatic interaction tracking are excluded. Turning telemetry off clears pending events and resets the analytics identifier; it does not delete events already received by PostHog. See [telemetry details](docs/telemetry.md).
 
 ## Build from source
 
