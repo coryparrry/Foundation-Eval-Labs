@@ -10,6 +10,7 @@
 		AFC28B6E304A00010023273E /* Hummingbird in Frameworks */ = {isa = PBXBuildFile; productRef = AFC28B6D304A00010023273E /* Hummingbird */; };
 		AFC28B70304B00010023273E /* CoreAILM in Frameworks */ = {isa = PBXBuildFile; productRef = AFC28B72304B00010023273E /* CoreAILM */; };
 		FE0000000000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000002 /* Sparkle */; };
+		FE0000000000000000000011 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000012 /* PostHog */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			files = (
 				AFC28B70304B00010023273E /* CoreAILM in Frameworks */,
 				FE0000000000000000000001 /* Sparkle in Frameworks */,
+				FE0000000000000000000011 /* PostHog in Frameworks */,
 				AFC28B6E304A00010023273E /* Hummingbird in Frameworks */,
 			);
 		};
@@ -113,6 +115,7 @@
 			);
 			name = FoundationEvals;
 			packageProductDependencies = (
+				FE0000000000000000000012 /* PostHog */,
 				FE0000000000000000000002 /* Sparkle */,
 				AFC28B72304B00010023273E /* CoreAILM */,
 				AFC28B6D304A00010023273E /* Hummingbird */,
@@ -196,6 +199,7 @@
 			mainGroup = AFC28B3D304733160023273E;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				FE0000000000000000000013 /* XCRemoteSwiftPackageReference "posthog-ios" */,
 				FE0000000000000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				AFC28B71304B00010023273E /* XCRemoteSwiftPackageReference "coreai-models" */,
 				AFC28B6C304A00010023273E /* XCRemoteSwiftPackageReference "hummingbird" */,
@@ -585,6 +589,11 @@
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
 			requirement = {kind = exactVersion; version = 2.9.6; };
 		};
+		FE0000000000000000000013 /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/PostHog/posthog-ios.git";
+			requirement = {kind = exactVersion; version = 3.71.4; };
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -602,6 +611,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FE0000000000000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		FE0000000000000000000012 /* PostHog */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FE0000000000000000000013 /* XCRemoteSwiftPackageReference "posthog-ios" */;
+			productName = PostHog;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

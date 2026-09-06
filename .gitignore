@@ -11,6 +11,7 @@ FoundationEvals/FoundationEvals.xcodeproj/project.xcworkspace/xcuserdata/
 !/docs/custom-provider-protocol.md
 !/docs/foundation-model-features.md
 !/docs/releasing.md
+!/docs/telemetry.md
 
 # Local signing material.
 *.p12
