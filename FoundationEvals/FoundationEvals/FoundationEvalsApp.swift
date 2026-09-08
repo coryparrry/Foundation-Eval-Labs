@@ -65,6 +65,7 @@ struct FoundationEvalsApp: App {
     var body: some Scene {
         WindowGroup(id: "evaluation-main", for: String.self) { _ in
             ContentView(store: store)
+                .disclosureGroupStyle(FullWidthDisclosureStyle())
                 .task(id: mcpSettings.installationState) {
                     appDelegate.runtime = mcpRuntime
                     guard !ProcessInfo.processInfo.arguments.contains("--disable-mcp-autostart") else { return }
@@ -123,6 +124,7 @@ struct FoundationEvalsApp: App {
 
         Settings {
             AppSettingsView(mcpSettings: mcpSettings, telemetry: telemetry)
+                .disclosureGroupStyle(FullWidthDisclosureStyle())
         }
     }
 }

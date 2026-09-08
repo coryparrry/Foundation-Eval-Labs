@@ -39,3 +39,9 @@
 - User requests launching the new app after each fix; continue avoiding UI tests unless asked.
 - Expanded parent-span disclosure buttons to include the icon, title, and full label area. Clicking selects the parent and toggles expansion; leaves remain ordinary selectable rows.
 - Verified Xcode RunProject built without errors and launched the updated app. git diff --check passed. No UI tests were run for this hit-area change.
+
+# All expandable sections
+
+- User clarified that larger disclosure click targets must apply to all expandable sections, not only workflow rows.
+- Generalized the existing full-heading disclosure style and applied it at both main-window and settings roots, including nested sections. Removed trace-only overrides; heading labels, state announcements, and disabled-state inheritance remain native SwiftUI controls.
+- Verified Xcode RunProject compiled successfully and launched the new build; git diff --check passed. No UI tests. Found two running copies at the same executable path; automatic approval review rejected gracefully closing the old process due to possible unsaved state. Activated the new process directly instead.

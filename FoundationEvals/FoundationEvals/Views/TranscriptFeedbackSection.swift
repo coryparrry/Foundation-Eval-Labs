@@ -94,7 +94,6 @@ struct TranscriptFeedbackSection: View {
             .padding(.top, 10)
         }
         .font(.callout)
-        .disclosureGroupStyle(TraceDisclosureStyle(title: "Foundation Models transcript and feedback"))
         .task {
             let trace = trace
             preview = await Task.detached(priority: .utility) {
