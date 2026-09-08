@@ -50,3 +50,9 @@
 
 - User rejected the unrequested outline/diamond styling. Restored solid rounded bars with original per-kind colours and opacity for every span, keeping measured placement, start offsets, and zoom. Removed the outline/diamond legend.
 - Xcode BuildProject passed and git diff --check passed. Opened the corrected build with open -n. Automatic approval review rejected terminating existing copies because of possible unsaved state; left them intact. No UI tests.
+
+# Visible subpixel steps
+
+- User noted short spans had no useful visible indication. Render subpixel spans as one-point coloured vertical ticks at measured starts, including a visible right-edge tick, and retain solid duration bars for larger spans. Legend distinguishes ticks from measured bar widths.
+- User explicitly corrected this to solid bars for every step. Removed tick rendering before delivery; restored a two-point minimum visible solid bar, with measured start offsets and zoom retained.
+- Final solid-bar build passed Xcode BuildProject and git diff --check. Opened and explicitly activated the newest process. No UI tests run.
