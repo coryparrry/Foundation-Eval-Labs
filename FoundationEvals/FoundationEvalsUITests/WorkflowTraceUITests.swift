@@ -6,6 +6,30 @@ final class WorkflowTraceUITests: XCTestCase {
     }
 
     @MainActor
+    func testTypingAutosavesLatestTextAcrossRelaunch() throws {
+        try withFixtureApplication { app in
+            app.menuBars.menuBarItems["Evaluation"].click()
+            app.menuItems["Show Suite Editor"].click()
+            let name = app.textFields["Suite name"]
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            name.click()
+            name.typeKey("a", modifierFlags: .command)
+            let text = "Typing stays responsive and the latest edit survives reopening"
+            name.typeText(text)
+            XCTAssertEqual(name.value as? String, text)
+            // Quit immediately after typing to exercise the pending-save flush.
+            app.typeKey("q", modifierFlags: .command)
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+            app.launch()
+            try UITestStorage.requireNoAlert(in: app)
+            app.menuBars.menuBarItems["Evaluation"].click()
+            app.menuItems["Show Suite Editor"].click()
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            XCTAssertEqual(name.value as? String, text)
+        }
+    }
+
+    @MainActor
     func testWorkspaceResetConfirmationAndPersistence() throws {
         try withFixtureApplication { app in
             func choose(_ title: String) {
@@ -32,6 +56,8 @@ final class WorkflowTraceUITests: XCTestCase {
             app.terminate()
             app.launch()
             try UITestStorage.requireNoAlert(in: app)
+            app.menuBars.menuBarItems["Evaluation"].click()
+            app.menuItems["Show Suite Editor"].click()
             XCTAssertTrue(app.textFields["Suite name"].waitForExistence(timeout: 5))
             XCTAssertEqual(app.textFields["Suite name"].value as? String, "Untitled Suite")
             XCTAssertFalse(app.buttons["Run evaluation"].isEnabled)

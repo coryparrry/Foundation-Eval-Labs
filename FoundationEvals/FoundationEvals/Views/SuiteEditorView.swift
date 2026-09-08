@@ -193,6 +193,7 @@ private struct SuiteOverviewHeader: View {
 
                 Label(
                     store.draftSaveFailed ? "Changes could not be saved"
+                        : store.isDraftSavePending ? "Saving changes…"
                         : store.draftSuite != store.suite ? "Draft saved on this Mac"
                         : "Saved automatically on this Mac",
                     systemImage: store.draftSaveFailed ? "exclamationmark.triangle" : "lock.laptopcomputer"

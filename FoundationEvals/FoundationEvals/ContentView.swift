@@ -8,7 +8,6 @@
 import SwiftUI
 
 struct ContentView: View {
-    @Environment(\.scenePhase) private var scenePhase
     @Bindable var store: EvaluationStore
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
 
@@ -32,14 +31,7 @@ struct ContentView: View {
                 .help("MCP Connector settings")
             }
         }
-        .onChange(of: store.draftSuite) {
-            store.saveSuite()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active {
-                store.saveSuite()
-            }
-        }
+        .background { SuiteAutosaveObserver(store: store) }
         .alert(
             "Foundation Evals",
             isPresented: Binding(
