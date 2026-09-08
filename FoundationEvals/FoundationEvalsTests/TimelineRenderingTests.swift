@@ -3,9 +3,8 @@ import SwiftUI
 import Testing
 #if canImport(FoundationEvalsUIComponents)
 @testable import FoundationEvalsUIComponents
-#else
-@testable import FoundationEvals
 #endif
+@testable import FoundationEvals
 
 @MainActor
 struct TimelineRenderingTests {
@@ -31,6 +30,18 @@ struct TimelineRenderingTests {
         let bitmap = try render(width: 80, offset: 0, color: .red.opacity(0.6))
         let center = try #require(bitmap.colorAt(x: 40, y: 10)?.usingColorSpace(.deviceRGB))
         #expect(abs(center.alphaComponent - 0.6) < 0.02)
+    }
+
+    @Test func fittedSubmillisecondSpansRenderAsReadableBars() throws {
+        for (start, end) in [(1.0, 1.8), (28_839.8, 28_840.0)] {
+            let interval = WorkflowTimelineInterval(start: start, end: end, extent: 28_840, width: 120)
+            #expect(interval.width < 1)
+            #expect(interval.displayWidth == 16)
+            let bitmap = try render(width: interval.displayWidth, offset: interval.displayOffset, color: .cyan)
+            let center = try #require(bitmap.colorAt(x: Int(interval.displayOffset + 8), y: 10)?.usingColorSpace(.deviceRGB))
+            #expect(center.greenComponent > 0.5)
+            #expect(center.alphaComponent > 0.95)
+        }
     }
 
     private func render(width: CGFloat, offset: CGFloat, color: Color) throws -> NSBitmapImageRep {

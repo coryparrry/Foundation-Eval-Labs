@@ -27,9 +27,10 @@ struct WorkflowTimelineInterval {
         }
         self.offset = measuredOffset
         self.width = measuredWidth
+        // Short spans use a 16-point visual minimum while measured durations remain exact.
         // Even instantaneous steps remain visible. Clamp at the right edge so the
         // final scoring step is not clipped out of the timeline.
-        self.displayWidth = min(width, max(2, measuredWidth))
+        self.displayWidth = min(width, max(16, measuredWidth))
         self.displayOffset = min(measuredOffset, width - displayWidth)
     }
 }

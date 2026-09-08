@@ -135,102 +135,95 @@ private struct WorkflowWaterfall: View {
     @Binding var selection: String?
     @Binding var collapsed: Set<String>
     @FocusState private var isFocused: Bool
-    @State private var zoom = 1.0
     private var rows: [WorkflowTracePresentation.Row] { trace.visibleRows(collapsed: collapsed) }
 
     var body: some View {
         GeometryReader { geometry in
-            let viewportWidth = max(geometry.size.width, 640)
-            let labelWidth = min(240, max(180, viewportWidth * 0.30))
+            let viewportWidth = max(geometry.size.width, 0)
+            let labelWidth = min(240, max(120, viewportWidth * 0.30))
             let durationWidth: CGFloat = 65
             let startWidth: CGFloat = 80
-            let timelineWidth = (viewportWidth - labelWidth - durationWidth - startWidth - 32) * zoom
-            let width = timelineWidth + labelWidth + durationWidth + startWidth + 32
+            let timelineWidth = max(1, viewportWidth - labelWidth - durationWidth - startWidth - 32)
             VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Picker("Timeline zoom", selection: $zoom) {
-                        Text("Fit").tag(1.0)
-                        Text("10×").tag(10.0)
-                        Text("100×").tag(100.0)
-                        Text("1,000×").tag(1_000.0)
+                Text("Short spans enlarged for visibility · Exact durations shown")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        Text("Span").frame(width: labelWidth, alignment: .leading)
+                        Text("Start").padding(.trailing, 8).frame(width: startWidth, alignment: .trailing)
+                        TraceTimeAxis(extent: trace.extentMilliseconds, available: trace.hasMeasuredOffsets)
+                            .frame(width: timelineWidth, height: 28)
+                        Text("Duration").frame(width: durationWidth, alignment: .trailing)
                     }
-                    .frame(width: 180)
-                    .disabled(!trace.hasMeasuredOffsets)
-                    Text("Zoom in to inspect short steps")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 16).padding(.vertical, 6)
-                ScrollView(.horizontal) {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 0) {
-                            Text("Span").frame(width: labelWidth, alignment: .leading)
-                            Text("Start").padding(.trailing, 8).frame(width: startWidth, alignment: .trailing)
-                            TraceTimeAxis(extent: trace.extentMilliseconds, available: trace.hasMeasuredOffsets)
-                                .frame(width: timelineWidth, height: 28)
-                            Text("Duration").frame(width: durationWidth, alignment: .trailing)
-                        }
-                        .font(.caption2).foregroundStyle(.secondary)
-                        .padding(.horizontal, 16).padding(.vertical, 6)
-                        .background(.quaternary.opacity(0.25))
-                        Divider()
-                        ScrollViewReader { proxy in
-                            List(selection: $selection) {
-                                ForEach(rows) { row in
-                                    HStack(spacing: 0) {
-                                        spanLabel(row).frame(width: labelWidth, alignment: .leading)
-                                        Text(row.node.startMilliseconds.map { "+" + WorkflowTracePresentation.duration($0) } ?? "—")
-                                            .font(.caption.monospacedDigit())
-                                            .foregroundStyle(.secondary)
-                                            .padding(.trailing, 8)
-                                            .frame(width: startWidth, alignment: .trailing)
-                                        TraceDurationBar(node: row.node, extent: trace.extentMilliseconds)
-                                            .frame(width: timelineWidth, height: 34)
-                                        Text(WorkflowTracePresentation.duration(row.node.durationMilliseconds))
-                                            .font(.caption.monospacedDigit())
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: durationWidth, alignment: .trailing)
-                                    }
-                                    .tag(row.id)
-                                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                                    .listRowSeparator(.visible)
-                                    .accessibilityElement(children: .contain)
-                                    .accessibilityLabel(row.node.title)
-                                    .accessibilityIdentifier("Trace span \(row.id)")
-                                    .accessibilityValue("\(row.node.outcome), \(WorkflowTracePresentation.duration(row.node.durationMilliseconds))")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+                    .background(.quaternary.opacity(0.25))
+                    Divider()
+                    ScrollViewReader { proxy in
+                        List(selection: $selection) {
+                            ForEach(rows) { row in
+                                HStack(spacing: 0) {
+                                    spanLabel(row).frame(width: labelWidth, alignment: .leading)
+                                    Text(row.node.startMilliseconds.map { "+" + WorkflowTracePresentation.duration($0) } ?? "—")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .padding(.trailing, 8)
+                                        .frame(width: startWidth, alignment: .trailing)
+                                    TraceDurationBar(node: row.node, extent: trace.extentMilliseconds)
+                                        .frame(width: timelineWidth, height: 34)
+                                    Text(WorkflowTracePresentation.duration(row.node.durationMilliseconds))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: durationWidth, alignment: .trailing)
                                 }
-                            }
-                            .listStyle(.plain)
-                            .environment(\.defaultMinListRowHeight, 34)
-                            .accessibilityIdentifier("Workflow spans")
-                            .focusable()
-                            .focused($isFocused)
-                            .simultaneousGesture(TapGesture().onEnded { isFocused = true })
-                            .onChange(of: selection) { _, selected in
-                                if let selected { proxy.scrollTo(selected) }
-                            }
-                            .onKeyPress(.downArrow) {
-                                moveSelection(by: 1)
-                                return .handled
-                            }
-                            .onKeyPress(.upArrow) {
-                                moveSelection(by: -1)
-                                return .handled
-                            }
-                            .onKeyPress(.rightArrow) {
-                                guard let selection else { return .ignored }
-                                collapsed.remove(selection)
-                                return .handled
-                            }
-                            .onKeyPress(.leftArrow) {
-                                guard let selection, let row = rows.first(where: { $0.id == selection }) else { return .ignored }
-                                if row.hasChildren && !collapsed.contains(selection) { collapsed.insert(selection) }
-                                else { self.selection = row.node.parentID ?? selection }
-                                return .handled
+                                .tag(row.id)
+                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                                .listRowSeparator(.visible)
+                                .accessibilityElement(children: .contain)
+                                .accessibilityLabel(row.node.title)
+                                .accessibilityIdentifier("Trace span \(row.id)")
+                                .accessibilityValue("\(row.node.outcome), \(WorkflowTracePresentation.duration(row.node.durationMilliseconds))")
                             }
                         }
+                        .listStyle(.plain)
+                        .environment(\.defaultMinListRowHeight, 34)
+                        .accessibilityIdentifier("Workflow spans")
+                        .focusable()
+                        .focusEffectDisabled()
+                        .focused($isFocused)
+                        .simultaneousGesture(TapGesture().onEnded { isFocused = true })
+                        .overlay {
+                            Rectangle().strokeBorder(isFocused ? Color.accentColor : .clear, lineWidth: 2)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                        .onChange(of: selection) { _, selected in
+                            if let selected { proxy.scrollTo(selected) }
+                        }
+                        .onKeyPress(.downArrow) {
+                            moveSelection(by: 1)
+                            return .handled
+                        }
+                        .onKeyPress(.upArrow) {
+                            moveSelection(by: -1)
+                            return .handled
+                        }
+                        .onKeyPress(.rightArrow) {
+                            guard let selection else { return .ignored }
+                            collapsed.remove(selection)
+                            return .handled
+                        }
+                        .onKeyPress(.leftArrow) {
+                            guard let selection, let row = rows.first(where: { $0.id == selection }) else { return .ignored }
+                            if row.hasChildren && !collapsed.contains(selection) { collapsed.insert(selection) }
+                            else { self.selection = row.node.parentID ?? selection }
+                            return .handled
+                        }
                     }
-                    .frame(width: width, height: max(0, geometry.size.height - 40))
                 }
+                .frame(width: viewportWidth)
+                .frame(maxHeight: .infinity)
             }
         }
     }
@@ -285,11 +278,13 @@ private struct TraceTimeAxis: View {
     var body: some View {
         GeometryReader { geometry in
             if available {
-                ForEach(0..<5) { tick in
-                    Text(WorkflowTracePresentation.duration(extent * Double(tick) / 4))
+                let divisions = geometry.size.width >= 320 ? 4 : geometry.size.width >= 160 ? 2 : geometry.size.width >= 90 ? 1 : 0
+                ForEach(0...divisions, id: \.self) { tick in
+                    let fraction = Double(tick) / Double(max(1, divisions))
+                    Text(WorkflowTracePresentation.duration(extent * fraction))
                         .font(.system(size: 9).monospacedDigit())
                         .fixedSize()
-                        .position(x: max(15, min(geometry.size.width - 20, geometry.size.width * CGFloat(tick) / 4)), y: 14)
+                        .position(x: max(15, min(geometry.size.width - 20, geometry.size.width * fraction)), y: 14)
                 }
             } else {
                 Text("Timeline unavailable").font(.caption2).frame(maxWidth: .infinity, maxHeight: .infinity)

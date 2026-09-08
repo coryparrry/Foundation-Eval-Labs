@@ -264,6 +264,31 @@ final class WorkflowTraceUITests: XCTestCase {
     }
 
     @MainActor
+    func testFittedTimelineKeepsDetailsAndResizesWithSidebar() throws {
+        try withFixtureApplication { app in
+            let list = app.descendants(matching: .any)["Workflow spans"]
+            XCTAssertTrue(list.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.popUpButtons["Timeline zoom"].exists)
+            let details = app.descendants(matching: .any)["Span details"]
+            XCTAssertTrue(details.exists)
+            XCTAssertFalse(app.buttons["Hide span details"].exists)
+            let window = app.windows.firstMatch
+            let originalWidth = list.frame.width
+            XCTAssertLessThanOrEqual(list.frame.maxX, details.frame.minX + 2)
+            XCTAssertGreaterThanOrEqual(list.frame.minX, window.frame.minX)
+            span(WorkflowTraceFixture.generationID, in: app).click()
+            assertSelectedTitle("Generate response", in: app)
+            let sidebar = app.buttons["Hide Sidebar"].exists ? app.buttons["Hide Sidebar"] : app.buttons["Show Sidebar"]
+            sidebar.click()
+            XCTAssertNotEqual(list.frame.width, originalWidth)
+            XCTAssertLessThanOrEqual(list.frame.maxX, details.frame.minX + 2)
+            XCTAssertGreaterThanOrEqual(list.frame.minX, window.frame.minX)
+            XCTAssertTrue(details.exists)
+            try capture(app, name: "fitted-timeline-sidebar-resize")
+        }
+    }
+
+    @MainActor
     private func withFixtureApplication(
         longJudgeEvidence: Bool = false,
         _ body: (XCUIApplication) throws -> Void

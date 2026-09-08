@@ -24,30 +24,30 @@ struct WorkflowTimelineIntervalTests {
     @Test func shortAndInstantaneousStepsKeepVisibleSolidBarDimensions() {
         let short = WorkflowTimelineInterval(start: 4.5, end: 5, extent: 2_290, width: 560)
         #expect(short.width > 0 && short.width < 1)
-        #expect(short.displayWidth == 2)
+        #expect(short.displayWidth == 16)
         #expect(short.displayOffset == short.offset)
 
         let instantaneous = WorkflowTimelineInterval(start: 100, end: 100, extent: 2_290, width: 560)
         #expect(instantaneous.width == 0)
-        #expect(instantaneous.displayWidth == 2)
+        #expect(instantaneous.displayWidth == 16)
         #expect(instantaneous.displayOffset == instantaneous.offset)
     }
 
     @Test func finalScoringBarRemainsInsideTimeline() {
         let scoring = WorkflowTimelineInterval(start: 2_289.6, end: 2_290, extent: 2_290, width: 560)
         #expect(scoring.offset > 558)
-        #expect(scoring.displayOffset == 558)
-        #expect(scoring.displayWidth == 2)
+        #expect(scoring.displayOffset == 544)
+        #expect(scoring.displayWidth == 16)
         #expect(scoring.displayOffset + scoring.displayWidth == 560)
 
         let endpoint = WorkflowTimelineInterval(start: 2_290, end: 2_290, extent: 2_290, width: 560)
         #expect(endpoint.offset == 560)
-        #expect(endpoint.displayOffset == 558)
-        #expect(endpoint.displayWidth == 2)
+        #expect(endpoint.displayOffset == 544)
+        #expect(endpoint.displayWidth == 16)
     }
 
     @Test func zeroAndNarrowCanvasNeverRenderOutsideAvailableWidth() {
-        for canvasWidth in [0.0, 0.5, 1.0, 2.0] {
+        for canvasWidth in [0.0, 0.5, 1.0, 2.0, 8.0, 16.0] {
             let interval = WorkflowTimelineInterval(start: 99, end: 100, extent: 100, width: canvasWidth)
             #expect(interval.displayWidth == canvasWidth)
             #expect(interval.displayOffset == 0)
@@ -56,11 +56,11 @@ struct WorkflowTimelineIntervalTests {
 
     @Test func zoomRevealsMeasuredDurationWithoutChangingMinimumBarSize() {
         let fit = WorkflowTimelineInterval(start: 4, end: 5, extent: 1_000, width: 500)
-        let zoom = WorkflowTimelineInterval(start: 4, end: 5, extent: 1_000, width: 5_000)
-        #expect(fit.displayWidth == 2)
-        #expect(zoom.displayWidth == 5)
+        let zoom = WorkflowTimelineInterval(start: 4, end: 5, extent: 1_000, width: 50_000)
+        #expect(fit.displayWidth == 16)
+        #expect(zoom.displayWidth == 50)
         #expect(zoom.displayWidth == zoom.width)
-        #expect(zoom.displayOffset == fit.offset * 10)
+        #expect(zoom.displayOffset == fit.offset * 100)
     }
 
     @Test func longAndParentIntervalsRetainTheirMeasuredDimensions() {
