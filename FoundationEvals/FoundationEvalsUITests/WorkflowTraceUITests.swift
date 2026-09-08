@@ -6,6 +6,39 @@ final class WorkflowTraceUITests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceResetConfirmationAndPersistence() throws {
+        try withFixtureApplication { app in
+            func choose(_ title: String) {
+                app.descendants(matching: .any).matching(identifier: "Start from Scratch").firstMatch.click()
+                app.menuItems[title].click()
+            }
+            choose("Clear All Runs and Traces")
+            let dialog = app.sheets.firstMatch
+            XCTAssertTrue(dialog.waitForExistence(timeout: 3), app.debugDescription)
+            dialog.buttons["Cancel"].click()
+            XCTAssertTrue(app.popUpButtons["Trace case"].exists)
+
+            choose("Clear All Runs and Traces")
+            dialog.buttons["Clear All Runs and Traces"].click()
+            XCTAssertTrue(app.textFields["Suite name"].waitForExistence(timeout: 3))
+            XCTAssertFalse(app.popUpButtons["Trace case"].exists)
+            let priorName = app.textFields["Suite name"].value as? String
+            XCTAssertNotEqual(priorName, "Untitled Suite")
+
+            choose("Reset Current Suite")
+            dialog.buttons["Reset Current Suite"].click()
+            XCTAssertEqual(app.textFields["Suite name"].value as? String, "Untitled Suite")
+            try capture(app, name: "blank-suite-after-reset")
+            app.terminate()
+            app.launch()
+            try UITestStorage.requireNoAlert(in: app)
+            XCTAssertTrue(app.textFields["Suite name"].waitForExistence(timeout: 5))
+            XCTAssertEqual(app.textFields["Suite name"].value as? String, "Untitled Suite")
+            XCTAssertFalse(app.buttons["Run evaluation"].isEnabled)
+        }
+    }
+
+    @MainActor
     func testNativeWorkflowSupportsStageInspectionHierarchyAndKeyboardSelection() throws {
         try withFixtureApplication { app in
             XCTAssertTrue(app.radioButtons["Workflow trace"].waitForExistence(timeout: 5))

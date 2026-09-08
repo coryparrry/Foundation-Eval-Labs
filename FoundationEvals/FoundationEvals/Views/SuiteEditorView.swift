@@ -102,6 +102,9 @@ struct SuiteEditorView: View {
         .focused($isEditorFocused)
         .defaultFocus($isEditorFocused, true)
         .onAppear { selectFirstCaseIfNeeded() }
+        .onChange(of: store.draftSuite.id) { _, _ in
+            selectedPage = .cases
+        }
         .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
             selectFirstCaseIfNeeded()
         }

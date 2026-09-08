@@ -23,6 +23,9 @@ struct ContentView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                WorkspaceResetControl(store: store)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 SettingsLink {
                     Label("MCP Connector", systemImage: "network")
                 }

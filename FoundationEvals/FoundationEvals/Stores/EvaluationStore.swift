@@ -376,6 +376,56 @@ final class EvaluationStore {
         return true
     }
 
+    var canResetWorkspace: Bool {
+        !isRunning && activeRun == nil && !isProcessingFiles && !isImportingFiles
+    }
+
+    /// A blank suite is intentionally incomplete; execution still validates it before running.
+    func resetSuite() throws {
+        try requireIdle()
+        guard !isImportingFiles else { throw EvaluationStoreError.fileOperationBusy }
+        var blank = EvaluationSuite()
+        blank.name = "Untitled Suite"
+        blank.instructions = ""
+        blank.criteria = ""
+        blank.scoringMode = .review
+        blank.cases = [EvaluationCase(name: "Case 1", prompt: "", expected: "")]
+        try CanonicalJSON.data(for: blank).write(
+            to: supportDirectory.appending(path: "suite.json"), options: .atomic
+        )
+        suite = blank
+        draftSuite = blank
+        draftSaveFailed = false
+        selection = .suite
+        // Old drafts must not reappear after relaunch, even when the new suite is incomplete.
+        if FileManager.default.fileExists(atPath: draftSuiteURL.path) {
+            try FileManager.default.removeItem(at: draftSuiteURL)
+        }
+    }
+
+    func clearRunHistory() throws {
+        try requireIdle()
+        guard !isImportingFiles else { throw EvaluationStoreError.fileOperationBusy }
+        // Include unreadable run files, which are not represented in the in-memory history.
+        let files = try FileManager.default.contentsOfDirectory(
+            at: runsDirectory, includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "json" }
+        defer {
+            runs = Self.loadRuns(from: runsDirectory).runs
+            if case .run(let id) = selection, !runs.contains(where: { $0.id == id }) {
+                selection = .suite
+            }
+        }
+        // Remove a completed run's recovery marker before its history file to prevent resurrection.
+        if FileManager.default.fileExists(atPath: activeRunURL.path) {
+            try FileManager.default.removeItem(at: activeRunURL)
+        }
+        for file in files { try FileManager.default.removeItem(at: file) }
+        completedSamples = 0
+        totalSamples = 0
+        liveResponse = nil
+    }
+
     func importFiles(_ urls: [URL]) {
         guard !isRunning, !isProcessingFiles else {
             notice = "Wait for the current operation to finish before changing files."
