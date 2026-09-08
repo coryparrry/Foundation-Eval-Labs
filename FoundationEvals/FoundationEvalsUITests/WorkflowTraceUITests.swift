@@ -119,10 +119,57 @@ final class WorkflowTraceUITests: XCTestCase {
     }
 
     @MainActor
-    private func withFixtureApplication(_ body: (XCUIApplication) throws -> Void) throws {
+    func testOverflowingWaterfallScrollsTheEntireLastSpanIntoView() throws {
+        try withFixtureApplication { app in
+            selectCase("Overflowing native workflow", in: app)
+            app.buttons["Expand all spans"].click()
+            let waterfall = app.descendants(matching: .any)["Workflow spans"]
+            let lastSpan = span(WorkflowTraceFixture.overflowLastSpanID, in: app)
+            let window = app.windows.firstMatch
+            XCTAssertTrue(window.descendants(matching: .any)["Workspace status"].waitForExistence(timeout: 2))
+            XCTAssertFalse(isFullyVisibleVertically(lastSpan, in: waterfall, window: window),
+                "The 38-span fixture must extend below the initial viewport")
+
+            scrollDownToReveal(lastSpan, in: waterfall, window: window)
+            try capture(app, name: "overflowing-waterfall")
+            assertFullyVisibleVertically(lastSpan, in: waterfall, window: window, minimumHeight: 32)
+            lastSpan.click()
+            assertSelectedTitle("Judge attempt 1", in: app)
+        }
+    }
+
+    @MainActor
+    func testLongJudgeInspectorScrollsTheEntireOutputIntoView() throws {
+        try withFixtureApplication(longJudgeEvidence: true) { app in
+            span(WorkflowTraceFixture.judgeID, in: app).click()
+            assertSelectedTitle("AI judge", in: app)
+            app.radioButtons["Input / Output"].click()
+            let details = app.descendants(matching: .any)["Span details"]
+            let inspector = details.scrollViews.firstMatch
+            XCTAssertTrue(inspector.waitForExistence(timeout: 2), app.debugDescription)
+            let output = details.staticTexts.matching(NSPredicate(
+                format: "label CONTAINS %@ OR value CONTAINS %@",
+                WorkflowTraceFixture.longJudgeOutput, WorkflowTraceFixture.longJudgeOutput
+            )).firstMatch
+            let window = app.windows.firstMatch
+            XCTAssertTrue(window.descendants(matching: .any)["Workspace status"].waitForExistence(timeout: 2))
+            XCTAssertFalse(isFullyVisibleVertically(output, in: inspector, window: window),
+                "The 240-line judge input must place its output below the initial viewport")
+
+            scrollDownToReveal(output, in: inspector, window: window)
+            assertFullyVisibleVertically(output, in: inspector, window: window, minimumHeight: 10)
+            try capture(app, name: "long-judge-output")
+        }
+    }
+
+    @MainActor
+    private func withFixtureApplication(
+        longJudgeEvidence: Bool = false,
+        _ body: (XCUIApplication) throws -> Void
+    ) throws {
         let storage = try UITestStorage.makeDirectory(prefix: "workflow-trace")
         defer { try? FileManager.default.removeItem(at: storage) }
-        try WorkflowTraceFixture.write(to: storage)
+        try WorkflowTraceFixture.write(to: storage, longJudgeEvidence: longJudgeEvidence)
         try UITestStorage.verifyWritable(storage)
 
         let app = XCUIApplication()
@@ -196,6 +243,53 @@ final class WorkflowTraceUITests: XCTestCase {
     }
 
     @MainActor
+    private func scrollDownToReveal(_ element: XCUIElement, in scrollView: XCUIElement, window: XCUIElement) {
+        // Use actual wheel scrolling; clicking an off-screen element would let XCTest scroll for us.
+        for _ in 0..<12 {
+            if isFullyVisibleVertically(element, in: scrollView, window: window) { return }
+            scrollView.scroll(byDeltaX: 0, deltaY: -500)
+        }
+    }
+
+    @MainActor
+    private func isFullyVisibleVertically(_ element: XCUIElement, in scrollView: XCUIElement, window: XCUIElement) -> Bool {
+        guard element.exists else { return false }
+        let frame = element.frame
+        let viewport = contentViewport(of: scrollView, window: window)
+        return !viewport.isNull && frame.height > 0
+            && frame.minY >= viewport.minY - 1 && frame.maxY <= viewport.maxY + 1
+    }
+
+    @MainActor
+    private func contentViewport(of scrollView: XCUIElement, window: XCUIElement) -> CGRect {
+        let viewport = scrollView.frame.intersection(window.frame)
+        let statusBar = window.descendants(matching: .any)["Workspace status"]
+        guard !viewport.isNull, statusBar.exists else { return .null }
+        let bottom = min(viewport.maxY, statusBar.frame.minY)
+        guard bottom > viewport.minY else { return .null }
+        // The footer can overlay content even when the element is fully inside the window.
+        return CGRect(x: viewport.minX, y: viewport.minY, width: viewport.width, height: bottom - viewport.minY)
+    }
+
+    @MainActor
+    private func assertFullyVisibleVertically(
+        _ element: XCUIElement,
+        in scrollView: XCUIElement,
+        window: XCUIElement,
+        minimumHeight: CGFloat,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(element.exists, element.debugDescription, file: file, line: line)
+        let frame = element.frame
+        let viewport = contentViewport(of: scrollView, window: window)
+        XCTAssertFalse(viewport.isNull, "The scroll viewport must be inside the window and above the workspace status bar", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(frame.height, minimumHeight, "The element must retain its full height", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(frame.minY, viewport.minY - 1, "Element \(frame) starts above viewport \(viewport)", file: file, line: line)
+        XCTAssertLessThanOrEqual(frame.maxY, viewport.maxY + 1, "Element \(frame) ends below viewport \(viewport)", file: file, line: line)
+    }
+
+    @MainActor
     private func capture(_ app: XCUIApplication, name: String) throws {
         app.activate()
         let screenshot = app.windows.firstMatch.screenshot()
@@ -227,10 +321,21 @@ private enum WorkflowTraceFixture {
     static let effectivePrompt = "Test fixture instructions. Return the fixture response."
     static let judgePrompt = "Assess whether the native model returned the fixture response after using its local reference tools."
     static let judgeResponse = "{\"checks\":[{\"criterionIndex\":1,\"score\":4,\"rationale\":\"The fixture response follows the fixture instructions.\"}]}"
+    static let overflowLastSpanID = "E0000000-0000-0000-0000-000000000038"
+    static let longJudgeOutput = "Fixture judge output reached."
+    private static let longJudgePrompt = "Trace inspector long-input test fixture.\n" + String(repeating: "Fixture input.\n", count: 240)
 
-    static func write(to directory: URL) throws {
+    static func write(to directory: URL, longJudgeEvidence: Bool = false) throws {
         let runs = directory.appending(path: "Runs", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: runs, withIntermediateDirectories: true)
+        var firstSample = recordedSample
+        if longJudgeEvidence {
+            firstSample["judgeTrace"] = [
+                "instructions": "Apply the fixture rubric using the on-device judge.",
+                "prompt": longJudgePrompt,
+                "rawResponse": longJudgeOutput
+            ]
+        }
         let document: [String: Any] = [
             "id": "D0000000-0000-0000-0000-000000000001",
             "suiteID": "D0000000-0000-0000-0000-000000000002",
@@ -242,7 +347,7 @@ private enum WorkflowTraceFixture {
             "judgePromptVersion": "fixture-v1",
             "judgePassingScore": 3,
             "repetitions": 1,
-            "plannedSampleCount": 3,
+            "plannedSampleCount": 4,
             "startedAt": "2026-09-08T09:00:00Z",
             "completedAt": "2026-09-08T09:00:03Z",
             "cancelled": false,
@@ -253,7 +358,7 @@ private enum WorkflowTraceFixture {
                 "modelContextSize": 4096
             ],
             "attachments": [],
-            "results": [recordedSample, legacySample, cancelledSample]
+            "results": [firstSample, legacySample, cancelledSample, overflowingSample]
         ]
         let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: runs.appending(path: "trace-inspector-test-fixture.json"), options: .atomic)
@@ -314,6 +419,36 @@ private enum WorkflowTraceFixture {
             "preparationMilliseconds": 5,
             "generationMilliseconds": 85,
             "scoringMilliseconds": 5
+        ]
+        return sample
+    }
+
+    private static var overflowingSample: [String: Any] {
+        func identifier(_ index: Int) -> String {
+            "E0000000-0000-0000-0000-" + String(format: "%012d", index)
+        }
+        let root = identifier(1)
+        var sample = baseSample(idPrefix: "E", name: "Overflowing native workflow", duration: 880)
+        var spans = [
+            span(id: root, kind: "sample", title: "Overflowing native workflow", offset: 0, duration: 1_000),
+            span(id: identifier(2), parent: root, kind: "preparation", title: "Prepare input", offset: 0, duration: 10)
+        ]
+        for index in 0..<32 {
+            spans.append(span(id: identifier(index + 3), parent: root, kind: "generation",
+                title: "Native setup turn \(index + 1)", offset: Double(10 + index * 25), duration: 20,
+                metadata: ["role": "conversationSetup"]))
+        }
+        spans += [
+            span(id: identifier(35), parent: root, kind: "generation", title: "Generate response", offset: 810, duration: 70),
+            span(id: identifier(36), parent: root, kind: "scoring", title: "Score response", offset: 880, duration: 120),
+            span(id: identifier(37), parent: identifier(36), kind: "judge", title: "AI judge", offset: 885, duration: 115),
+            span(id: overflowLastSpanID, parent: identifier(37), kind: "generation", title: "Judge attempt 1",
+                offset: 890, duration: 110, metadata: ["role": "judge", "judgeAttempt": "1"])
+        ]
+        sample["workflowTrace"] = ["timingSource": "App-observed monotonic clock", "spans": spans]
+        sample["judgeTrace"] = [
+            "instructions": "Apply the fixture rubric.", "prompt": judgePrompt, "rawResponse": judgeResponse,
+            "attempts": [["prompt": judgePrompt, "rawResponse": judgeResponse]]
         ]
         return sample
     }

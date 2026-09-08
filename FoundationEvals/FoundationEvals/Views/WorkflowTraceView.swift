@@ -206,7 +206,7 @@ private struct WorkflowWaterfall: View {
                         }
                     }
                 }
-                .frame(width: width)
+                .frame(width: width, height: geometry.size.height)
             }
         }
     }

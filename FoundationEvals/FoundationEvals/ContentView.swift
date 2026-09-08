@@ -13,37 +13,14 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            RunHistorySidebar(store: store)
-        } detail: {
-            switch store.selection {
-            case .suite:
-                SuiteEditorView(store: store)
-            case .run(let id):
-                if let run = store.run(with: id) {
-                    RunDetailView(
-                        run: run,
-                        baselineRuns: store.runs.filter {
-                            $0.id != run.id
-                                && $0.suiteID == run.suiteID
-                                && $0.startedAt < run.startedAt
-                        }
-                    )
-                } else {
-                    ContentUnavailableView(
-                        "Run Not Found",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text("The saved run may have been removed.")
-                    )
-                }
-            }
+        VStack(spacing: 0) {
+            workspaceNavigation
+            WorkbenchStatusBar(store: store)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("Workspace status")
         }
-        .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 1_000, minHeight: 700)
         .background(Color(nsColor: .windowBackgroundColor))
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            WorkbenchStatusBar(store: store)
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 SettingsLink {
@@ -71,6 +48,35 @@ struct ContentView: View {
         } message: {
             Text(store.notice ?? "")
         }
+    }
+
+    private var workspaceNavigation: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            RunHistorySidebar(store: store)
+        } detail: {
+            switch store.selection {
+            case .suite:
+                SuiteEditorView(store: store)
+            case .run(let id):
+                if let run = store.run(with: id) {
+                    RunDetailView(
+                        run: run,
+                        baselineRuns: store.runs.filter {
+                            $0.id != run.id
+                                && $0.suiteID == run.suiteID
+                                && $0.startedAt < run.startedAt
+                        }
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "Run Not Found",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("The saved run may have been removed.")
+                    )
+                }
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
     }
 }
 
