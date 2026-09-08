@@ -47,6 +47,7 @@ final class EvaluationStore {
     private let runsDirectory: URL
     private let activeRunURL: URL
     private let draftSuiteURL: URL
+    @ObservationIgnored private var pendingPromptEdits: [UUID: String] = [:]
     @ObservationIgnored private var draftSaveTask: Task<Void, Never>?
     @ObservationIgnored private let onDeviceContextSizes = ModelContextSizeCache()
     private(set) var isDraftSavePending = false
@@ -304,6 +305,7 @@ final class EvaluationStore {
     }
 
     func duplicateCase(id: UUID) {
+        applyPendingPromptEdits()
         guard draftSuite.cases.count < Self.maximumCases,
               draftSuite.cases.count < Self.maximumPlannedSamples / max(draftSuite.repetitions, 1) else {
             notice = "This suite has reached its planned-sample limit."
@@ -397,6 +399,10 @@ final class EvaluationStore {
         try CanonicalJSON.data(for: blank).write(
             to: supportDirectory.appending(path: "suite.json"), options: .atomic
         )
+        pendingPromptEdits.removeAll()
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        isDraftSavePending = false
         suite = blank
         draftSuite = blank
         draftSaveFailed = false
@@ -540,6 +546,30 @@ final class EvaluationStore {
         return true
     }
 
+    func promptText(for caseID: UUID) -> String {
+        pendingPromptEdits[caseID] ?? draftSuite.cases.first(where: { $0.id == caseID })?.prompt ?? ""
+    }
+
+    func editPrompt(_ text: String, for caseID: UUID) {
+        guard !isRunning, !isProcessingFiles,
+              draftSuite.cases.contains(where: { $0.id == caseID }) else { return }
+        guard promptText(for: caseID) != text else { return }
+        pendingPromptEdits[caseID] = text
+        scheduleSuiteSave()
+    }
+
+    private func applyPendingPromptEdits() {
+        guard !pendingPromptEdits.isEmpty else { return }
+        var updated = draftSuite
+        for index in updated.cases.indices {
+            if let prompt = pendingPromptEdits[updated.cases[index].id] {
+                updated.cases[index].prompt = prompt
+            }
+        }
+        pendingPromptEdits.removeAll()
+        if draftSuite != updated { draftSuite = updated }
+    }
+
     func scheduleSuiteSave() {
         draftSaveTask?.cancel()
         if !isDraftSavePending { isDraftSavePending = true }
@@ -556,6 +586,7 @@ final class EvaluationStore {
 
     @discardableResult
     func saveSuite() -> Bool {
+        applyPendingPromptEdits()
         draftSaveTask?.cancel()
         draftSaveTask = nil
         if isDraftSavePending { isDraftSavePending = false }

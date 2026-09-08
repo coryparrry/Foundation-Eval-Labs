@@ -6,6 +6,48 @@ final class WorkflowTraceUITests: XCTestCase {
     }
 
     @MainActor
+    func testPromptEditingUndoAndPersistence() throws {
+        try withFixtureApplication { app in
+            app.menuBars.menuBarItems["Evaluation"].click()
+            app.menuItems["Show Suite Editor"].click()
+            let prompt = app.textViews["Case prompt"]
+            XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+            prompt.click()
+            prompt.typeKey("a", modifierFlags: .command)
+            let text = "Why is the sky blue?\nExplain it in two short paragraphs.\nUse plain language."
+            prompt.typeText(text)
+            XCTAssertEqual(prompt.value as? String, text)
+            prompt.typeKey("a", modifierFlags: .command)
+            prompt.typeKey(.delete, modifierFlags: [])
+            XCTAssertEqual(prompt.value as? String, "")
+            prompt.typeKey("z", modifierFlags: .command)
+            XCTAssertEqual(prompt.value as? String, text)
+            let selector = app.popUpButtons["Case selector"]
+            let firstCase = try XCTUnwrap(selector.value as? String)
+            app.buttons["Add Case"].click()
+            XCTAssertEqual(prompt.value as? String, "")
+            prompt.click()
+            prompt.typeText("A different case prompt")
+            XCTAssertTrue(app.staticTexts["Saved automatically on this Mac"].waitForExistence(timeout: 5))
+            selector.click()
+            app.menuItems[firstCase].click()
+            XCTAssertEqual(prompt.value as? String, text)
+            prompt.click()
+            prompt.typeKey("z", modifierFlags: .command)
+            XCTAssertEqual(prompt.value as? String, text)
+            try capture(app, name: "prompt-editor")
+            app.typeKey("q", modifierFlags: .command)
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+            app.launch()
+            try UITestStorage.requireNoAlert(in: app)
+            app.menuBars.menuBarItems["Evaluation"].click()
+            app.menuItems["Show Suite Editor"].click()
+            XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+            XCTAssertEqual(prompt.value as? String, text)
+        }
+    }
+
+    @MainActor
     func testTypingAutosavesLatestTextAcrossRelaunch() throws {
         try withFixtureApplication { app in
             app.menuBars.menuBarItems["Evaluation"].click()

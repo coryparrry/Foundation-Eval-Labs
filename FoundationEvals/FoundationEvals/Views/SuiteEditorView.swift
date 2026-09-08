@@ -101,12 +101,10 @@ struct SuiteEditorView: View {
         .focusEffectDisabled()
         .focused($isEditorFocused)
         .defaultFocus($isEditorFocused, true)
-        .onAppear { selectFirstCaseIfNeeded() }
-        .onChange(of: store.draftSuite.id) { _, _ in
-            selectedPage = .cases
-        }
-        .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
-            selectFirstCaseIfNeeded()
+        .background {
+            SuiteEditorSelectionObserver(
+                store: store, selectedPage: $selectedPage, selectedCaseID: $selectedCaseID
+            )
         }
         .navigationTitle("Foundation Evals")
         .background(Color.primary.opacity(0.025))
@@ -135,12 +133,6 @@ struct SuiteEditorView: View {
         }
     }
 
-    private func selectFirstCaseIfNeeded() {
-        if selectedCaseID.flatMap({ id in store.draftSuite.cases.firstIndex(where: { $0.id == id }) }) == nil {
-            selectedCaseID = store.draftSuite.cases.first?.id
-        }
-    }
-
     @ViewBuilder
     private var selectedPageContent: some View {
         switch selectedPage {
@@ -163,6 +155,30 @@ struct SuiteEditorView: View {
             FeatureControlsView(store: store)
         }
     }
+}
+
+private struct SuiteEditorSelectionObserver: View {
+    let store: EvaluationStore
+    @Binding var selectedPage: SuiteEditorPage
+    @Binding var selectedCaseID: UUID?
+
+    var body: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onAppear { selectFirstCaseIfNeeded() }
+            .onChange(of: store.draftSuite.id) { _, _ in selectedPage = .cases }
+            .onChange(of: store.draftSuite.cases.map(\.id)) { _, _ in
+                selectFirstCaseIfNeeded()
+            }
+    }
+
+    private func selectFirstCaseIfNeeded() {
+        if selectedCaseID.flatMap({ id in store.draftSuite.cases.firstIndex(where: { $0.id == id }) }) == nil {
+            selectedCaseID = store.draftSuite.cases.first?.id
+        }
+    }
+
 }
 
 private struct SuiteOverviewHeader: View {
@@ -633,8 +649,13 @@ private struct CasesSection: View {
             CaseOverviewTable(cases: store.draftSuite.cases, selection: $selectedCaseID)
 
             if let selectedCaseIndex {
+                let caseID = store.draftSuite.cases[selectedCaseIndex].id
                 EvaluationCaseEditor(
                     evaluationCase: $store.draftSuite.cases[selectedCaseIndex],
+                    prompt: Binding(
+                        get: { store.promptText(for: caseID) },
+                        set: { store.editPrompt($0, for: caseID) }
+                    ),
                     canDelete: store.draftSuite.cases.count > 1,
                     isDisabled: store.isRunning || store.isProcessingFiles,
                     duplicate: {
@@ -663,6 +684,7 @@ private struct CasesSection: View {
 
 private struct EvaluationCaseEditor: View {
     @Binding var evaluationCase: EvaluationCase
+    @Binding var prompt: String
     let canDelete: Bool
     let isDisabled: Bool
     let duplicate: () -> Void
@@ -692,10 +714,12 @@ private struct EvaluationCaseEditor: View {
                 Text("Prompt")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                TextEditor(text: $evaluationCase.prompt)
-                    .accessibilityLabel("Prompt for \(evaluationCase.name.isEmpty ? "untitled case" : evaluationCase.name)")
-                    .font(.body)
-                    .frame(minHeight: 104)
+                PromptTextEditor(
+                    text: $prompt,
+                    label: "Prompt for \(evaluationCase.name.isEmpty ? "untitled case" : evaluationCase.name)"
+                )
+                    .id(evaluationCase.id)
+                    .frame(height: 140)
                     .padding(8)
                     .background(.background, in: .rect(cornerRadius: 8))
                     .overlay {

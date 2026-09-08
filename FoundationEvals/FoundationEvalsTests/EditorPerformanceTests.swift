@@ -78,6 +78,20 @@ struct EditorPerformanceTests {
         #expect(store.suiteRevision != previousRevision)
     }
 
+    @Test func revertingToCanonicalRemovesAnOlderIncompleteDraft() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let original = store.suite
+        store.draftSuite.cases[0].prompt = ""
+        #expect(!store.saveSuite())
+        store.draftSuite = original
+        store.scheduleSuiteSave()
+        try await waitForSave(store)
+        #expect(EvaluationStore(supportDirectory: directory).draftSuite == original)
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "suite-draft.json").path))
+    }
+
     private func waitForSave(_ store: EvaluationStore) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while store.isDraftSavePending && ContinuousClock.now < deadline {
