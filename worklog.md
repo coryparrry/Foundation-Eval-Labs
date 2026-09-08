@@ -33,3 +33,9 @@
 - Added deterministic interval placement and regression tests for sequential subpixel spans, zoom scaling, zero durations, and invalid timing. Included these tests in the portable Swift package.
 - Verified Xcode BuildProject(buildForTesting: true) succeeds and swift test --scratch-path /tmp/foundation-timeline-build --filter WorkflowTimelineIntervalTests passes 2 tests. The default SwiftPM build directory hit Finder metadata signing errors; the clean temporary build succeeded. git diff --check passed. Independent scoped review found no further issues after correcting zoom sizing.
 - No UI tests, app launch, or screen control performed. The new native layout has compiled but has not been visually inspected; the currently running app retains its previous build until relaunched.
+
+# Span disclosure hit targets
+
+- User requests launching the new app after each fix; continue avoiding UI tests unless asked.
+- Expanded parent-span disclosure buttons to include the icon, title, and full label area. Clicking selects the parent and toggles expansion; leaves remain ordinary selectable rows.
+- Verified Xcode RunProject built without errors and launched the updated app. git diff --check passed. No UI tests were run for this hit-area change.

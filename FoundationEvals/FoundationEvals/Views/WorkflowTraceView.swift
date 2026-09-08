@@ -240,24 +240,30 @@ private struct WorkflowWaterfall: View {
         selection = rows[min(max(current + offset, 0), rows.count - 1)].id
     }
 
+    @ViewBuilder
     private func spanLabel(_ row: WorkflowTracePresentation.Row) -> some View {
-        HStack(spacing: 6) {
+        if row.hasChildren {
             Button {
+                selection = row.id
                 if collapsed.contains(row.id) { collapsed.remove(row.id) }
-                else {
-                    collapsed.insert(row.id)
-                    if !rows.contains(where: { $0.id == selection }) { selection = row.id }
-                }
+                else { collapsed.insert(row.id) }
             } label: {
-                Image(systemName: collapsed.contains(row.id) ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 12, height: 28)
+                spanLabelContent(row)
             }
-            .buttonStyle(.borderless)
-            .opacity(row.hasChildren ? 1 : 0)
-            .disabled(!row.hasChildren)
-            .accessibilityHidden(!row.hasChildren)
+            .buttonStyle(.plain)
             .accessibilityLabel("\(collapsed.contains(row.id) ? "Expand" : "Collapse") \(row.node.title)")
+        } else {
+            spanLabelContent(row)
+        }
+    }
+
+    private func spanLabelContent(_ row: WorkflowTracePresentation.Row) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: collapsed.contains(row.id) ? "chevron.right" : "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .frame(width: 12)
+                .opacity(row.hasChildren ? 1 : 0)
+                .accessibilityHidden(true)
             Image(systemName: row.node.symbol).font(.system(size: 11))
                 .foregroundStyle(row.node.color).frame(width: 12)
             Text(row.node.title).font(.system(size: 12, weight: row.depth == 0 ? .semibold : .regular))
@@ -266,7 +272,10 @@ private struct WorkflowWaterfall: View {
         }
         .padding(.leading, CGFloat(min(row.depth, 8)) * 12)
         .padding(.trailing, 10)
+        .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+        .contentShape(Rectangle())
     }
+
 }
 
 private struct TraceTimeAxis: View {
