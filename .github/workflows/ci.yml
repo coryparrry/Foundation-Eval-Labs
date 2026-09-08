@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, 'codex/**']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -14,14 +14,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Route changed files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.route.outputs.native }}
+      ui: ${{ steps.route.outputs.ui }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select coverage
+        id: route
+        run: python3 script/ci_routes.py
+
   quality:
     name: Workflow and script checks
+    needs: changes
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Require successful routing
+        env:
+          ROUTING_RESULT: ${{ needs.changes.result }}
+        run: test "$ROUTING_RESULT" = success
       - name: Validate workflows
         # actionlint has not listed GitHub's hosted Xcode 27 preview label yet.
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color -ignore 'label "xcode-27" is unknown'
@@ -29,11 +51,15 @@ jobs:
         run: shellcheck script/*.sh
       - name: Check Python examples
         run: python3 -m compileall -q examples
-      - name: Test release validation
+      - name: Test CI routing and release validation
         run: python3 -m unittest discover -s script/tests -v
 
   regression:
     name: Portable regression tests
+    needs: changes
+    if: ${{ needs.changes.outputs.native == 'true' }}
+    env:
+      UI_TESTS: NavigationInteractionTests|TimelineRenderingTests|RunToolbarProgressTests
     runs-on: xcode-27
     timeout-minutes: 10
     steps:
@@ -41,10 +67,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Execute production scoring and installer tests
-        run: swift test --enable-code-coverage
+        run: swift test --enable-code-coverage --skip "$UI_TESTS"
+      - name: Execute UI component tests
+        if: ${{ needs.changes.outputs.ui == 'true' }}
+        run: swift test --enable-code-coverage --skip-build --filter "$UI_TESTS"
 
   build:
     name: Compile app and tests
+    needs: changes
+    if: ${{ needs.changes.outputs.native == 'true' }}
     runs-on: xcode-27
     timeout-minutes: 30
     steps:
@@ -65,12 +96,19 @@ jobs:
               ast.parse(path.read_text(), filename=str(path))
           PY
       # The Xcode 27 hosted image runs macOS 26; this app needs macOS 27.
-      # Compile both test targets here; execute tests on a macOS 27 machine.
-      - name: Build app and test bundles
+      # Compile UI tests only for UI-impacting changes; execute on macOS 27.
+      - name: Build app and selected test bundles
+        env:
+          INCLUDE_UI: ${{ needs.changes.outputs.ui }}
         run: |
+          scheme=FoundationEvals
+          if [[ "$INCLUDE_UI" != true ]]; then
+            python3 script/ci_core_scheme.py
+            scheme=FoundationEvalsCoreCI
+          fi
           xcodebuild build-for-testing \
             -project FoundationEvals/FoundationEvals.xcodeproj \
-            -scheme FoundationEvals \
+            -scheme "$scheme" \
             -configuration Debug \
             -destination 'generic/platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
