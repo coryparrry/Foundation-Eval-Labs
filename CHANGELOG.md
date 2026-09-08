@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/coryparrry/Foundation-Eval-Labs/compare/v1.1.1...v1.2.0) (2026-09-08)
+
+
+### Features
+
+* **traces:** add a native workflow waterfall and inspector ([#19](https://github.com/coryparrry/Foundation-Eval-Labs/issues/19)) ([bf350d2](https://github.com/coryparrry/Foundation-Eval-Labs/commit/bf350d2afcde6d1cb695a35cf24653e4f057e6c7))
+
 ## [1.1.1](https://github.com/coryparrry/Foundation-Eval-Labs/compare/v1.1.0...v1.1.1) (2026-09-06)
 
 
