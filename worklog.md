@@ -45,3 +45,8 @@
 - User clarified that larger disclosure click targets must apply to all expandable sections, not only workflow rows.
 - Generalized the existing full-heading disclosure style and applied it at both main-window and settings roots, including nested sections. Removed trace-only overrides; heading labels, state announcements, and disabled-state inheritance remain native SwiftUI controls.
 - Verified Xcode RunProject compiled successfully and launched the new build; git diff --check passed. No UI tests. Found two running copies at the same executable path; automatic approval review rejected gracefully closing the old process due to possible unsaved state. Activated the new process directly instead.
+
+# Restore timeline bar appearance
+
+- User rejected the unrequested outline/diamond styling. Restored solid rounded bars with original per-kind colours and opacity for every span, keeping measured placement, start offsets, and zoom. Removed the outline/diamond legend.
+- Xcode BuildProject passed and git diff --check passed. Opened the corrected build with open -n. Automatic approval review rejected terminating existing copies because of possible unsaved state; left them intact. No UI tests.

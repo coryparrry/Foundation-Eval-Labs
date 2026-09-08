@@ -156,7 +156,7 @@ private struct WorkflowWaterfall: View {
                     }
                     .frame(width: 180)
                     .disabled(!trace.hasMeasuredOffsets)
-                    Text("Outline: includes child steps · Diamond: too short at this zoom")
+                    Text("Zoom in to inspect short steps")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 16).padding(.vertical, 6)
@@ -164,7 +164,7 @@ private struct WorkflowWaterfall: View {
                     VStack(spacing: 0) {
                         HStack(spacing: 0) {
                             Text("Span").frame(width: labelWidth, alignment: .leading)
-                            Text("Start").frame(width: startWidth, alignment: .trailing)
+                            Text("Start").padding(.trailing, 8).frame(width: startWidth, alignment: .trailing)
                             TraceTimeAxis(extent: trace.extentMilliseconds, available: trace.hasMeasuredOffsets)
                                 .frame(width: timelineWidth, height: 28)
                             Text("Duration").frame(width: durationWidth, alignment: .trailing)
@@ -181,8 +181,9 @@ private struct WorkflowWaterfall: View {
                                         Text(row.node.startMilliseconds.map { "+" + WorkflowTracePresentation.duration($0) } ?? "—")
                                             .font(.caption.monospacedDigit())
                                             .foregroundStyle(.secondary)
+                                            .padding(.trailing, 8)
                                             .frame(width: startWidth, alignment: .trailing)
-                                        TraceDurationBar(node: row.node, extent: trace.extentMilliseconds, isParent: row.hasChildren)
+                                        TraceDurationBar(node: row.node, extent: trace.extentMilliseconds)
                                             .frame(width: timelineWidth, height: 34)
                                         Text(WorkflowTracePresentation.duration(row.node.durationMilliseconds))
                                             .font(.caption.monospacedDigit())
@@ -300,7 +301,6 @@ private struct TraceTimeAxis: View {
 private struct TraceDurationBar: View {
     let node: WorkflowTraceNode
     let extent: Double
-    let isParent: Bool
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
@@ -310,22 +310,10 @@ private struct TraceDurationBar: View {
                 }
                 if let start = node.startMilliseconds, let end = node.endMilliseconds {
                     let interval = WorkflowTimelineInterval(start: start, end: end, extent: extent, width: geometry.size.width)
-                    if interval.width < 1 {
-                        Image(systemName: "diamond.fill")
-                            .font(.system(size: 5))
-                            .foregroundStyle(node.color)
-                            .offset(x: interval.offset - 2.5)
-                    } else if isParent {
-                        RoundedRectangle(cornerRadius: 2)
-                            .strokeBorder(node.color.opacity(0.8), lineWidth: 1)
-                            .frame(width: interval.width, height: 10)
-                            .offset(x: interval.offset)
-                    } else {
-                        Rectangle()
-                            .fill(node.color.opacity(0.85))
-                            .frame(width: interval.width, height: 10)
-                            .offset(x: interval.offset)
-                    }
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(node.color.opacity(node.kind == .sample ? 0.60 : 0.85))
+                        .frame(width: interval.width, height: 10)
+                        .offset(x: interval.offset)
                 } else {
                     Text("Not recorded").font(.system(size: 9)).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
