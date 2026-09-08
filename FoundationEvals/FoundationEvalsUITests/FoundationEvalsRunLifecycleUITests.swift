@@ -13,10 +13,9 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        storage = FileManager.default.temporaryDirectory
-            .appending(path: "FoundationEvalsUITests-\(UUID().uuidString)")
+        storage = try UITestStorage.makeDirectory(prefix: "run-lifecycle")
         fixture = try LocalHTTPModelFixture()
-        app = launchApp()
+        app = try launchApp()
     }
 
     override func tearDownWithError() throws {
@@ -32,7 +31,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
 
     @MainActor
     func testRunProgressCompletionAndHistoryRestoration() throws {
-        openSuiteEditor()
+        try openSuiteEditor()
         configureSuite(name: "UI lifecycle fixture", endpointPath: "/success")
 
         let run = app.buttons["Run evaluation"]
@@ -46,14 +45,15 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
 
         fixture.finishResponse()
         XCTAssertTrue(app.buttons["Export Run as JSON"].waitForExistence(timeout: 8))
+        openRunReport()
         XCTAssertTrue(runStatus.waitForExistence(timeout: 3))
         XCTAssertEqual(runStatus.label, "Completed")
         XCTAssertTrue(app.staticTexts["Scored pass rate"].exists, app.debugDescription)
         XCTAssertTrue(app.staticTexts["100%"].firstMatch.exists, app.debugDescription)
 
         app.terminate()
-        app = launchApp()
-        openSuiteEditor()
+        app = try launchApp()
+        try openSuiteEditor()
 
         let savedRun = app.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@ AND value CONTAINS %@", "UI lifecycle fixture", "passed")
@@ -61,12 +61,14 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         XCTAssertTrue(savedRun.waitForExistence(timeout: 5), "The completed run must return in Run History after relaunch")
         savedRun.click()
         XCTAssertTrue(app.buttons["Export Run as JSON"].waitForExistence(timeout: 3))
+        openRunReport()
+        XCTAssertTrue(runStatus.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertEqual(runStatus.label, "Completed")
     }
 
     @MainActor
     func testCancelShowsCancelledRun() throws {
-        openSuiteEditor()
+        try openSuiteEditor()
         configureSuite(name: "UI cancellation fixture", endpointPath: "/success")
 
         app.buttons["Run evaluation"].click()
@@ -76,6 +78,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         cancel.click()
 
         XCTAssertTrue(app.buttons["Export Run as JSON"].waitForExistence(timeout: 8))
+        openRunReport()
         XCTAssertTrue(runStatus.waitForExistence(timeout: 3))
         XCTAssertEqual(runStatus.label, "Cancelled")
         fixture.finishResponse()
@@ -83,34 +86,52 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
 
     @MainActor
     func testProviderFailureProducesAnIssueRun() throws {
-        openSuiteEditor()
+        try openSuiteEditor()
         configureSuite(name: "UI provider failure fixture", endpointPath: "/failure")
 
         app.buttons["Run evaluation"].click()
         XCTAssertTrue(fixture.waitForRequest(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.buttons["Export Run as JSON"].waitForExistence(timeout: 8), app.debugDescription)
+        openRunReport()
         XCTAssertTrue(runStatus.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertEqual(runStatus.label, "Completed with issues")
     }
 
-    private func launchApp() -> XCUIApplication {
+    private func launchApp() throws -> XCUIApplication {
+        try UITestStorage.verifyWritable(storage)
         let launchedApp = XCUIApplication()
         launchedApp.launchArguments += [
             "--disable-mcp-autostart",
-            "--evaluation-storage", storage.path
+            "--evaluation-storage", storage.path,
+            "-SUEnableAutomaticChecks", "NO", "-SUAutomaticallyUpdate", "NO"
         ]
         launchedApp.launch()
+        do {
+            try UITestStorage.requireNoAlert(in: launchedApp)
+        } catch {
+            launchedApp.terminate()
+            throw error
+        }
         return launchedApp
     }
 
     @MainActor
-    private func openSuiteEditor() {
+    private func openSuiteEditor() throws {
+        try UITestStorage.requireNoAlert(in: app)
         app.activate()
+        try UITestStorage.requireNoAlert(in: app)
         app.menuBars.menuBarItems["Evaluation"].click()
         app.menuItems["Show Suite Editor"].click()
-        XCTAssertTrue(app.buttons["Run"].waitForExistence(timeout: 5))
+        try UITestStorage.waitFor(app.buttons["Run"], in: app, timeout: 5)
         let showSidebar = app.buttons["Show Sidebar"]
         if showSidebar.exists { showSidebar.click() }
+    }
+
+    @MainActor
+    private func openRunReport() {
+        let report = app.radioButtons["Report"]
+        XCTAssertTrue(report.waitForExistence(timeout: 3), app.debugDescription)
+        report.click()
     }
 
     @MainActor
@@ -144,6 +165,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
 
     @MainActor
     private func replaceText(in element: XCUIElement, with value: String) {
+        app.activate()
         element.click()
         element.typeKey("a", modifierFlags: .command)
         // Xcode 27's bulk text input drops colons on this keyboard layout.

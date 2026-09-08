@@ -1,0 +1,385 @@
+import XCTest
+
+final class WorkflowTraceUITests: XCTestCase {
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    @MainActor
+    func testNativeWorkflowSupportsStageInspectionHierarchyAndKeyboardSelection() throws {
+        try withFixtureApplication { app in
+            XCTAssertTrue(app.radioButtons["Workflow trace"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.descendants(matching: .any)["Workflow spans"].exists)
+            XCTAssertTrue(app.staticTexts["App-observed timing"].exists)
+            app.buttons["Expand all spans"].click()
+
+            span(WorkflowTraceFixture.generationID, in: app).click()
+            assertSelectedTitle("Generate response", in: app)
+            assertDetailContains("Framework-reported usage. Cached input is part of input; reasoning is part of output.", in: app)
+            assertDetailContains("Input", in: app)
+            assertDetailContains("Output", in: app)
+            assertDetailContains("First visible content", in: app)
+            try capture(app, name: "recorded-workflow")
+
+            span(WorkflowTraceFixture.preparationID, in: app).click()
+            assertSelectedTitle("Prepare input", in: app)
+            app.radioButtons["Input / Output"].click()
+            assertDetailContains(WorkflowTraceFixture.effectivePrompt, in: app)
+            try capture(app, name: "preparation")
+
+            span(WorkflowTraceFixture.judgeID, in: app).click()
+            assertSelectedTitle("AI judge", in: app)
+            assertDetailContains(WorkflowTraceFixture.judgePrompt, in: app)
+            assertDetailContains(WorkflowTraceFixture.judgeResponse, in: app)
+            try capture(app, name: "judge")
+
+            // This is a local HTTP tool called by native generation, not model inference over HTTP.
+            let request = span(WorkflowTraceFixture.successRequestID, in: app)
+            XCTAssertTrue(request.waitForExistence(timeout: 2))
+            request.click()
+            assertSelectedTitle("POST /fixture/search", in: app)
+            app.radioButtons["Details"].click()
+            assertDetailContains("Method", in: app)
+            assertDetailContains("POST", in: app)
+            assertDetailContains("Status code", in: app)
+            assertDetailContains("200", in: app)
+            assertDetailContains("http://127.0.0.1:8765/fixture/search", in: app)
+            try capture(app, name: "local-http-tool")
+
+            // Arrow selection follows the visible depth-first rows, including tool children.
+            request.click()
+            app.typeKey(.downArrow, modifierFlags: [])
+            assertSelectedTitle(WorkflowTraceFixture.failedToolTitle, in: app)
+            app.typeKey(.downArrow, modifierFlags: [])
+            assertSelectedTitle("POST /fixture/unavailable", in: app)
+            assertDetailContains("503", in: app)
+            assertDetailContains("Fixture service unavailable", in: app)
+            try capture(app, name: "failed-local-http-tool")
+
+            app.typeKey(.upArrow, modifierFlags: [])
+            assertSelectedTitle(WorkflowTraceFixture.failedToolTitle, in: app)
+            app.typeKey(.leftArrow, modifierFlags: [])
+            XCTAssertTrue(span(WorkflowTraceFixture.failedRequestID, in: app).waitForNonExistence(timeout: 2))
+            app.typeKey(.rightArrow, modifierFlags: [])
+            XCTAssertTrue(span(WorkflowTraceFixture.failedRequestID, in: app).waitForExistence(timeout: 2))
+
+            app.buttons["Collapse Generate response"].click()
+            XCTAssertTrue(request.waitForNonExistence(timeout: 2))
+            XCTAssertFalse(span(WorkflowTraceFixture.failedRequestID, in: app).exists)
+            XCTAssertTrue(span(WorkflowTraceFixture.scoringID, in: app).exists)
+            app.buttons["Expand Generate response"].click()
+            XCTAssertTrue(request.waitForExistence(timeout: 2))
+
+            app.buttons["Collapse all spans"].click()
+            XCTAssertTrue(span(WorkflowTraceFixture.rootID, in: app).exists)
+            XCTAssertFalse(span(WorkflowTraceFixture.generationID, in: app).exists)
+            app.buttons["Expand all spans"].click()
+            XCTAssertTrue(request.waitForExistence(timeout: 2))
+
+            // The original result report remains available from the same saved run.
+            app.radioButtons["Report"].click()
+            XCTAssertTrue(app.staticTexts["Scored pass rate"].waitForExistence(timeout: 2))
+            app.radioButtons["Workflow trace"].click()
+            XCTAssertTrue(app.descendants(matching: .any)["Workflow spans"].waitForExistence(timeout: 2))
+        }
+    }
+
+    @MainActor
+    func testLegacySampleKeepsDurationsWithoutInventingTimelinePlacement() throws {
+        try withFixtureApplication { app in
+            selectCase("Legacy durations", in: app)
+            XCTAssertTrue(app.staticTexts[WorkflowTraceFixture.legacyTimingExplanation].waitForExistence(timeout: 2))
+            XCTAssertTrue(app.descendants(matching: .any)["Workflow spans"].exists)
+            XCTAssertFalse(span(WorkflowTraceFixture.successRequestID, in: app).exists)
+            try capture(app, name: "legacy")
+
+            selectCase("Native workflow with local tools", in: app)
+            XCTAssertTrue(span(WorkflowTraceFixture.rootID, in: app).waitForExistence(timeout: 2))
+            XCTAssertFalse(app.staticTexts[WorkflowTraceFixture.legacyTimingExplanation].exists)
+        }
+    }
+
+    @MainActor
+    func testCancelledHTTPRequestRetainsItsErrorAndDoesNotInventAStatusCode() throws {
+        try withFixtureApplication { app in
+            selectCase("Cancelled request", in: app)
+            app.buttons["Expand all spans"].click()
+            let request = span(WorkflowTraceFixture.cancelledRequestID, in: app)
+            XCTAssertTrue(request.waitForExistence(timeout: 2))
+            request.click()
+            assertSelectedTitle("POST /fixture/cancelled", in: app)
+            assertDetailContains("Fixture request cancelled before receiving a response", in: app)
+            assertDetailContains("POST", in: app)
+            let details = app.descendants(matching: .any)["Span details"]
+            XCTAssertFalse(details.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Status code", "Status code")
+            ).firstMatch.exists)
+            try capture(app, name: "cancelled-local-http-tool")
+        }
+    }
+
+    @MainActor
+    private func withFixtureApplication(_ body: (XCUIApplication) throws -> Void) throws {
+        let storage = try UITestStorage.makeDirectory(prefix: "workflow-trace")
+        defer { try? FileManager.default.removeItem(at: storage) }
+        try WorkflowTraceFixture.write(to: storage)
+        try UITestStorage.verifyWritable(storage)
+
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "--disable-mcp-autostart", "--evaluation-storage", storage.path,
+            "-SUEnableAutomaticChecks", "NO", "-SUAutomaticallyUpdate", "NO"
+        ]
+        app.launch()
+        defer { app.terminate() }
+        try UITestStorage.requireNoAlert(in: app)
+        app.activate()
+        try UITestStorage.requireNoAlert(in: app)
+        app.menuBars.menuBarItems["Evaluation"].click()
+        app.menuItems["Show Suite Editor"].click()
+        try UITestStorage.waitFor(app.windows.firstMatch, in: app, timeout: 5)
+        let showSidebar = app.buttons["Show Sidebar"]
+        if showSidebar.exists { showSidebar.click() }
+        let savedRun = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", WorkflowTraceFixture.runName)).firstMatch
+        try UITestStorage.waitFor(savedRun, in: app, timeout: 5)
+        savedRun.click()
+        try UITestStorage.waitFor(app.popUpButtons["Trace case"], in: app, timeout: 5)
+        try body(app)
+    }
+
+    @MainActor
+    private func span(_ id: String, in app: XCUIApplication) -> XCUIElement {
+        app.activate()
+        return app.descendants(matching: .any)["Trace span \(id)"]
+    }
+
+    @MainActor
+    private func selectCase(_ name: String, in app: XCUIApplication) {
+        app.popUpButtons["Trace case"].click()
+        let item = app.menuItems["\(name) · repetition 1"]
+        XCTAssertTrue(item.waitForExistence(timeout: 2), app.debugDescription)
+        item.click()
+    }
+
+    @MainActor
+    private func assertSelectedTitle(
+        _ title: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let selectedTitle = app.staticTexts["Selected span title"]
+        let expected = NSPredicate(format: "label == %@ OR value == %@", title, title)
+        let changed = XCTNSPredicateExpectation(predicate: expected, object: selectedTitle)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [changed], timeout: 2), .completed,
+            app.debugDescription, file: file, line: line
+        )
+    }
+
+    @MainActor
+    private func assertDetailContains(
+        _ text: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let details = app.descendants(matching: .any)["Span details"]
+        let evidence = details.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
+        ).firstMatch
+        XCTAssertTrue(
+            evidence.waitForExistence(timeout: 2),
+            app.debugDescription, file: file, line: line
+        )
+    }
+
+    @MainActor
+    private func capture(_ app: XCUIApplication, name: String) throws {
+        app.activate()
+        let screenshot = app.windows.firstMatch.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = "Trace inspector test fixture — \(name)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        try screenshot.pngRepresentation.write(
+            to: try UITestStorage.screenshotURL(name: name),
+            options: .atomic
+        )
+    }
+}
+
+/// Persists an explicitly labelled test run through the app's normal JSON storage boundary.
+/// Times, responses, and HTTP metadata below are deterministic fixture values, not real model results.
+private enum WorkflowTraceFixture {
+    static let runName = "Trace inspector test fixture"
+    static let rootID = "A0000000-0000-0000-0000-000000000001"
+    static let preparationID = "A0000000-0000-0000-0000-000000000002"
+    static let generationID = "A0000000-0000-0000-0000-000000000003"
+    static let successRequestID = "A0000000-0000-0000-0000-000000000005"
+    static let failedRequestID = "A0000000-0000-0000-0000-000000000007"
+    static let scoringID = "A0000000-0000-0000-0000-000000000008"
+    static let judgeID = "A0000000-0000-0000-0000-000000000009"
+    static let cancelledRequestID = "C0000000-0000-0000-0000-000000000004"
+    static let failedToolTitle = "Fetch unavailable records with a deliberately long tool label to verify row truncation"
+    static let legacyTimingExplanation = "Start offsets were not recorded for this saved sample. Durations are shown without timeline placement."
+    static let effectivePrompt = "Test fixture instructions. Return the fixture response."
+    static let judgePrompt = "Assess whether the native model returned the fixture response after using its local reference tools."
+    static let judgeResponse = "{\"checks\":[{\"criterionIndex\":1,\"score\":4,\"rationale\":\"The fixture response follows the fixture instructions.\"}]}"
+
+    static func write(to directory: URL) throws {
+        let runs = directory.appending(path: "Runs", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: runs, withIntermediateDirectories: true)
+        let document: [String: Any] = [
+            "id": "D0000000-0000-0000-0000-000000000001",
+            "suiteID": "D0000000-0000-0000-0000-000000000002",
+            "suiteName": runName,
+            "suiteVersion": "fixture-v1",
+            "instructions": "Trace inspector test fixture; no model or network request is executed.",
+            "criteria": "Fixture response equals the expected text.",
+            "scoringMode": "modelJudge",
+            "judgePromptVersion": "fixture-v1",
+            "judgePassingScore": 3,
+            "repetitions": 1,
+            "plannedSampleCount": 3,
+            "startedAt": "2026-09-08T09:00:00Z",
+            "completedAt": "2026-09-08T09:00:03Z",
+            "cancelled": false,
+            "environment": [
+                "operatingSystem": "macOS test fixture",
+                "locale": "en_GB",
+                "model": "On-device model (test fixture)",
+                "modelContextSize": 4096
+            ],
+            "attachments": [],
+            "results": [recordedSample, legacySample, cancelledSample]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: runs.appending(path: "trace-inspector-test-fixture.json"), options: .atomic)
+    }
+
+    private static var recordedSample: [String: Any] {
+        var sample = baseSample(idPrefix: "A", name: "Native workflow with local tools", duration: 110)
+        sample["score"] = 4
+        sample["judgeDurationMilliseconds"] = 59
+        sample["judgeUsage"] = ["inputTokens": 96, "cachedInputTokens": 0, "outputTokens": 28, "reasoningTokens": 0]
+        sample["judgeTrace"] = [
+            "instructions": "Apply the fixture rubric using the on-device judge.",
+            "prompt": judgePrompt,
+            "rawResponse": judgeResponse
+        ]
+        sample["featureTrace"] = [
+            "customToolCalls": [],
+            "profileEvents": [],
+            "firstContentMilliseconds": 22.5
+        ]
+        sample["workflowTrace"] = ["timingSource": "App-observed monotonic clock", "spans": [
+            span(id: rootID, kind: "sample", title: "Native workflow with local tools", offset: 0, duration: 170,
+                 metadata: ["provider": "On device", "model": "SystemLanguageModel (test fixture)"]),
+            span(id: preparationID, parent: rootID,
+                 kind: "preparation", title: "Prepare input", offset: 0, duration: 5,
+                 metadata: ["estimatedInputTokens": "64"]),
+            span(id: generationID, parent: rootID, kind: "generation",
+                 title: "Generate response", offset: 5, duration: 105,
+                 metadata: ["role": "evaluation", "streaming": "true", "usageSource": "Framework-reported",
+                            "inputTokens": "64", "cachedInputTokens": "8", "outputTokens": "12",
+                            "reasoningTokens": "0", "firstContentMilliseconds": "22.5"]),
+            span(id: "A0000000-0000-0000-0000-000000000004", parent: generationID,
+                 kind: "tool", title: "Search fixture records", offset: 15, duration: 30),
+            span(id: successRequestID, parent: "A0000000-0000-0000-0000-000000000004",
+                 kind: "httpRequest", title: "POST /fixture/search", offset: 15, duration: 30,
+                 metadata: ["method": "POST", "endpoint": "http://127.0.0.1:8765/fixture/search",
+                            "statusCode": "200", "requestBytes": "26", "responseBytes": "128"]),
+            span(id: "A0000000-0000-0000-0000-000000000006", parent: generationID,
+                 kind: "tool", title: failedToolTitle, offset: 65, duration: 45,
+                 status: "failed", error: "Fixture service unavailable"),
+            span(id: failedRequestID, parent: "A0000000-0000-0000-0000-000000000006",
+                 kind: "httpRequest", title: "POST /fixture/unavailable", offset: 65, duration: 45,
+                 status: "failed", error: "Fixture service unavailable",
+                 metadata: ["method": "POST", "endpoint": "http://127.0.0.1:8765/fixture/unavailable",
+                            "statusCode": "503", "requestBytes": "26", "responseBytes": "0"]),
+            span(id: scoringID, parent: rootID, kind: "scoring",
+                 title: "Score response", offset: 110, duration: 60),
+            span(id: judgeID, parent: scoringID, kind: "judge", title: "AI judge", offset: 111, duration: 59,
+                 metadata: ["usageSource": "Framework-reported", "inputTokens": "96", "cachedInputTokens": "0",
+                            "outputTokens": "28", "reasoningTokens": "0"])
+        ]]
+        return sample
+    }
+
+    private static var legacySample: [String: Any] {
+        var sample = baseSample(idPrefix: "B", name: "Legacy durations", duration: 95)
+        sample["timing"] = [
+            "preparationMilliseconds": 5,
+            "generationMilliseconds": 85,
+            "scoringMilliseconds": 5
+        ]
+        return sample
+    }
+
+    private static var cancelledSample: [String: Any] {
+        var sample = baseSample(idPrefix: "C", name: "Cancelled request", duration: 55)
+        sample["status"] = "error"
+        sample["response"] = ""
+        sample["errorCategory"] = "cancelled"
+        sample["errorMessage"] = "Fixture request cancelled before receiving a response"
+        let root = "C0000000-0000-0000-0000-000000000001"
+        let generation = "C0000000-0000-0000-0000-000000000002"
+        let tool = "C0000000-0000-0000-0000-000000000003"
+        sample["workflowTrace"] = ["timingSource": "App-observed monotonic clock", "spans": [
+            span(id: root, kind: "sample", title: "Cancelled request", offset: 0, duration: 55, status: "cancelled"),
+            span(id: generation, parent: root, kind: "generation", title: "Generate response",
+                 offset: 5, duration: 50, status: "cancelled"),
+            span(id: tool, parent: generation, kind: "tool", title: "Cancelled fixture lookup",
+                 offset: 10, duration: 45, status: "cancelled"),
+            span(id: cancelledRequestID, parent: tool, kind: "httpRequest", title: "POST /fixture/cancelled",
+                 offset: 10, duration: 45, status: "cancelled",
+                 error: "Fixture request cancelled before receiving a response",
+                 metadata: ["method": "POST", "endpoint": "http://127.0.0.1:8765/fixture/cancelled",
+                            "requestBytes": "26"])
+        ]]
+        return sample
+    }
+
+    private static func baseSample(idPrefix: String, name: String, duration: Double) -> [String: Any] {
+        [
+            "id": "\(idPrefix)1000000-0000-0000-0000-000000000001",
+            "caseID": "\(idPrefix)2000000-0000-0000-0000-000000000001",
+            "caseName": name,
+            "repetition": 1,
+            "prompt": "Return the fixture response after inspecting the fixture records.",
+            "effectivePrompt": effectivePrompt,
+            "expected": "Fixture response",
+            "response": "Fixture response",
+            "status": "passed",
+            "durationMilliseconds": duration,
+            "usage": ["inputTokens": 64, "cachedInputTokens": 8, "outputTokens": 12, "reasoningTokens": 0]
+        ]
+    }
+
+    private static func span(
+        id: String,
+        parent: String? = nil,
+        kind: String,
+        title: String,
+        offset: Double,
+        duration: Double,
+        status: String = "succeeded",
+        error: String? = nil,
+        metadata: [String: String] = [:]
+    ) -> [String: Any] {
+        var value: [String: Any] = [
+            "id": id,
+            "kind": kind,
+            "title": title,
+            "startOffsetMilliseconds": offset,
+            "durationMilliseconds": duration,
+            "status": status,
+            "metadata": metadata
+        ]
+        value["parentID"] = parent
+        value["errorMessage"] = error
+        return value
+    }
+}

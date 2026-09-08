@@ -26,7 +26,7 @@ Foundation Evals is a native macOS workbench for testing Apple's Foundation Mode
 |---|---|
 | **Repeatable evaluations** | Test cases with shared instructions, attachments, and multiple repetitions. |
 | **Flexible scoring** | Exact matches, required text, AI rubrics, or response collection without scoring. |
-| **Execution traces** | Responses, score explanations, timing, token usage, and tool activity in one place. |
+| **Execution traces** | A nested workflow waterfall with measured native stages, tool activity, token usage and a selected-span inspector. [Trace details](docs/workflow-traces.md). |
 | **Saved comparisons** | Run history, baseline comparisons, and JSON reports. |
 | **Models and tools** | Apple's on-device model, compatible Core AI models, custom HTTP providers, and configurable tools. |
 | **Agent integration** | An included MCP server for managing suites, running evaluations, and inspecting results. |
