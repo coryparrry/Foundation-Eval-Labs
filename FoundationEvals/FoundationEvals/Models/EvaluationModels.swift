@@ -294,6 +294,7 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var fieldAssertionResults: [EvaluationFieldAssertionResult]? = nil
     var refusal: EvaluationRefusalTrace? = nil
     var imageInputTokenCountAvailable: Bool? = nil
+    var workflowTrace: EvaluationWorkflowTrace? = nil
 }
 
 struct EvaluationToolCallTrace: Codable, Sendable {

@@ -36,6 +36,7 @@ struct EvaluationTraceTests {
         let result = try JSONDecoder().decode(EvaluationSampleResult.self, from: Data(json.utf8))
 
         #expect(result.timing == nil)
+        #expect(result.workflowTrace == nil)
         #expect(result.toolCalls?.first?.durationMilliseconds == nil)
         #expect(result.durationMilliseconds == 42)
     }

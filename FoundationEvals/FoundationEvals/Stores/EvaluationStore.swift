@@ -47,6 +47,10 @@ final class EvaluationStore {
     private let runsDirectory: URL
     private let activeRunURL: URL
     private let draftSuiteURL: URL
+    @ObservationIgnored private var pendingPromptEdits: [UUID: String] = [:]
+    @ObservationIgnored private var draftSaveTask: Task<Void, Never>?
+    @ObservationIgnored private let onDeviceContextSizes = ModelContextSizeCache()
+    private(set) var isDraftSavePending = false
     private var runTask: Task<Void, Never>?
     private var activeRunSuite: EvaluationSuite?
     private var activeRunResults: [EvaluationSampleResult] = []
@@ -250,7 +254,7 @@ final class EvaluationStore {
 
     private func contextSize(for candidate: EvaluationSuite) -> Int {
         switch candidate.modelConfiguration.provider {
-        case .onDevice: candidate.modelConfiguration.systemModel.contextSize
+        case .onDevice: onDeviceContextSizes.value(for: candidate.modelConfiguration)
         case .customHTTP: candidate.modelConfiguration.customProviderSettings.contextSize
         case .coreAI: coreAIModel(for: candidate)?.contextSize ?? 0
         case .privateCloudCompute: cloudContextSize ?? 0
@@ -301,6 +305,7 @@ final class EvaluationStore {
     }
 
     func duplicateCase(id: UUID) {
+        applyPendingPromptEdits()
         guard draftSuite.cases.count < Self.maximumCases,
               draftSuite.cases.count < Self.maximumPlannedSamples / max(draftSuite.repetitions, 1) else {
             notice = "This suite has reached its planned-sample limit."
@@ -330,6 +335,7 @@ final class EvaluationStore {
         expectedRevision: String,
         confirmDeletes: Bool
     ) throws -> String {
+        try flushPendingSuiteSave()
         var candidate = replacement
         candidate.id = suite.id
         candidate.attachments = suite.attachments
@@ -376,11 +382,66 @@ final class EvaluationStore {
         return true
     }
 
+    var canResetWorkspace: Bool {
+        !isRunning && activeRun == nil && !isProcessingFiles && !isImportingFiles
+    }
+
+    /// A blank suite is intentionally incomplete; execution still validates it before running.
+    func resetSuite() throws {
+        try requireIdle()
+        guard !isImportingFiles else { throw EvaluationStoreError.fileOperationBusy }
+        var blank = EvaluationSuite()
+        blank.name = "Untitled Suite"
+        blank.instructions = ""
+        blank.criteria = ""
+        blank.scoringMode = .review
+        blank.cases = [EvaluationCase(name: "Case 1", prompt: "", expected: "")]
+        try CanonicalJSON.data(for: blank).write(
+            to: supportDirectory.appending(path: "suite.json"), options: .atomic
+        )
+        pendingPromptEdits.removeAll()
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        isDraftSavePending = false
+        suite = blank
+        draftSuite = blank
+        draftSaveFailed = false
+        selection = .suite
+        // Old drafts must not reappear after relaunch, even when the new suite is incomplete.
+        if FileManager.default.fileExists(atPath: draftSuiteURL.path) {
+            try FileManager.default.removeItem(at: draftSuiteURL)
+        }
+    }
+
+    func clearRunHistory() throws {
+        try requireIdle()
+        guard !isImportingFiles else { throw EvaluationStoreError.fileOperationBusy }
+        // Include unreadable run files, which are not represented in the in-memory history.
+        let files = try FileManager.default.contentsOfDirectory(
+            at: runsDirectory, includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "json" }
+        defer {
+            runs = Self.loadRuns(from: runsDirectory).runs
+            if case .run(let id) = selection, !runs.contains(where: { $0.id == id }) {
+                selection = .suite
+            }
+        }
+        // Remove a completed run's recovery marker before its history file to prevent resurrection.
+        if FileManager.default.fileExists(atPath: activeRunURL.path) {
+            try FileManager.default.removeItem(at: activeRunURL)
+        }
+        for file in files { try FileManager.default.removeItem(at: file) }
+        completedSamples = 0
+        totalSamples = 0
+        liveResponse = nil
+    }
+
     func importFiles(_ urls: [URL]) {
         guard !isRunning, !isProcessingFiles else {
             notice = "Wait for the current operation to finish before changing files."
             return
         }
+        _ = saveSuite()
         isProcessingFiles = true
         let expectedRevision = suiteRevision
 
@@ -447,6 +508,7 @@ final class EvaluationStore {
     }
 
     func removeAttachment(id: UUID) {
+        _ = saveSuite()
         do {
             _ = try removeAttachment(id: id, expectedRevision: suiteRevision)
         } catch {
@@ -484,8 +546,50 @@ final class EvaluationStore {
         return true
     }
 
+    func promptText(for caseID: UUID) -> String {
+        pendingPromptEdits[caseID] ?? draftSuite.cases.first(where: { $0.id == caseID })?.prompt ?? ""
+    }
+
+    func editPrompt(_ text: String, for caseID: UUID) {
+        guard !isRunning, !isProcessingFiles,
+              draftSuite.cases.contains(where: { $0.id == caseID }) else { return }
+        guard promptText(for: caseID) != text else { return }
+        pendingPromptEdits[caseID] = text
+        scheduleSuiteSave()
+    }
+
+    private func applyPendingPromptEdits() {
+        guard !pendingPromptEdits.isEmpty else { return }
+        var updated = draftSuite
+        for index in updated.cases.indices {
+            if let prompt = pendingPromptEdits[updated.cases[index].id] {
+                updated.cases[index].prompt = prompt
+            }
+        }
+        pendingPromptEdits.removeAll()
+        if draftSuite != updated { draftSuite = updated }
+    }
+
+    func scheduleSuiteSave() {
+        draftSaveTask?.cancel()
+        if !isDraftSavePending { isDraftSavePending = true }
+        draftSaveTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(350)) }
+            catch { return }
+            self?.saveSuite()
+        }
+    }
+
+    func refreshModelMetadata() {
+        onDeviceContextSizes.invalidate()
+    }
+
     @discardableResult
     func saveSuite() -> Bool {
+        applyPendingPromptEdits()
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        if isDraftSavePending { isDraftSavePending = false }
         do {
             try commitSuite(draftSuite)
             return true
@@ -542,6 +646,7 @@ final class EvaluationStore {
         }
         try requireIdle()
         try requireRevision(expectedRevision)
+        refreshModelMetadata()
         guard let issue = validationIssue(for: suite) else {
             let suiteSnapshot = suite
             let startedAt = Date()
@@ -881,12 +986,13 @@ final class EvaluationStore {
                 return "The reference tool limit must be between one and four calls per response."
             }
         }
+        let modelContextSize = contextSize(for: candidate)
         let allocation = configuration.contextAllocation(
-            contextSize: contextSize(for: candidate),
+            contextSize: modelContextSize,
             includesModelJudge: candidate.needsModelJudge,
             sharedToolOutputReserve: candidate.sharedToolOutputReserve
         )
-        if contextSize(for: candidate) > 0, allocation.effectiveInputLimit < 512 {
+        if modelContextSize > 0, allocation.effectiveInputLimit < 512 {
             return "Reduce the response limit or reference-tool call limit so at least 512 input tokens remain."
         }
         if candidate.attachments.count > Self.maximumAttachments {
@@ -1142,7 +1248,16 @@ final class EvaluationStore {
         if isProcessingFiles { throw EvaluationStoreError.fileOperationBusy }
     }
 
+    private func flushPendingSuiteSave() throws {
+        guard isDraftSavePending else { return }
+        _ = saveSuite()
+        if draftSaveFailed {
+            throw EvaluationStoreError.persistence("Save the local draft before applying another change.")
+        }
+    }
+
     private func requireRevision(_ expectedRevision: String) throws {
+        try flushPendingSuiteSave()
         let current = try currentSuiteRevision()
         guard expectedRevision == current else {
             throw EvaluationStoreError.staleRevision(current: current)

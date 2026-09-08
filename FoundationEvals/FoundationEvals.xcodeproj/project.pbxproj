@@ -489,6 +489,7 @@
 		AFC28B6C3047331D0023273E /* Debug configuration for PBXNativeTarget "FoundationEvalsUITests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = FoundationEvalsUITests/FoundationEvalsUITests.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
@@ -511,6 +512,7 @@
 		AFC28B6D3047331D0023273E /* Release configuration for PBXNativeTarget "FoundationEvalsUITests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = FoundationEvalsUITests/FoundationEvalsUITests.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;

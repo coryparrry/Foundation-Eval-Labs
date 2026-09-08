@@ -149,13 +149,15 @@ private enum ReferenceLookupError: LocalizedError {
 }
 
 actor ReferenceToolRecorder {
+    let workflowRecorder: EvaluationWorkflowRecorder?
     private let maximumCalls: Int
     private let callLimiter: EvaluationToolCallLimiter?
     private var reservedCallCount = 0
     private var traces: [EvaluationToolCallTrace] = []
     private var ephemeralOutputs: [(callIndex: Int, text: String)] = []
 
-    init(maximumCalls: Int, callLimiter: EvaluationToolCallLimiter? = nil) {
+    init(maximumCalls: Int, callLimiter: EvaluationToolCallLimiter? = nil, workflowRecorder: EvaluationWorkflowRecorder? = nil) {
+        self.workflowRecorder = workflowRecorder
         self.maximumCalls = max(1, min(maximumCalls, 4))
         self.callLimiter = callLimiter
     }
@@ -230,42 +232,53 @@ struct ReferenceLookupTool: Tool {
     }
 
     func call(arguments: ReferenceLookupArguments) async throws -> String {
-        let started = ContinuousClock.now
-        let callIndex = try await recorder.reserveCall()
-        let query = arguments.query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
-            await recorder.recordRejectedCall(
-                callIndex: callIndex,
-                durationMilliseconds: Self.milliseconds(since: started)
-            )
-            throw ReferenceLookupError.emptyQuery
-        }
-        guard query.count <= 200 else {
-            await recorder.recordRejectedCall(
-                callIndex: callIndex,
-                durationMilliseconds: Self.milliseconds(since: started)
-            )
-            throw ReferenceLookupError.queryTooLong
-        }
+        let workflow = recorder.workflowRecorder
+        let spanID = workflow?.begin(kind: .tool, title: name, parentID: workflow?.activeParentID,
+            metadata: ["toolName": name, "toolSource": "reference"])
+        do {
+            let started = ContinuousClock.now
+            let callIndex = try await recorder.reserveCall()
+            workflow?.update(spanID, metadata: ["callIndex": String(callIndex)])
+            try Task.checkCancellation()
+            let query = arguments.query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty else {
+                await recorder.recordRejectedCall(
+                    callIndex: callIndex,
+                    durationMilliseconds: Self.milliseconds(since: started)
+                )
+                throw ReferenceLookupError.emptyQuery
+            }
+            guard query.count <= 200 else {
+                await recorder.recordRejectedCall(
+                    callIndex: callIndex,
+                    durationMilliseconds: Self.milliseconds(since: started)
+                )
+                throw ReferenceLookupError.queryTooLong
+            }
 
-        let results = index.search(query: query, maximumResults: arguments.maximumResults)
-        var output: String
-        if results.isEmpty {
-            output = "No matching passages were found."
-        } else {
-            output = results.map { result in
-                let filename = Self.filenameJSONLiteral(result.filename)
-                return "--- BEGIN UNTRUSTED REFERENCE ---\nfilenameJSON: \(filename)\n\(result.excerpt)\n--- END UNTRUSTED REFERENCE ---"
-            }.joined(separator: "\n\n")
+            let results = index.search(query: query, maximumResults: arguments.maximumResults)
+            var output: String
+            if results.isEmpty {
+                output = "No matching passages were found."
+            } else {
+                output = results.map { result in
+                    let filename = Self.filenameJSONLiteral(result.filename)
+                    return "--- BEGIN UNTRUSTED REFERENCE ---\nfilenameJSON: \(filename)\n\(result.excerpt)\n--- END UNTRUSTED REFERENCE ---"
+                }.joined(separator: "\n\n")
+            }
+            output = Self.boundedOutput(output)
+            await recorder.record(
+                callIndex: callIndex,
+                results: results,
+                output: output,
+                durationMilliseconds: Self.milliseconds(since: started)
+            )
+            workflow?.finish(spanID, metadata: ["outputBytes": String(output.utf8.count)])
+            return output
+        } catch {
+            workflow?.finish(spanID, status: EvaluationWorkflowRecorder.status(for: error), errorMessage: error.localizedDescription)
+            throw error
         }
-        output = Self.boundedOutput(output)
-        await recorder.record(
-            callIndex: callIndex,
-            results: results,
-            output: output,
-            durationMilliseconds: Self.milliseconds(since: started)
-        )
-        return output
     }
 
     private static func milliseconds(since started: ContinuousClock.Instant) -> Double {

@@ -123,6 +123,7 @@ struct FoundationEvalsApp: App {
 
         Settings {
             AppSettingsView(mcpSettings: mcpSettings, telemetry: telemetry)
+                .disclosureGroupStyle(FullWidthDisclosureStyle())
         }
     }
 }

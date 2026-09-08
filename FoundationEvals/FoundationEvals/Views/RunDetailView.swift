@@ -39,22 +39,32 @@ struct RunDetailView: View {
     @State private var exportDocument = JSONDocument()
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var showsWorkflow = true
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
-                RunOverviewHeader(run: run)
-                RunSummaryDashboard(run: run)
-                ResultsSection(run: run)
-                    .id(run.id)
-                RunAnalysisSection(run: run, baselineRuns: baselineRuns)
-                RunConfigurationSection(run: run)
+        VStack(spacing: 0) {
+            HStack {
+                Picker("Run view", selection: $showsWorkflow) {
+                    Text("Workflow trace").tag(true)
+                    Text("Report").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 260)
+                .accessibilityIdentifier("Run view")
+                Spacer()
             }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            Divider()
+            if showsWorkflow {
+                WorkflowTraceView(run: run)
+                    .id(run.id)
+            } else {
+                report
+            }
         }
-        .background(Color.primary.opacity(0.025))
-        .navigationTitle("Run Results")
+        .navigationTitle(run.suiteName)
         .toolbar {
             Button("Export Run as JSON", systemImage: "square.and.arrow.up") {
                 do {
@@ -71,21 +81,29 @@ struct RunDetailView: View {
             contentType: .json,
             defaultFilename: "\(safeFilename(run.suiteName))-\(run.suiteVersion)-\(run.id.uuidString.prefix(8)).json"
         ) { result in
-            if case .failure(let error) = result {
-                exportError = error.localizedDescription
-            }
+            if case .failure(let error) = result { exportError = error.localizedDescription }
         }
-        .alert(
-            "Could not export run",
-            isPresented: Binding(
-                get: { exportError != nil },
-                set: { if !$0 { exportError = nil } }
-            )
-        ) {
+        .alert("Could not export run", isPresented: Binding(
+            get: { exportError != nil }, set: { if !$0 { exportError = nil } }
+        )) {
             Button("OK") { exportError = nil }
-        } message: {
-            Text(exportError ?? "")
+        } message: { Text(exportError ?? "") }
+    }
+
+    private var report: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 20) {
+                RunOverviewHeader(run: run)
+                RunSummaryDashboard(run: run)
+                ResultsSection(run: run)
+                    .id(run.id)
+                RunAnalysisSection(run: run, baselineRuns: baselineRuns)
+                RunConfigurationSection(run: run)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(Color.primary.opacity(0.025))
     }
 
     private func safeFilename(_ value: String) -> String {
