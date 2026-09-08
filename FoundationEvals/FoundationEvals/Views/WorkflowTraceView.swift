@@ -135,78 +135,101 @@ private struct WorkflowWaterfall: View {
     @Binding var selection: String?
     @Binding var collapsed: Set<String>
     @FocusState private var isFocused: Bool
+    @State private var zoom = 1.0
     private var rows: [WorkflowTracePresentation.Row] { trace.visibleRows(collapsed: collapsed) }
 
     var body: some View {
         GeometryReader { geometry in
-            let width = max(geometry.size.width, 440)
-            let labelWidth = min(240, max(180, width * 0.40))
+            let viewportWidth = max(geometry.size.width, 640)
+            let labelWidth = min(240, max(180, viewportWidth * 0.30))
             let durationWidth: CGFloat = 65
-            let timelineWidth = width - labelWidth - durationWidth - 32
-            ScrollView(.horizontal) {
-                VStack(spacing: 0) {
-                    HStack(spacing: 0) {
-                        Text("Span").frame(width: labelWidth, alignment: .leading)
-                        TraceTimeAxis(extent: trace.extentMilliseconds, available: trace.hasMeasuredOffsets)
-                            .frame(width: timelineWidth, height: 28)
-                        Text("Duration").frame(width: durationWidth, alignment: .trailing)
+            let startWidth: CGFloat = 80
+            let timelineWidth = (viewportWidth - labelWidth - durationWidth - startWidth - 32) * zoom
+            let width = timelineWidth + labelWidth + durationWidth + startWidth + 32
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Picker("Timeline zoom", selection: $zoom) {
+                        Text("Fit").tag(1.0)
+                        Text("10×").tag(10.0)
+                        Text("100×").tag(100.0)
+                        Text("1,000×").tag(1_000.0)
                     }
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .padding(.horizontal, 16).padding(.vertical, 6)
-                    .background(.quaternary.opacity(0.25))
-                    Divider()
-                    ScrollViewReader { proxy in
-                        List(selection: $selection) {
-                            ForEach(rows) { row in
-                                HStack(spacing: 0) {
-                                    spanLabel(row).frame(width: labelWidth, alignment: .leading)
-                                    TraceDurationBar(node: row.node, extent: trace.extentMilliseconds)
-                                        .frame(width: timelineWidth, height: 34)
-                                    Text(WorkflowTracePresentation.duration(row.node.durationMilliseconds))
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: durationWidth, alignment: .trailing)
+                    .frame(width: 180)
+                    .disabled(!trace.hasMeasuredOffsets)
+                    Text("Outline: includes child steps · Diamond: too short at this zoom")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 6)
+                ScrollView(.horizontal) {
+                    VStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            Text("Span").frame(width: labelWidth, alignment: .leading)
+                            Text("Start").frame(width: startWidth, alignment: .trailing)
+                            TraceTimeAxis(extent: trace.extentMilliseconds, available: trace.hasMeasuredOffsets)
+                                .frame(width: timelineWidth, height: 28)
+                            Text("Duration").frame(width: durationWidth, alignment: .trailing)
+                        }
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .padding(.horizontal, 16).padding(.vertical, 6)
+                        .background(.quaternary.opacity(0.25))
+                        Divider()
+                        ScrollViewReader { proxy in
+                            List(selection: $selection) {
+                                ForEach(rows) { row in
+                                    HStack(spacing: 0) {
+                                        spanLabel(row).frame(width: labelWidth, alignment: .leading)
+                                        Text(row.node.startMilliseconds.map { "+" + WorkflowTracePresentation.duration($0) } ?? "—")
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: startWidth, alignment: .trailing)
+                                        TraceDurationBar(node: row.node, extent: trace.extentMilliseconds, isParent: row.hasChildren)
+                                            .frame(width: timelineWidth, height: 34)
+                                        Text(WorkflowTracePresentation.duration(row.node.durationMilliseconds))
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: durationWidth, alignment: .trailing)
+                                    }
+                                    .tag(row.id)
+                                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                                    .listRowSeparator(.visible)
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityLabel(row.node.title)
+                                    .accessibilityIdentifier("Trace span \(row.id)")
+                                    .accessibilityValue("\(row.node.outcome), \(WorkflowTracePresentation.duration(row.node.durationMilliseconds))")
                                 }
-                                .tag(row.id)
-                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                                .listRowSeparator(.visible)
-                                .accessibilityElement(children: .contain)
-                                .accessibilityLabel(row.node.title)
-                                .accessibilityIdentifier("Trace span \(row.id)")
-                                .accessibilityValue("\(row.node.outcome), \(WorkflowTracePresentation.duration(row.node.durationMilliseconds))")
+                            }
+                            .listStyle(.plain)
+                            .environment(\.defaultMinListRowHeight, 34)
+                            .accessibilityIdentifier("Workflow spans")
+                            .focusable()
+                            .focused($isFocused)
+                            .simultaneousGesture(TapGesture().onEnded { isFocused = true })
+                            .onChange(of: selection) { _, selected in
+                                if let selected { proxy.scrollTo(selected) }
+                            }
+                            .onKeyPress(.downArrow) {
+                                moveSelection(by: 1)
+                                return .handled
+                            }
+                            .onKeyPress(.upArrow) {
+                                moveSelection(by: -1)
+                                return .handled
+                            }
+                            .onKeyPress(.rightArrow) {
+                                guard let selection else { return .ignored }
+                                collapsed.remove(selection)
+                                return .handled
+                            }
+                            .onKeyPress(.leftArrow) {
+                                guard let selection, let row = rows.first(where: { $0.id == selection }) else { return .ignored }
+                                if row.hasChildren && !collapsed.contains(selection) { collapsed.insert(selection) }
+                                else { self.selection = row.node.parentID ?? selection }
+                                return .handled
                             }
                         }
-                        .listStyle(.plain)
-                        .environment(\.defaultMinListRowHeight, 34)
-                        .accessibilityIdentifier("Workflow spans")
-                        .focusable()
-                        .focused($isFocused)
-                        .simultaneousGesture(TapGesture().onEnded { isFocused = true })
-                        .onChange(of: selection) { _, selected in
-                            if let selected { proxy.scrollTo(selected) }
-                        }
-                        .onKeyPress(.downArrow) {
-                            moveSelection(by: 1)
-                            return .handled
-                        }
-                        .onKeyPress(.upArrow) {
-                            moveSelection(by: -1)
-                            return .handled
-                        }
-                        .onKeyPress(.rightArrow) {
-                            guard let selection else { return .ignored }
-                            collapsed.remove(selection)
-                            return .handled
-                        }
-                        .onKeyPress(.leftArrow) {
-                            guard let selection, let row = rows.first(where: { $0.id == selection }) else { return .ignored }
-                            if row.hasChildren && !collapsed.contains(selection) { collapsed.insert(selection) }
-                            else { self.selection = row.node.parentID ?? selection }
-                            return .handled
-                        }
                     }
+                    .frame(width: width, height: max(0, geometry.size.height - 40))
                 }
-                .frame(width: width, height: geometry.size.height)
             }
         }
     }
@@ -268,6 +291,7 @@ private struct TraceTimeAxis: View {
 private struct TraceDurationBar: View {
     let node: WorkflowTraceNode
     let extent: Double
+    let isParent: Bool
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
@@ -276,10 +300,23 @@ private struct TraceDurationBar: View {
                         .offset(x: geometry.size.width * CGFloat(tick) / 4)
                 }
                 if let start = node.startMilliseconds, let end = node.endMilliseconds {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(node.color.opacity(node.kind == .sample ? 0.60 : 0.85))
-                        .frame(width: max(2, geometry.size.width * (end - start) / extent), height: 10)
-                        .offset(x: geometry.size.width * start / extent)
+                    let interval = WorkflowTimelineInterval(start: start, end: end, extent: extent, width: geometry.size.width)
+                    if interval.width < 1 {
+                        Image(systemName: "diamond.fill")
+                            .font(.system(size: 5))
+                            .foregroundStyle(node.color)
+                            .offset(x: interval.offset - 2.5)
+                    } else if isParent {
+                        RoundedRectangle(cornerRadius: 2)
+                            .strokeBorder(node.color.opacity(0.8), lineWidth: 1)
+                            .frame(width: interval.width, height: 10)
+                            .offset(x: interval.offset)
+                    } else {
+                        Rectangle()
+                            .fill(node.color.opacity(0.85))
+                            .frame(width: interval.width, height: 10)
+                            .offset(x: interval.offset)
+                    }
                 } else {
                     Text("Not recorded").font(.system(size: 9)).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)

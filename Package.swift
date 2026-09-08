@@ -7,6 +7,7 @@ let portableProductionSources = [
     "MCP/Installer/CodexMCPInstaller.swift",
     "Models/EvaluationFieldAssertion.swift",
     "Models/EvaluationScoringTypes.swift",
+    "Models/WorkflowTimelineInterval.swift",
     "Services/EvaluationFieldAssertions.swift",
     "Services/MetricScorer.swift",
 ]
@@ -15,6 +16,7 @@ let portableTestSources = [
     "CodexMCPInstallerTests.swift",
     "EvaluationFieldAssertionTests.swift",
     "MetricScorerTests.swift",
+    "WorkflowTimelineIntervalTests.swift",
 ]
 
 let package = Package(

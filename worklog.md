@@ -25,3 +25,11 @@
 - Live final prompt probe: 2.21 s for the CUA action sequence versus 3.94 s after the first lag fix (automation overhead included; not a per-keystroke benchmark). Twenty-second process samples showed NSHostingView.layout samples 380 -> 258. Final sample: /tmp/foundation-isolated-prompt-after.sample.txt. Temporary probe text was removed.
 - Verification: six EditorPerformanceTests, four WorkspaceResetTests, two PromptTextEditorTests, and two targeted WorkflowTraceUITests passed across targeted Xcode runs. git diff --check passed. A redundant final UI rerun was stopped at the user’s request; its result bundle was incomplete.
 - User requested an end to UI tests because they repeatedly took over the screen. Stopped the active Xcode app/test session; do not run further UI tests or control apps unless the user asks.
+
+# Workflow timeline clarity
+
+- Request: correct the misleading appearance of sequential setup spans starting together.
+- Removed minimum-duration bar inflation. Subpixel durations use a labeled diamond marker, parent intervals use outlines, every row shows a start offset, and Fit/10×/100×/1,000× zoom exposes short intervals without changing recorded timing.
+- Added deterministic interval placement and regression tests for sequential subpixel spans, zoom scaling, zero durations, and invalid timing. Included these tests in the portable Swift package.
+- Verified Xcode BuildProject(buildForTesting: true) succeeds and swift test --scratch-path /tmp/foundation-timeline-build --filter WorkflowTimelineIntervalTests passes 2 tests. The default SwiftPM build directory hit Finder metadata signing errors; the clean temporary build succeeded. git diff --check passed. Independent scoped review found no further issues after correcting zoom sizing.
+- No UI tests, app launch, or screen control performed. The new native layout has compiled but has not been visually inspected; the currently running app retains its previous build until relaunched.
