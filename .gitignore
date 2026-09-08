@@ -2,6 +2,16 @@
 .build/
 __pycache__/
 dist/
+
+# Local demo recordings, source artwork, and intermediate media.
+/demo-video/public/
+/demo-video/out/
+
+# Keep only the published repository artwork.
+/.github/assets/*
+!/.github/assets/readme-banner.png
+!/.github/assets/foundation-evals-demo.gif
+!/.github/assets/social-preview.jpg
 FoundationEvals/FoundationEvals.xcodeproj/xcuserdata/
 FoundationEvals/FoundationEvals.xcodeproj/project.xcworkspace/xcuserdata/
 
