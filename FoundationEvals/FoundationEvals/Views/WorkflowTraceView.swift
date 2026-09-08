@@ -144,15 +144,20 @@ private struct WorkflowWaterfall: View {
             let durationWidth: CGFloat = 65
             let startWidth: CGFloat = 80
             let timelineWidth = max(1, viewportWidth - labelWidth - durationWidth - startWidth - 32)
+            let scale = WorkflowTimelineScale(
+                boundaries: trace.nodes.flatMap { [$0.startMilliseconds, $0.endMilliseconds].compactMap { $0 } },
+                extent: trace.extentMilliseconds, width: timelineWidth)
             VStack(alignment: .leading, spacing: 0) {
-                Text("Short spans enlarged for visibility · Exact durations shown")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .padding(.horizontal, 16).padding(.vertical, 6)
+                if trace.hasMeasuredOffsets {
+                    Text("Expanded time scale · Short steps spaced apart · Exact durations shown")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .padding(.horizontal, 16).padding(.vertical, 6)
+                }
                 VStack(spacing: 0) {
                     HStack(spacing: 0) {
                         Text("Span").frame(width: labelWidth, alignment: .leading)
                         Text("Start").padding(.trailing, 8).frame(width: startWidth, alignment: .trailing)
-                        TraceTimeAxis(extent: trace.extentMilliseconds, available: trace.hasMeasuredOffsets)
+                        TraceTimeAxis(scale: scale, available: trace.hasMeasuredOffsets)
                             .frame(width: timelineWidth, height: 28)
                         Text("Duration").frame(width: durationWidth, alignment: .trailing)
                     }
@@ -170,7 +175,7 @@ private struct WorkflowWaterfall: View {
                                         .foregroundStyle(.secondary)
                                         .padding(.trailing, 8)
                                         .frame(width: startWidth, alignment: .trailing)
-                                    TraceDurationBar(node: row.node, extent: trace.extentMilliseconds)
+                                    TraceDurationBar(node: row.node, scale: scale)
                                         .frame(width: timelineWidth, height: 34)
                                     Text(WorkflowTracePresentation.duration(row.node.durationMilliseconds))
                                         .font(.caption.monospacedDigit())
@@ -273,7 +278,7 @@ private struct WorkflowWaterfall: View {
 }
 
 private struct TraceTimeAxis: View {
-    let extent: Double
+    let scale: WorkflowTimelineScale
     let available: Bool
     var body: some View {
         GeometryReader { geometry in
@@ -281,7 +286,7 @@ private struct TraceTimeAxis: View {
                 let divisions = geometry.size.width >= 320 ? 4 : geometry.size.width >= 160 ? 2 : geometry.size.width >= 90 ? 1 : 0
                 ForEach(0...divisions, id: \.self) { tick in
                     let fraction = Double(tick) / Double(max(1, divisions))
-                    Text(WorkflowTracePresentation.duration(extent * fraction))
+                    Text(WorkflowTracePresentation.duration(scale.time(at: geometry.size.width * fraction)))
                         .font(.system(size: 9).monospacedDigit())
                         .fixedSize()
                         .position(x: max(15, min(geometry.size.width - 20, geometry.size.width * fraction)), y: 14)
@@ -295,7 +300,7 @@ private struct TraceTimeAxis: View {
 
 private struct TraceDurationBar: View {
     let node: WorkflowTraceNode
-    let extent: Double
+    let scale: WorkflowTimelineScale
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
@@ -304,7 +309,7 @@ private struct TraceDurationBar: View {
                         .offset(x: geometry.size.width * CGFloat(tick) / 4)
                 }
                 if let start = node.startMilliseconds, let end = node.endMilliseconds {
-                    let interval = WorkflowTimelineInterval(start: start, end: end, extent: extent, width: geometry.size.width)
+                    let interval = WorkflowTimelineInterval(start: start, end: end, scale: scale)
                     SolidTimelineBar(
                         width: interval.displayWidth, offset: interval.displayOffset,
                         color: node.color.opacity(node.kind == .sample ? 0.60 : 0.85)

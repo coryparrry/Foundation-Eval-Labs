@@ -1,36 +1,88 @@
 import Foundation
 
-/// Keeps measured timing separate from the minimum visible solid bar used for rendering.
-struct WorkflowTimelineInterval {
-    let offset: Double
+/// A shared, monotonic time axis. Crowded event boundaries receive extra space;
+/// the remaining time ranges share the remaining width in proportion to duration.
+struct WorkflowTimelineScale {
+    let extent: Double
     let width: Double
+    let times: [Double]
+    let positions: [Double]
+
+    init(boundaries: [Double], extent: Double, width: Double) {
+        self.extent = extent.isFinite && extent > 0 ? extent : 0
+        self.width = width.isFinite && width > 0 ? width : 0
+        guard self.extent > 0, self.width > 0 else {
+            times = [0]
+            positions = [0]
+            return
+        }
+        let times = Set(boundaries.filter { $0.isFinite && $0 >= 0 && $0 <= extent } + [0, extent]).sorted()
+        let weights = zip(times, times.dropFirst()).map { ($1 - $0) / extent }
+        // Dense traces still fit. Never reserve more than half the viewport for
+        // minimum spacing; genuine long operations keep the remaining space.
+        let minimum = min(16, width / (2 * Double(weights.count)))
+        var remainingWidth = width
+        var remainingWeight = 1.0
+        var lengths = Array(repeating: 0.0, count: weights.count)
+        let shortestFirst = weights.indices.sorted { weights[$0] < weights[$1] }
+        for index in shortestFirst {
+            let proportionalWidth = weights[index] / remainingWeight * remainingWidth
+            guard proportionalWidth < minimum else { break }
+            lengths[index] = minimum
+            remainingWidth -= minimum
+            remainingWeight -= weights[index]
+        }
+        var positions = [0.0]
+        var position = 0.0
+        for index in weights.indices {
+            let length = lengths[index] > 0 ? lengths[index] : weights[index] / remainingWeight * remainingWidth
+            position += length
+            positions.append(position)
+        }
+        positions[positions.count - 1] = width
+        self.times = times
+        self.positions = positions
+    }
+
+    func position(at time: Double) -> Double {
+        interpolate(time, from: times, to: positions)
+    }
+
+    func time(at position: Double) -> Double {
+        interpolate(position, from: positions, to: times)
+    }
+
+    private func interpolate(_ value: Double, from source: [Double], to destination: [Double]) -> Double {
+        guard value.isFinite, source.count > 1 else { return 0 }
+        if value <= source[0] { return destination[0] }
+        if value >= source[source.count - 1] { return destination[destination.count - 1] }
+        var low = 0
+        var high = source.count - 1
+        while high - low > 1 {
+            let middle = (low + high) / 2
+            if source[middle] <= value { low = middle } else { high = middle }
+        }
+        let fraction = (value - source[low]) / (source[high] - source[low])
+        return destination[low] + fraction * (destination[high] - destination[low])
+    }
+}
+
+struct WorkflowTimelineInterval {
     let displayOffset: Double
     let displayWidth: Double
 
-    init(start: Double, end: Double, extent: Double, width: Double) {
-        guard start.isFinite, end.isFinite, extent.isFinite, width.isFinite,
-              start >= 0, end >= start, extent > 0, width >= 0 else {
-            self.offset = 0
-            self.width = 0
-            self.displayOffset = 0
-            self.displayWidth = 0
+    init(start: Double, end: Double, scale: WorkflowTimelineScale) {
+        guard start.isFinite, end.isFinite, start >= 0, end >= start,
+              end <= scale.extent, scale.extent > 0, scale.width > 0 else {
+            displayOffset = 0
+            displayWidth = 0
             return
         }
-        let measuredOffset = start / extent * width
-        let measuredWidth = (end - start) / extent * width
-        guard measuredOffset.isFinite, measuredWidth.isFinite else {
-            self.offset = 0
-            self.width = 0
-            self.displayOffset = 0
-            self.displayWidth = 0
-            return
-        }
-        self.offset = measuredOffset
-        self.width = measuredWidth
-        // Short spans use a 16-point visual minimum while measured durations remain exact.
-        // Even instantaneous steps remain visible. Clamp at the right edge so the
-        // final scoring step is not clipped out of the timeline.
-        self.displayWidth = min(width, max(16, measuredWidth))
-        self.displayOffset = min(measuredOffset, width - displayWidth)
+        let left = scale.position(at: start)
+        let right = scale.position(at: end)
+        // Nonzero spans use the shared axis exactly, preserving sequential
+        // boundaries and true parent/child overlap. Only instants need a marker.
+        displayWidth = start == end ? min(2, scale.width) : max(0, right - left)
+        displayOffset = min(left, scale.width - displayWidth)
     }
 }
