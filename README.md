@@ -6,7 +6,7 @@
 
 Build an evaluation. Inspect the evidence. See what changed.
 
-<img src=".github/assets/foundation-evals-demo.gif" alt="Foundation Evals walkthrough: configure a test suite, run an evaluation, and inspect the results and scoring evidence." width="960">
+<img src=".github/assets/foundation-evals-demo.gif" alt="Foundation Evals walkthrough: inspect the workflow trace timeline, span details, and evaluation report." width="960">
 
 ![macOS 27+](https://img.shields.io/badge/macOS-27%2B-111827?style=flat-square&logo=apple&logoColor=white)
 ![Swift](https://img.shields.io/badge/Swift-F05138?style=flat-square&logo=swift&logoColor=white)

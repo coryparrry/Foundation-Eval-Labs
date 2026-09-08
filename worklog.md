@@ -84,3 +84,8 @@
 - Added four headless native UI regressions: control bounds/value across zero/partial/completed/large counts; longer counts preserving track width; live progress updates preserving inset; and rendered counter pixels clearing the trailing edge. Tests create no windows and perform no screen automation. Existing shared-axis/bitmap timeline regressions run alongside them.
 - Validation: swift test --scratch-path /tmp/foundation-ui-regressions --filter 'RunToolbarProgressTests|WorkflowTimelineIntervalTests|TimelineRenderingTests' passed 18 tests. Removing the inset temporarily made the new tests fail, then automatic restoration returned the suite to green. Xcode BuildProject(buildForTesting: true) and git diff --check passed.
 - The Xcode project file acquired unrelated formatting-only changes to package requirement blocks during this work; left those uncommitted.
+
+# Updated GitHub UI demo
+
+- Converted the latest Downloads/evals2.mp4 recording into the README GIF, preserving the full 15.65-second recording at 1200×780, 12 fps, looping forever. Updated its alt text for the trace inspector and report.
+- Verified all 188 frames decode, duration is 15.66 seconds, and inspected a rendered trace frame. Source video remains local.
