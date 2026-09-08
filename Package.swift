@@ -19,6 +19,7 @@ let portableTestSources = [
     "WorkflowTimelineIntervalTests.swift",
     "NavigationInteractionTests.swift",
     "TimelineRenderingTests.swift",
+    "RunToolbarProgressTests.swift",
 ]
 
 let package = Package(
@@ -84,7 +85,7 @@ let package = Package(
         .target(
             name: "FoundationEvalsUIComponents",
             path: "FoundationEvals/FoundationEvals/Views/Components",
-            sources: ["SidebarNavigationList.swift", "FullWidthDisclosureStyle.swift", "SolidTimelineBar.swift"]
+            sources: ["SidebarNavigationList.swift", "FullWidthDisclosureStyle.swift", "SolidTimelineBar.swift", "RunToolbarProgress.swift"]
         ),
         .testTarget(
             name: "FoundationEvalsPortableTests",

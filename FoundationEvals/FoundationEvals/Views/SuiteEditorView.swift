@@ -334,18 +334,7 @@ private struct RunToolbarContent: ToolbarContent {
         let blocker = store.runBlocker
         ToolbarItemGroup {
             if store.isRunning {
-                HStack(spacing: 8) {
-                    ProgressView(
-                        value: Double(store.completedSamples),
-                        total: Double(max(store.totalSamples, 1))
-                    )
-                    .frame(width: 90)
-                    Text("\(store.completedSamples) of \(store.totalSamples)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Evaluation progress")
+                RunToolbarProgress(completed: store.completedSamples, total: store.totalSamples)
                 Button("Cancel", role: .cancel) { store.cancelRun() }
             } else {
                 if store.isProcessingFiles {
