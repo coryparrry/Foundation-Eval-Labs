@@ -52,6 +52,7 @@ struct ContentView: View {
             switch store.selection {
             case .suite:
                 SuiteEditorView(store: store)
+                    .disclosureGroupStyle(FullWidthDisclosureStyle())
             case .run(let id):
                 if let run = store.run(with: id) {
                     RunDetailView(
@@ -62,6 +63,7 @@ struct ContentView: View {
                                 && $0.startedAt < run.startedAt
                         }
                     )
+                    .disclosureGroupStyle(FullWidthDisclosureStyle())
                 } else {
                     ContentUnavailableView(
                         "Run Not Found",
@@ -91,7 +93,7 @@ private struct RunHistorySidebar: View {
     }
 
     var body: some View {
-        List(selection: $store.selection) {
+        SidebarNavigationList(selection: $store.selection) {
             Section {
                 SuiteSidebarRow(
                     caseCount: store.draftSuite.cases.count,
@@ -117,7 +119,6 @@ private struct RunHistorySidebar: View {
                 }
             }
         }
-        .listStyle(.sidebar)
         .navigationTitle("Foundation Evals")
         .frame(minWidth: 250)
         .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 340)

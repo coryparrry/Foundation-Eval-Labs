@@ -56,3 +56,11 @@
 - User noted short spans had no useful visible indication. Render subpixel spans as one-point coloured vertical ticks at measured starts, including a visible right-edge tick, and retain solid duration bars for larger spans. Legend distinguishes ticks from measured bar widths.
 - User explicitly corrected this to solid bars for every step. Removed tick rendering before delivery; restored a two-point minimum visible solid bar, with measured start offsets and zoom retained.
 - Final solid-bar build passed Xcode BuildProject and git diff --check. Opened and explicitly activated the newest process. No UI tests run.
+
+# Run History regression and headless coverage
+
+- User identified Run History as unclickable and requested unit tests for recent regressions. Root cause reproduced in a hidden NSHostingView: globally inherited FullWidthDisclosureStyle converted five native sidebar rows into two section headers, removing the selectable run rows.
+- Removed the main-window global style, scoped it to editor/run detail content, and gave the actual sidebar a native-style boundary. Preserved native List selection and keyboard behavior.
+- Added portable UI components to exercise the actual sidebar/disclosure/bar code without launching the app. Tests cover native row preservation and bidirectional run/suite selection; offscreen coordinate clicks on heading words, trailing whitespace, disabled headings and nested content; solid bar centre pixels/opacity; short/end-of-axis bars; zoom and invalid geometry. Actual sidebar pointer simulation was excluded as unreliable; native row structure and selection bindings are verified.
+- Regression sensitivity verified: temporarily removing the style boundary made inheritedDisclosureStylePreservesSeparateSidebarRows fail (2 rows instead of 5); the fix was restored automatically.
+- Final verification: swift test --scratch-path /tmp/foundation-ui-regressions --filter NavigationInteractionTests|TimelineRenderingTests|WorkflowTimelineIntervalTests passed 16 tests in 3 suites. Xcode BuildProject(buildForTesting: true) passed. git diff --check passed. Independent review found no actionable production issues. No on-screen UI tests were run.

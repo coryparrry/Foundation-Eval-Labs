@@ -17,6 +17,8 @@ let portableTestSources = [
     "EvaluationFieldAssertionTests.swift",
     "MetricScorerTests.swift",
     "WorkflowTimelineIntervalTests.swift",
+    "NavigationInteractionTests.swift",
+    "TimelineRenderingTests.swift",
 ]
 
 let package = Package(
@@ -79,9 +81,14 @@ let package = Package(
             ],
             sources: portableProductionSources
         ),
+        .target(
+            name: "FoundationEvalsUIComponents",
+            path: "FoundationEvals/FoundationEvals/Views/Components",
+            sources: ["SidebarNavigationList.swift", "FullWidthDisclosureStyle.swift", "SolidTimelineBar.swift"]
+        ),
         .testTarget(
             name: "FoundationEvalsPortableTests",
-            dependencies: ["FoundationEvals"],
+            dependencies: ["FoundationEvals", "FoundationEvalsUIComponents"],
             path: "FoundationEvals/FoundationEvalsTests",
             exclude: [
                 "AccessibilitySelectionActionsTests.swift",

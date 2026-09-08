@@ -310,10 +310,10 @@ private struct TraceDurationBar: View {
                 }
                 if let start = node.startMilliseconds, let end = node.endMilliseconds {
                     let interval = WorkflowTimelineInterval(start: start, end: end, extent: extent, width: geometry.size.width)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(node.color.opacity(node.kind == .sample ? 0.60 : 0.85))
-                        .frame(width: max(2, interval.width), height: 10)
-                        .offset(x: min(interval.offset, max(0, geometry.size.width - 2)))
+                    SolidTimelineBar(
+                        width: interval.displayWidth, offset: interval.displayOffset,
+                        color: node.color.opacity(node.kind == .sample ? 0.60 : 0.85)
+                    )
                 } else {
                     Text("Not recorded").font(.system(size: 9)).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
