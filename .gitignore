@@ -29,3 +29,6 @@ FoundationEvals/FoundationEvals.xcodeproj/project.xcworkspace/xcuserdata/
 *.p8
 *.mobileprovision
 *.provisionprofile
+
+# Local working notes.
+/worklog.md
