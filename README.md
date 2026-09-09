@@ -112,7 +112,20 @@ xcodebuild -project FoundationEvals/FoundationEvals.xcodeproj \
 
 UI tests require an interactive Mac and a signed test runner. If macOS rejects a command-line UI runner before launch, run the tests directly from Xcode. The optional Core AI inference test requires compatible model resources.
 
-GitHub CI runs once per pull request and again on pushes to `main`. Linux workflow, script, and routing checks always run. Documentation, README artwork, demo media, and Python/shell-only tooling changes skip macOS jobs. Native changes compile the app and unit-test bundle and run portable core regressions. UI changes, including shared models, stores, and settings controllers, also run the portable UI component tests and compile the UI-test bundle. Backend-only service/MCP changes skip those UI checks. CI/project/dependency changes, unknown paths, manual runs, or unavailable Git history select full coverage. The **Route changed files** job summary records each decision. Its current macOS 26 image cannot execute the macOS 27 app or UI tests; run the native suite above before releasing. The portable package shares production source and existing test files with Xcode without lowering the app’s deployment target. See the [release guide](docs/releasing.md) for manually controlled, signed releases through **Release Me** and the local packaging alternative.
+GitHub CI classifies the complete pull request or `main` push diff, including deletions and both sides of renames. Linux workflow linting, shell checks, and Python example syntax checks remain lightweight and always run; unit tests and macOS jobs follow the affected code.
+
+| Changed files | Unit tests | Native build |
+|---|---|---|
+| Docs, README artwork, demo media, GitHub funding or ownership metadata | None | Skipped |
+| Release workflows and Python/shell tools | Related script modules; signature checks use macOS when affected | Skipped unless build tooling changes |
+| Portable scoring, installer, or UI component source | Suites that use the changed source, including shared dependencies | App and unit-test bundle; UI-test bundle when UI is affected |
+| Other app source | No unrelated portable suites; this code needs the native macOS 27 test environment | App and unit-test bundle; UI-test bundle when UI is affected |
+| Test files | Changed portable/script suites; app-only tests compile in their native target | Relevant native test target, if applicable |
+| CI routing, package/project settings, release version files, or unknown paths | Full coverage | Full build |
+
+Manual runs, malformed events, and unavailable Git history select full coverage. Release PR version changes still require the complete source checks used by installer publication. The **Route changed files** summary lists the selected suites and the reasons for each decision. Empty selections run no unit tests; a selected Swift suite that cannot be discovered fails instead of silently passing with zero tests.
+
+The explicit portable-source dependency map lives in `script/ci_routes.py`. Update it when adding a suite or a shared dependency; catalog tests check it against `Package.swift` and the test suite names. The portable package shares production source and existing tests with Xcode without lowering the app’s deployment target. The hosted macOS 26 image cannot execute the macOS 27 app or its UI tests, so run the native suite above before releasing. See the [release guide](docs/releasing.md) for signed releases through **Release Me** and local packaging.
 
 ## License
 
