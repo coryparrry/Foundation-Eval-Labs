@@ -21,6 +21,10 @@ jobs:
     outputs:
       native: ${{ steps.route.outputs.native }}
       ui: ${{ steps.route.outputs.ui }}
+      regression: ${{ steps.route.outputs.regression }}
+      swift_suites: ${{ steps.route.outputs.swift_suites }}
+      python_tests: ${{ steps.route.outputs.python_tests }}
+      macos_tests: ${{ steps.route.outputs.macos_tests }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -51,26 +55,32 @@ jobs:
         run: shellcheck script/*.sh
       - name: Check Python examples
         run: python3 -m compileall -q examples
-      - name: Test CI routing and release validation
-        run: python3 -m unittest discover -s script/tests -v
+      - name: Run selected script unit tests
+        if: needs.changes.outputs.python_tests != '[]'
+        env:
+          CI_TEST_SELECTION: ${{ needs.changes.outputs.python_tests }}
+        run: python3 script/ci_run_tests.py python
 
   regression:
     name: Portable regression tests
     needs: changes
-    if: ${{ needs.changes.outputs.native == 'true' }}
-    env:
-      UI_TESTS: NavigationInteractionTests|TimelineRenderingTests|RunToolbarProgressTests
+    if: ${{ needs.changes.outputs.regression == 'true' }}
     runs-on: xcode-27
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Execute production scoring and installer tests
-        run: swift test --enable-code-coverage --skip "$UI_TESTS"
-      - name: Execute UI component tests
-        if: ${{ needs.changes.outputs.ui == 'true' }}
-        run: swift test --enable-code-coverage --skip-build --filter "$UI_TESTS"
+      - name: Run selected portable Swift suites
+        if: needs.changes.outputs.swift_suites != '[]'
+        env:
+          CI_TEST_SELECTION: ${{ needs.changes.outputs.swift_suites }}
+        run: python3 script/ci_run_tests.py swift
+      - name: Run selected macOS script tests
+        if: needs.changes.outputs.macos_tests != '[]'
+        env:
+          CI_TEST_SELECTION: ${{ needs.changes.outputs.macos_tests }}
+        run: python3 script/ci_run_tests.py python
 
   build:
     name: Compile app and tests
