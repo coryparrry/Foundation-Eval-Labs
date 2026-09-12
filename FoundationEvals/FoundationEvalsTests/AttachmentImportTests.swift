@@ -75,7 +75,11 @@ struct AttachmentImportTests {
         try await waitForImport(store)
         #expect(store.notice?.contains("Could not import") == true)
         #expect(store.suite.attachments.isEmpty)
-        let attachmentDirectory = directory.appending(path: "store/Attachments")
+        let attachmentDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory.appending(path: "store"),
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        ).appending(path: "Attachments")
         #expect(try FileManager.default.contentsOfDirectory(atPath: attachmentDirectory.path).isEmpty)
         store.notice = nil
         store.importFiles([imageURL, textURL])

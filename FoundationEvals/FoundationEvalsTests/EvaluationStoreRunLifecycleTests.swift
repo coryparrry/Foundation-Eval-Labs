@@ -43,9 +43,14 @@ struct EvaluationStoreRunLifecycleTests {
         #expect(result.status == .passed)
         #expect(result.errorCategory == nil)
         #expect(store.runStatus(id: runID)?.phase == .completed)
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "active-run.json").path))
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        )
+        #expect(!FileManager.default.fileExists(atPath: suiteDirectory.appending(path: "active-run.json").path))
         #expect(FileManager.default.fileExists(
-            atPath: directory.appending(path: "Runs/\(runID.uuidString).json").path
+            atPath: suiteDirectory.appending(path: "Runs/\(runID.uuidString).json").path
         ))
 
         let reloadedStore = EvaluationStore(supportDirectory: directory)

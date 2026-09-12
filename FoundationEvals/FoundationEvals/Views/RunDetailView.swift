@@ -35,6 +35,7 @@ private enum ResultFilter: String, CaseIterable, Identifiable {
 
 struct RunDetailView: View {
     let run: EvaluationRun
+    @Bindable var store: EvaluationStore
     let baselineRuns: [EvaluationRun]
     @State private var exportDocument = JSONDocument()
     @State private var isExporting = false
@@ -45,6 +46,7 @@ struct RunDetailView: View {
             LazyVStack(alignment: .leading, spacing: 20) {
                 RunOverviewHeader(run: run)
                 RunSummaryDashboard(run: run)
+                RunWorkflowPanel(store: store, run: run)
                 ResultsSection(run: run)
                     .id(run.id)
                 RunAnalysisSection(run: run, baselineRuns: baselineRuns)

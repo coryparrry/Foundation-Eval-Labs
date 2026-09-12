@@ -92,6 +92,9 @@ struct MCPResourcePayload: Sendable {
 
 enum MCPToolCall: Sendable {
     case getState
+    case listProjects
+    case check(MCPCheckArguments)
+    case releaseReport(MCPReleaseReportArguments)
     case replaceSuite(MCPReplaceSuiteArguments)
     case uploadAttachment(MCPUploadAttachmentArguments)
     case removeAttachment(MCPRemoveAttachmentArguments)
@@ -101,6 +104,19 @@ enum MCPToolCall: Sendable {
     case analyzeRun(MCPAnalyzeRunArguments)
     case cancelRun(MCPCancelRunArguments)
     case deleteRun(MCPDeleteRunArguments)
+}
+
+struct MCPCheckArguments: Codable, Sendable {
+    var projectID: UUID
+    var suiteID: UUID
+    var runID: UUID
+    var expectedRevision: String?
+}
+
+struct MCPReleaseReportArguments: Codable, Sendable {
+    var projectID: UUID
+    var suiteID: UUID
+    var runID: UUID?
 }
 
 struct MCPReplaceSuiteArguments: Codable, Sendable {
@@ -300,6 +316,30 @@ enum MCPToolCatalog {
             properties: [:], required: [], readOnly: true
         ),
         tool(
+            "eval_list_projects", "List evaluation projects",
+            "List stable project and suite IDs for explicitly targeted automation. Repository links are returned only as local identity metadata.",
+            properties: [:], required: [], readOnly: true
+        ),
+        tool(
+            "eval_check", "Check an explicit suite",
+            "Select an exact project and suite by stable ID, validate its saved definition, and start a durable asynchronous run without relying on the current UI selection.",
+            properties: [
+                "projectID": uuid("Stable project UUID from eval_list_projects."),
+                "suiteID": uuid("Stable suite UUID from eval_list_projects."),
+                "runID": uuid("Stable caller-supplied run UUID."),
+                "expectedRevision": string("Optional exact suite revision. If omitted, executes the currently saved revision after targeting.")
+            ], required: ["projectID", "suiteID", "runID"], idempotent: true
+        ),
+        tool(
+            "eval_release_report", "Evaluate a release check",
+            "Select an explicit project and suite so the native UI follows the target, then evaluate its selected or latest saved run. Missing, stale, incomplete, or incompatible evidence fails closed.",
+            properties: [
+                "projectID": uuid("Stable project UUID from eval_list_projects."),
+                "suiteID": uuid("Stable suite UUID from eval_list_projects."),
+                "runID": uuid("Optional saved run UUID; defaults to the latest run for this suite.")
+            ], required: ["projectID", "suiteID"]
+        ),
+        tool(
             "eval_replace_suite", "Replace evaluation suite",
             "Atomically replace editable suite fields and ordered cases while preserving suite identity and attachments. Include suite.features to replace the Foundation Models feature configuration; omit it to preserve the current configuration.",
             properties: [
@@ -405,6 +445,14 @@ enum MCPToolCatalog {
                 let object = try requireObject(arguments)
                 guard object.isEmpty else { throw MCPToolInputError.invalidArguments }
                 return .getState
+            case "eval_list_projects":
+                let object = try requireObject(arguments)
+                guard object.isEmpty else { throw MCPToolInputError.invalidArguments }
+                return .listProjects
+            case "eval_check":
+                return .check(try arguments.decode(MCPCheckArguments.self))
+            case "eval_release_report":
+                return .releaseReport(try arguments.decode(MCPReleaseReportArguments.self))
             case "eval_replace_suite":
                 if arguments.objectValue?["suite"]?.objectValue?["features"] == .null {
                     throw MCPToolInputError.invalidArguments

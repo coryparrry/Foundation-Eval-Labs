@@ -17,12 +17,15 @@ struct ContentView: View {
             RunHistorySidebar(store: store)
         } detail: {
             switch store.selection {
+            case .overview:
+                WorkspaceOverviewView(store: store)
             case .suite:
                 SuiteEditorView(store: store)
             case .run(let id):
                 if let run = store.run(with: id) {
                     RunDetailView(
                         run: run,
+                        store: store,
                         baselineRuns: store.runs.filter {
                             $0.id != run.id
                                 && $0.suiteID == run.suiteID
@@ -79,6 +82,7 @@ private struct RunHistorySidebar: View {
     @State private var searchText = ""
     @State private var runToDelete: EvaluationRun?
     @State private var isConfirmingDeletion = false
+    @State private var isManagingWorkspace = false
 
     private var visibleRuns: [EvaluationRun] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -91,12 +95,28 @@ private struct RunHistorySidebar: View {
 
     var body: some View {
         List(selection: $store.selection) {
-            Section {
+            Section("Workspace") {
+                Label("Project Overview", systemImage: "square.grid.2x2")
+                    .tag(SidebarSelection.overview)
                 SuiteSidebarRow(
                     caseCount: store.draftSuite.cases.count,
                     repetitions: store.draftSuite.repetitions
                 )
                 .tag(SidebarSelection.suite)
+            }
+
+            Section("Suites") {
+                ForEach(store.suiteRecords.filter { !$0.isArchived }) { record in
+                    Button {
+                        do {
+                            try store.switchSuite(id: record.id)
+                            store.selection = .suite
+                        } catch { store.notice = error.localizedDescription }
+                    } label: {
+                        Label(record.name, systemImage: record.id == store.selectedSuiteID ? "checkmark.circle.fill" : "circle")
+                    }
+                    .buttonStyle(.plain)
+                }
             }
 
             Section("Run History") {
@@ -134,6 +154,19 @@ private struct RunHistorySidebar: View {
                         .font(.system(size: 17, weight: .semibold))
                 }
                 Spacer()
+                Menu("Workspace actions", systemImage: "ellipsis.circle") {
+                    Button("Manage Projects and Suites…") { isManagingWorkspace = true }
+                    Divider()
+                    Button("New Suite") {
+                        do { _ = try store.createSuite(name: "New suite"); store.selection = .suite }
+                        catch { store.notice = error.localizedDescription }
+                    }
+                    Button("Duplicate Suite") {
+                        do { _ = try store.duplicateSuite(id: store.selectedSuiteID); store.selection = .suite }
+                        catch { store.notice = error.localizedDescription }
+                    }
+                }
+                .labelStyle(.iconOnly)
             }
             .padding(18)
             .overlay(alignment: .bottom) { Divider() }
@@ -169,6 +202,9 @@ private struct RunHistorySidebar: View {
             }
         } message: { run in
             Text("This permanently removes the local trace for \(run.suiteName) from \(run.startedAt.formatted(date: .abbreviated, time: .shortened)).")
+        }
+        .sheet(isPresented: $isManagingWorkspace) {
+            WorkspaceManagerView(store: store)
         }
     }
 }

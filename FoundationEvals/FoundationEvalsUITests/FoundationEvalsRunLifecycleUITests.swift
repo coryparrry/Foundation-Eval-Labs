@@ -4,6 +4,7 @@ import XCTest
 final class FoundationEvalsRunLifecycleUITests: XCTestCase {
     private var app: XCUIApplication!
     private var storage: URL!
+    private var storageName: String!
     private var fixture: LocalHTTPModelFixture!
 
     @MainActor
@@ -13,8 +14,10 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        storage = FileManager.default.temporaryDirectory
-            .appending(path: "FoundationEvalsUITests-\(UUID().uuidString)")
+        storageName = UUID().uuidString
+        storage = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/FoundationEvalsUITests", directoryHint: .isDirectory)
+            .appending(path: storageName, directoryHint: .isDirectory)
         fixture = try LocalHTTPModelFixture()
         app = launchApp()
     }
@@ -28,6 +31,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         app = nil
         fixture = nil
         storage = nil
+        storageName = nil
     }
 
     @MainActor
@@ -97,7 +101,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
         let launchedApp = XCUIApplication()
         launchedApp.launchArguments += [
             "--disable-mcp-autostart",
-            "--evaluation-storage", storage.path
+            "--evaluation-storage-name", storageName
         ]
         launchedApp.launch()
         return launchedApp
@@ -126,7 +130,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
             .scroll(byDeltaX: 0, deltaY: -480)
         replaceText(in: expected, with: "Deterministic fixture stream.")
 
-        app.radioButtons["Model"].click()
+        app.radioButtons["Advanced"].click()
         let provider = app.popUpButtons["Model provider"]
         XCTAssertTrue(provider.waitForExistence(timeout: 3))
         provider.click()

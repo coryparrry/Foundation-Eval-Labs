@@ -143,7 +143,11 @@ struct MCPStoreAuthorityTests {
             plannedCount: 1
         )
         let canonicalData = try CanonicalJSON.data(for: run)
-        let runURL = directory.appending(path: "Runs/\(run.id.uuidString).json")
+        let runURL = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        ).appending(path: "Runs/\(run.id.uuidString).json")
         try canonicalData.write(to: runURL, options: .atomic)
         store.runs = [run]
         let authority = MCPStoreAuthority.make(store: store)

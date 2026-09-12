@@ -8,11 +8,12 @@ final class FoundationEvalsUITests: XCTestCase {
     @MainActor
     func testSuiteEditorShowsPrimaryRunControls() throws {
         let app = XCUIApplication()
-        let storage = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let storageName = UUID().uuidString
+        let storage = uiTestStorage(name: storageName)
         defer { try? FileManager.default.removeItem(at: storage) }
         app.launchArguments += [
             "--disable-mcp-autostart",
-            "--evaluation-storage", storage.path
+            "--evaluation-storage-name", storageName
         ]
         app.launch()
         defer { app.terminate() }
@@ -41,7 +42,7 @@ final class FoundationEvalsUITests: XCTestCase {
 
         let showSidebar = app.buttons["Show Sidebar"]
         if showSidebar.exists { showSidebar.click() }
-        let connector = app.descendants(matching: .any)["Open MCP Connector"]
+        let connector = app.toolbars.buttons["MCP Connector"]
         XCTAssertTrue(connector.waitForExistence(timeout: 2))
         connector.click()
         XCTAssertTrue(app.buttons["Codex install or update"].waitForExistence(timeout: 2))
@@ -52,7 +53,7 @@ final class FoundationEvalsUITests: XCTestCase {
         app.radioButtons["Instructions"].click()
         XCTAssertTrue(app.buttons["Add Files"].exists)
 
-        app.radioButtons["Model"].click()
+        app.radioButtons["Advanced"].click()
         XCTAssertTrue(app.popUpButtons["Model provider"].exists)
         XCTAssertTrue(app.popUpButtons["Sampling"].exists)
         XCTAssertFalse(app.popUpButtons["System model use case"].exists)
@@ -99,9 +100,10 @@ final class FoundationEvalsUITests: XCTestCase {
     @MainActor
     func testCaseSelectionIsSharedBetweenCasesAndScoring() throws {
         let app = XCUIApplication()
-        let storage = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let storageName = UUID().uuidString
+        let storage = uiTestStorage(name: storageName)
         defer { try? FileManager.default.removeItem(at: storage) }
-        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage", storage.path]
+        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage-name", storageName]
         app.launch()
         defer { app.terminate() }
         app.activate()
@@ -137,9 +139,10 @@ final class FoundationEvalsUITests: XCTestCase {
     @MainActor
     func testCaseSearchKeepsEditorAndScoringSelectionAligned() throws {
         let app = XCUIApplication()
-        let storage = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let storageName = UUID().uuidString
+        let storage = uiTestStorage(name: storageName)
         defer { try? FileManager.default.removeItem(at: storage) }
-        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage", storage.path]
+        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage-name", storageName]
         app.launch()
         defer { app.terminate() }
         app.activate()
@@ -172,6 +175,12 @@ final class FoundationEvalsUITests: XCTestCase {
         app.buttons["Add Case"].click()
         XCTAssertTrue(name.waitForExistence(timeout: 2))
         XCTAssertEqual(search.value as? String, "", "Selecting a new case clears an incompatible search")
+    }
+
+    private func uiTestStorage(name: String) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/FoundationEvalsUITests", directoryHint: .isDirectory)
+            .appending(path: name, directoryHint: .isDirectory)
     }
 
 }

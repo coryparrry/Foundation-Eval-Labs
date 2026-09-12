@@ -15,6 +15,26 @@ enum MCPStoreAuthority {
             switch call {
             case .getState:
                 return try state(store)
+            case .listProjects:
+                return listProjects(store)
+            case .check(let arguments):
+                try store.activateAutomationTarget(projectID: arguments.projectID, suiteID: arguments.suiteID)
+                let revision = arguments.expectedRevision ?? store.suiteRevision
+                let duplicate = store.runStatus(id: arguments.runID) != nil
+                let operation = try store.startRun(id: arguments.runID, expectedRevision: revision)
+                return mutation(duplicate ? "duplicate" : "committed", [
+                    "projectID": .string(arguments.projectID.uuidString),
+                    "suiteID": .string(arguments.suiteID.uuidString),
+                    "revision": .string(revision),
+                    "run": try operationJSON(operation)
+                ])
+            case .releaseReport(let arguments):
+                try store.activateAutomationTarget(projectID: arguments.projectID, suiteID: arguments.suiteID)
+                let report = store.releaseCheckReport(runID: arguments.runID)
+                return readPayload([
+                    "report": try json(report),
+                    "markdown": .string(EvaluationReleaseCheckEvaluator.markdown(report))
+                ])
             case .replaceSuite(let arguments):
                 let before = store.suiteRevision
                 let revision = try store.replaceSuite(
@@ -75,6 +95,27 @@ enum MCPStoreAuthority {
         } catch {
             return failure(error)
         }
+    }
+
+    private static func listProjects(_ store: EvaluationStore) -> MCPToolPayload {
+        readPayload([
+            "selectedProjectID": .string(store.selectedProjectID.uuidString),
+            "selectedSuiteID": .string(store.selectedSuiteID.uuidString),
+            "projects": .array(store.projects.filter { !$0.isArchived }.map { project in
+                var value: [String: MCPJSONValue] = [
+                    "id": .string(project.id.uuidString),
+                    "name": .string(project.name),
+                    "suites": .array(project.suites.filter { !$0.isArchived }.map { suite in
+                        .object([
+                            "id": .string(suite.id.uuidString),
+                            "name": .string(suite.name)
+                        ])
+                    })
+                ]
+                value["repositoryRoot"] = project.repository.map { .string($0.rootPath) } ?? .null
+                return .object(value)
+            })
+        ])
     }
 
     private static func read(_ request: MCPResourceRequest, store: EvaluationStore) async -> MCPResourcePayload {
@@ -667,7 +708,7 @@ enum MCPStoreAuthority {
         case EvaluationStoreError.staleRevision(let current):
             outcome = "conflicted"
             fields["currentRevision"] = .string(current)
-        case EvaluationStoreError.resourceConflict:
+        case EvaluationStoreError.resourceConflict, EvaluationWorkspaceError.repositoryConflict:
             outcome = "conflicted"
         default:
             outcome = "failed"
@@ -686,6 +727,7 @@ enum MCPStoreAuthority {
         case EvaluationStoreError.resourceConflict: "resource_conflict"
         case EvaluationStoreError.resourceNotFound: "not_found"
         case EvaluationStoreError.persistence: "persistence_failed"
+        case EvaluationWorkspaceError.repositoryConflict: "resource_conflict"
         case MCPStoreAuthorityError.invalidCursor: "invalid_cursor"
         default: "invalid_request"
         }
