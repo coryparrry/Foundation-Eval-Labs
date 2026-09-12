@@ -301,6 +301,14 @@ actor EvaluationRunner {
         liveResponse: @Sendable (EvaluationLiveResponse) async -> Void
     ) async -> EvaluationSampleResult {
         let started = ContinuousClock.now
+        let workflow = EvaluationWorkflowRecorder(origin: started)
+        let rootSpanID = workflow.begin(kind: .sample, title: evaluationCase.name, metadata: [
+            "caseID": evaluationCase.id.uuidString, "repetition": String(repetition),
+            "provider": suite.modelConfiguration.provider.rawValue,
+            "scoringMode": suite.scoringMode.rawValue
+        ], at: started)
+        let preparationSpanID = workflow.begin(kind: .preparation, title: "Prepare input", parentID: rootSpanID)
+        var generationSpanID: UUID?
         let signpostID = signposter.makeSignpostID()
         let interval = signposter.beginInterval("Model request", id: signpostID)
         let toolCallLimiter = EvaluationToolCallLimiter(
@@ -308,11 +316,13 @@ actor EvaluationRunner {
         )
         let recorder = ReferenceToolRecorder(
             maximumCalls: suite.modelConfiguration.maximumToolCalls,
-            callLimiter: toolCallLimiter
+            callLimiter: toolCallLimiter,
+            workflowRecorder: workflow
         )
         let customRecorder = EvaluationCustomToolRecorder(
             maximumCalls: suite.modelConfiguration.maximumToolCalls,
-            callLimiter: toolCallLimiter
+            callLimiter: toolCallLimiter,
+            workflowRecorder: workflow
         )
         let profileRecorder = EvaluationProfileRecorder()
         let builtinToolNames = Set(
@@ -344,6 +354,8 @@ actor EvaluationRunner {
         var imageInputTokenCountAvailable = images.isEmpty
 
         do {
+            let sessionPreparationSpanID = workflow.begin(kind: .preparation, title: "Set up session", parentID: preparationSpanID,
+                metadata: ["operation": "sessionSetup"])
             var tools: [any Tool] = suite.modelConfiguration.referenceMode == .lookupTool
                 ? [ReferenceLookupTool(index: ReferenceSearchIndex(attachments: suite.attachments), recorder: recorder)] : []
             tools += try EvaluationCustomTool.makeTools(definitions: suite.features.tools, recorder: customRecorder)
@@ -358,7 +370,10 @@ actor EvaluationRunner {
                 tools.append(spotlightRuntime.tool)
                 spotlightRecording = spotlightRuntime.startRecording()
             }
+            let restoreSpanID = workflow.begin(kind: .preparation, title: "Restore conversation", parentID: sessionPreparationSpanID,
+                metadata: ["operation": "restoreHistory"])
             let restoredHistory = try EvaluationConversationRuntime.restoredHistory(from: evaluationCase.conversation)
+            workflow.finish(restoreSpanID, metadata: ["historyEntries": String(restoredHistory.count)])
             restoredBuiltinToolCallIDs = Set(
                 EvaluationBuiltinToolTrace.tools(from: restoredHistory, names: builtinToolNames).map(\.id)
             )
@@ -379,17 +394,24 @@ actor EvaluationRunner {
                 )
             session = activeSession
             activeSession.transcriptErrorHandlingPolicy = suite.modelConfiguration.transcriptErrorHandlingPolicy
+            workflow.finish(sessionPreparationSpanID, metadata: ["toolCount": String(tools.count)])
             if suite.features.prewarm {
+                let prewarmSpanID = workflow.begin(kind: .preparation, title: "Prewarm session", parentID: preparationSpanID,
+                    metadata: ["operation": "prewarm", "timingScope": "Prewarm request and configured wait"])
+
                 let prefix = suite.modelConfiguration.customizationSettings.warmupPrefix
                 activeSession.prewarm(promptPrefix: prefix.isEmpty ? nil : Prompt { prefix })
                 let warmupSeconds = suite.modelConfiguration.customizationSettings.warmupSeconds
                 if warmupSeconds > 0 {
                     try await Task.sleep(for: .seconds(warmupSeconds))
                 }
+                workflow.finish(prewarmSpanID, metadata: ["configuredWaitSeconds": String(warmupSeconds)])
             }
 
             for (index, setupTurn) in evaluationCase.conversation.setupTurns.enumerated() {
                 let turnStarted = ContinuousClock.now
+                let setupPreparationSpanID = workflow.begin(kind: .preparation, title: "Prepare setup turn \(index + 1)",
+                    parentID: preparationSpanID, metadata: ["operation": "prepareSetupTurn", "turnID": setupTurn.id.uuidString])
                 var setupEffectivePrompt: String?
                 do {
                     try Task.checkCancellation()
@@ -423,7 +445,13 @@ actor EvaluationRunner {
                         historyImageTokenCountAvailable: historyEstimate.imageTokenCountAvailable
                     )
                     setupEffectivePrompt = setupPrepared.text
+                    workflow.finish(setupPreparationSpanID, metadata: ["estimatedInputTokens": String(setupPrepared.tokenCount)])
                     activePhase = "generation"
+                    let setupSpanID = workflow.begin(
+                        kind: .generation, title: "Setup turn \(index + 1)", parentID: preparationSpanID,
+                        metadata: ["turnID": setupTurn.id.uuidString, "role": "setup", "setupTurn": String(index + 1)]
+                    )
+                    workflow.activeParentID = setupSpanID
                     let response = try await EvaluationConversationRuntime.generateSetupTurn(
                         setupPrepared.prompt,
                         session: activeSession,
@@ -447,6 +475,13 @@ actor EvaluationRunner {
                             ))
                         }
                     )
+                    var setupMetadata = EvaluationWorkflowRecorder.usageMetadata(Self.usage(from: response.usage))
+                    if let firstContentMilliseconds = response.firstContentMilliseconds {
+                        setupMetadata["firstContentMilliseconds"] = String(firstContentMilliseconds)
+                        setupMetadata["firstContentTimingSource"] = "App-observed first visible content"
+                    }
+                    workflow.finish(setupSpanID, metadata: setupMetadata)
+                    workflow.activeParentID = nil
                     activePhase = "preparation"
                     builtinToolCalls = Self.mergingBuiltinToolCalls(
                         builtinToolCalls,
@@ -467,6 +502,7 @@ actor EvaluationRunner {
                         errorMessage: nil
                     ))
                 } catch {
+                    let failedAt = ContinuousClock.now
                     refusalTrace = await EvaluationRefusalTrace.capture(from: error)
                     builtinToolCalls = Self.mergingBuiltinToolCalls(
                         builtinToolCalls,
@@ -476,6 +512,10 @@ actor EvaluationRunner {
                         ).filter { !restoredBuiltinToolCallIDs.contains($0.id) }
                     )
                     let traceError = Self.traceError(error)
+                    workflow.finish(setupPreparationSpanID, status: EvaluationWorkflowRecorder.status(for: error),
+                        errorMessage: traceError.message, at: failedAt)
+                    workflow.finish(workflow.activeParentID, status: EvaluationWorkflowRecorder.status(for: error),
+                        errorMessage: traceError.message, at: failedAt)
                     conversationTrace.turns.append(EvaluationConversationTurnTrace(
                         id: setupTurn.id,
                         kind: .setup,
@@ -492,10 +532,15 @@ actor EvaluationRunner {
                 }
             }
 
+            let historyPolicySpanID = workflow.begin(kind: .preparation, title: "Apply conversation history", parentID: preparationSpanID,
+                metadata: ["operation": "applyHistoryPolicy"])
             let historyCounts = EvaluationConversationRuntime.applyHistoryPolicy(
                 evaluationCase.conversation,
                 to: activeSession
             )
+            workflow.finish(historyPolicySpanID, metadata: ["entriesBefore": String(historyCounts.before), "entriesAfter": String(historyCounts.after)])
+            let promptPreparationSpanID = workflow.begin(kind: .preparation, title: "Prepare scored prompt", parentID: preparationSpanID,
+                metadata: ["operation": "preparePrompt"])
             conversationTrace.historyEntryCountBeforeFinal = historyCounts.before
             conversationTrace.historyEntryCountAfterPolicy = historyCounts.after
             let storedHistory = Array(activeSession.transcript.history)
@@ -522,8 +567,13 @@ actor EvaluationRunner {
             imageInputTokenCountAvailable = imageInputTokenCountAvailable
                 && prepared.imageInputTokenCountAvailable
             effectivePrompt = prepared.text
+            workflow.finish(promptPreparationSpanID, metadata: ["estimatedInputTokens": String(prepared.tokenCount)])
             timing.preparationMilliseconds = Self.milliseconds(since: started)
             generationStarted = ContinuousClock.now
+            workflow.finish(preparationSpanID, metadata: ["estimatedInputTokens": String(prepared.tokenCount)])
+            generationSpanID = workflow.begin(kind: .generation, title: "Generate response", parentID: rootSpanID,
+                metadata: ["role": "evaluation", "streaming": String(suite.features.streamResponse)])
+            workflow.activeParentID = generationSpanID
             activePhase = "generation"
             let response = try await EvaluationFeatureResponse.generate(
                 session: activeSession, prompt: prepared.prompt, suite: suite,
@@ -547,6 +597,13 @@ actor EvaluationRunner {
                     names: builtinToolNames
                 )
             )
+            var generationMetadata = EvaluationWorkflowRecorder.usageMetadata(Self.usage(from: response.usage))
+            if let firstContentMilliseconds = response.firstContentMilliseconds {
+                generationMetadata["firstContentMilliseconds"] = String(firstContentMilliseconds)
+                generationMetadata["firstContentTimingSource"] = "App-observed first visible content"
+            }
+            workflow.finish(generationSpanID, metadata: generationMetadata)
+            workflow.activeParentID = nil
             featureTrace.firstContentMilliseconds = response.firstContentMilliseconds
             signposter.endInterval("Model request", interval)
             activePhase = "scoring"
@@ -600,6 +657,9 @@ actor EvaluationRunner {
                     .filter { !$0.isEmpty }.joined(separator: "\n\n")
             }
             let scoringStarted = ContinuousClock.now
+            let scoringSpanID = workflow.begin(kind: .scoring, title: "Score response", parentID: rootSpanID,
+                metadata: ["scoringMode": suite.scoringMode.rawValue])
+            workflow.activeParentID = scoringSpanID
             let scoring = await score(
                 response: response.content,
                 evaluationCase: evaluationCase,
@@ -611,7 +671,8 @@ actor EvaluationRunner {
                 contextSize: contextSize,
                 modelName: modelName,
                 externalJudge: externalJudge,
-                toolEvidence: toolEvidence
+                toolEvidence: toolEvidence,
+                workflowRecorder: workflow
             )
             timing.scoringMilliseconds = Self.milliseconds(since: scoringStarted)
             let assertionResults = EvaluationFieldAssertions.evaluate(
@@ -624,6 +685,13 @@ actor EvaluationRunner {
                 allowAssertionsToScore: scoringSuite.scoringMode == .review
             )
 
+            let workflowStatus: EvaluationWorkflowSpanStatus = scoring.errorCategory == "cancelled"
+                ? .cancelled : scoring.errorCategory != nil || finalStatus == .failed ? .failed : .succeeded
+            workflow.finish(scoringSpanID, status: workflowStatus, errorMessage: scoring.errorMessage,
+                metadata: ["resultStatus": finalStatus.rawValue])
+            workflow.finish(rootSpanID, status: workflowStatus, errorMessage: scoring.errorMessage,
+                metadata: ["resultStatus": finalStatus.rawValue])
+            workflow.activeParentID = nil
             return EvaluationSampleResult(
                 caseID: evaluationCase.id,
                 caseName: evaluationCase.name,
@@ -652,9 +720,11 @@ actor EvaluationRunner {
                 judgeIdentity: scoring.identity,
                 judgeCost: scoring.cost,
                 fieldAssertionResults: assertionResults.isEmpty ? nil : assertionResults,
-                imageInputTokenCountAvailable: imageInputTokenCountAvailable
+                imageInputTokenCountAvailable: imageInputTokenCountAvailable,
+                workflowTrace: workflow.snapshot()
             )
         } catch {
+            let failedAt = ContinuousClock.now
             signposter.endInterval("Model request", interval)
             if refusalTrace == nil {
                 refusalTrace = await EvaluationRefusalTrace.capture(from: error)
@@ -668,6 +738,8 @@ actor EvaluationRunner {
             if traceError.category == "generation", activePhase != "generation" {
                 traceError.category = activePhase
             }
+            workflow.finishOpenSpans(status: EvaluationWorkflowRecorder.status(for: error), errorMessage: traceError.message,
+                excluding: rootSpanID, at: failedAt)
             if let finalTurnStarted,
                !conversationTrace.turns.contains(where: { $0.kind == .evaluation }) {
                 conversationTrace.turns.append(EvaluationConversationTurnTrace(
@@ -712,6 +784,8 @@ actor EvaluationRunner {
                 )
             }
             let toolCalls = await recorder.snapshot()
+            workflow.finish(rootSpanID, status: EvaluationWorkflowRecorder.status(for: error), errorMessage: traceError.message)
+            workflow.activeParentID = nil
             return EvaluationSampleResult(
                 caseID: evaluationCase.id,
                 caseName: evaluationCase.name,
@@ -735,7 +809,8 @@ actor EvaluationRunner {
                 timing: timing,
                 featureTrace: featureTrace,
                 refusal: refusalTrace,
-                imageInputTokenCountAvailable: imageInputTokenCountAvailable
+                imageInputTokenCountAvailable: imageInputTokenCountAvailable,
+                workflowTrace: workflow.snapshot()
             )
         }
     }

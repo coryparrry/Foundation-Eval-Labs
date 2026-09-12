@@ -7,6 +7,7 @@ let portableProductionSources = [
     "MCP/Installer/CodexMCPInstaller.swift",
     "Models/EvaluationFieldAssertion.swift",
     "Models/EvaluationScoringTypes.swift",
+    "Models/WorkflowTimelineInterval.swift",
     "Services/EvaluationFieldAssertions.swift",
     "Services/MetricScorer.swift",
 ]
@@ -15,6 +16,10 @@ let portableTestSources = [
     "CodexMCPInstallerTests.swift",
     "EvaluationFieldAssertionTests.swift",
     "MetricScorerTests.swift",
+    "WorkflowTimelineIntervalTests.swift",
+    "NavigationInteractionTests.swift",
+    "TimelineRenderingTests.swift",
+    "RunToolbarProgressTests.swift",
 ]
 
 let package = Package(
@@ -47,6 +52,8 @@ let package = Package(
                 "Models/EvaluationSpotlightConfiguration.swift",
                 "Models/EvaluationTranscriptTrace.swift",
                 "Models/EvaluationVisionToolConfiguration.swift",
+                "Models/EvaluationWorkflowTrace.swift",
+                "Models/WorkflowTracePresentation.swift",
                 "Resources",
                 "Services/TelemetryController.swift",
                 "Services/CoreAIModelLoader.swift",
@@ -61,6 +68,8 @@ let package = Package(
                 "Services/EvaluationRunner+Prompt.swift",
                 "Services/EvaluationRunner+Support.swift",
                 "Services/EvaluationRunner.swift",
+                "Services/EvaluationWorkflowRecorder.swift",
+                "Services/EvaluationWorkflowHTTPRequest.swift",
                 "Services/EvaluationSchemaBuilder.swift",
                 "Services/EvaluationSpotlightSearchRuntime.swift",
                 "Services/FoundationEvalsMCPRuntime.swift",
@@ -73,9 +82,14 @@ let package = Package(
             ],
             sources: portableProductionSources
         ),
+        .target(
+            name: "FoundationEvalsUIComponents",
+            path: "FoundationEvals/FoundationEvals/Views/Components",
+            sources: ["SidebarNavigationList.swift", "FullWidthDisclosureStyle.swift", "SolidTimelineBar.swift", "RunToolbarProgress.swift"]
+        ),
         .testTarget(
             name: "FoundationEvalsPortableTests",
-            dependencies: ["FoundationEvals"],
+            dependencies: ["FoundationEvals", "FoundationEvalsUIComponents"],
             path: "FoundationEvals/FoundationEvalsTests",
             exclude: [
                 "AccessibilitySelectionActionsTests.swift",
@@ -105,6 +119,8 @@ let package = Package(
                 "SpotlightSearchToolTests.swift",
                 "TelemetryControllerTests.swift",
                 "TraceTests.swift",
+                "EvaluationWorkflowCaptureTests.swift",
+                "WorkflowTracePresentationTests.swift",
                 "TranscriptTraceTests.swift",
             ],
             sources: portableTestSources

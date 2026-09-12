@@ -110,6 +110,5 @@ struct FieldAssertionEvidenceSection: View {
             .font(.callout)
             .padding(.top, 8)
         }
-        .disclosureGroupStyle(TraceDisclosureStyle(title: "JSON field assertions · \(results.filter { $0.passed }.count) of \(results.count) passed"))
     }
 }

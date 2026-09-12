@@ -27,16 +27,18 @@ actor EvaluationCustomToolRecorder {
     private static let maximumRecordedRejections = 4
 
     let maximumCalls: Int
+    let workflowRecorder: EvaluationWorkflowRecorder?
     private let callLimiter: EvaluationToolCallLimiter
     private var rejectedCallCount = 0
     private var traces: [EvaluationCustomToolCallTrace] = []
 
-    init(maximumCalls: Int, callLimiter: EvaluationToolCallLimiter? = nil) {
+    init(maximumCalls: Int, callLimiter: EvaluationToolCallLimiter? = nil, workflowRecorder: EvaluationWorkflowRecorder? = nil) {
+        self.workflowRecorder = workflowRecorder
         self.maximumCalls = min(max(0, maximumCalls), Self.maximumCallsPerSample)
         self.callLimiter = callLimiter ?? EvaluationToolCallLimiter(maximumCalls: maximumCalls)
     }
 
-    func beginCall(toolName: String, argumentsJSON: String) async throws -> UUID {
+    func beginCall(id: UUID, toolName: String, argumentsJSON: String) async throws {
         do {
             try await callLimiter.beginCall()
         } catch {
@@ -44,7 +46,7 @@ actor EvaluationCustomToolRecorder {
                 rejectedCallCount += 1
                 traces.append(
                     EvaluationCustomToolCallTrace(
-                        id: UUID(),
+                        id: id,
                         toolName: toolName,
                         argumentsJSON: argumentsJSON.boundedUTF8(
                             to: EvaluationCustomToolDefinition.maximumArgumentBytes
@@ -59,7 +61,6 @@ actor EvaluationCustomToolRecorder {
             throw EvaluationCustomToolError.callLimitReached(maximum: maximumCalls)
         }
 
-        let id = UUID()
         traces.append(
             EvaluationCustomToolCallTrace(
                 id: id,
@@ -73,7 +74,6 @@ actor EvaluationCustomToolRecorder {
                 errorDescription: nil
             )
         )
-        return id
     }
 
     func finishCall(
@@ -199,7 +199,17 @@ struct EvaluationCustomTool: Tool {
     @concurrent
     func call(arguments: GeneratedContent) async throws -> String {
         let argumentsJSON = arguments.jsonString
-        let callID = try await recorder.beginCall(toolName: name, argumentsJSON: argumentsJSON)
+        let callID = UUID()
+        let workflow = recorder.workflowRecorder
+        let spanID = workflow?.begin(kind: .tool, title: name, parentID: workflow?.activeParentID,
+            metadata: ["toolName": name, "toolSource": "custom", "callID": callID.uuidString,
+                       "argumentBytes": String(argumentsJSON.utf8.count)])
+        do {
+            try await recorder.beginCall(id: callID, toolName: name, argumentsJSON: argumentsJSON)
+        } catch {
+            workflow?.finish(spanID, status: EvaluationWorkflowRecorder.status(for: error), errorMessage: error.localizedDescription)
+            throw error
+        }
         let start = ContinuousClock.now
         var observedOutput: String?
 
@@ -237,10 +247,12 @@ struct EvaluationCustomTool: Tool {
             case .fixture:
                 output = definition.fixtureResponse
             case .localHTTP:
-                output = try await httpClient.post(
-                    body: requestBody,
-                    to: definition.validatedEndpointURL()
-                )
+                let context = workflow.flatMap { workflow in
+                    spanID.map { EvaluationWorkflowHTTPContext(recorder: workflow, parentID: $0) }
+                }
+                output = try await EvaluationWorkflowHTTPContext.$current.withValue(context) {
+                    try await httpClient.post(body: requestBody, to: definition.validatedEndpointURL())
+                }
             }
             observedOutput = output
             guard output.utf8.count <= EvaluationCustomToolDefinition.maximumOutputBytes else {
@@ -260,6 +272,7 @@ struct EvaluationCustomTool: Tool {
                 durationMilliseconds: start.milliseconds(to: .now),
                 outcome: .succeeded
             )
+            workflow?.finish(spanID, metadata: ["outputBytes": String(output.utf8.count)])
             return output
         } catch is CancellationError {
             await recorder.finishCall(
@@ -269,10 +282,13 @@ struct EvaluationCustomTool: Tool {
                 outcome: .cancelled,
                 errorDescription: "The custom tool call was cancelled."
             )
+            workflow?.finish(spanID, status: .cancelled, errorMessage: "The custom tool call was cancelled.")
             throw CancellationError()
         } catch {
             let outcome: EvaluationCustomToolCallOutcome
-            if error is EvaluationCustomToolRejectedError {
+            if EvaluationWorkflowRecorder.status(for: error) == .cancelled {
+                outcome = .cancelled
+            } else if error is EvaluationCustomToolRejectedError {
                 outcome = .rejected
             } else if let toolError = error as? EvaluationCustomToolError,
                       toolError.isPolicyRejection {
@@ -287,6 +303,7 @@ struct EvaluationCustomTool: Tool {
                 outcome: outcome,
                 errorDescription: error.localizedDescription
             )
+            workflow?.finish(spanID, status: EvaluationWorkflowRecorder.status(for: error), errorMessage: error.localizedDescription)
             throw error
         }
     }
@@ -548,27 +565,38 @@ final class EvaluationLocalHTTPToolClient: EvaluationCustomToolHTTPClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/plain", forHTTPHeaderField: "Accept")
 
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let response = response as? HTTPURLResponse else {
-            throw EvaluationCustomToolError.invalidHTTPResponse
-        }
-        guard (200...299).contains(response.statusCode) else {
-            throw EvaluationCustomToolError.httpStatus(response.statusCode)
-        }
-
-        var data = Data()
-        data.reserveCapacity(EvaluationCustomToolDefinition.maximumOutputBytes)
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            guard data.count < EvaluationCustomToolDefinition.maximumOutputBytes else {
-                throw EvaluationCustomToolError.outputTooLarge
+        let context = EvaluationWorkflowHTTPContext.current
+        var measurement = EvaluationWorkflowHTTPRequest(recorder: context?.recorder, parentID: context?.parentID,
+            endpoint: endpoint, requestBytes: body.count)
+        do {
+            let (bytes, response) = try await session.bytes(for: request)
+            guard let response = response as? HTTPURLResponse else {
+                throw EvaluationCustomToolError.invalidHTTPResponse
             }
-            data.append(byte)
+            measurement?.statusCode = response.statusCode
+            guard (200...299).contains(response.statusCode) else {
+                throw EvaluationCustomToolError.httpStatus(response.statusCode)
+            }
+
+            var data = Data()
+            data.reserveCapacity(EvaluationCustomToolDefinition.maximumOutputBytes)
+            for try await byte in bytes {
+                measurement?.responseBytes += 1
+                try Task.checkCancellation()
+                guard data.count < EvaluationCustomToolDefinition.maximumOutputBytes else {
+                    throw EvaluationCustomToolError.outputTooLarge
+                }
+                data.append(byte)
+            }
+            guard let output = String(data: data, encoding: .utf8) else {
+                throw EvaluationCustomToolError.invalidOutputEncoding
+            }
+            measurement?.finish()
+            return output
+        } catch {
+            measurement?.finish(error: error)
+            throw error
         }
-        guard let output = String(data: data, encoding: .utf8) else {
-            throw EvaluationCustomToolError.invalidOutputEncoding
-        }
-        return output
     }
 }
 

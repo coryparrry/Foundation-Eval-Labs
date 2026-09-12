@@ -10,6 +10,8 @@
 4. Creates the version tag at the verified source if it does not already exist, uploads the DMG, `SHA256SUMS.txt`, and signed `appcast.xml`, then downloads and verifies all three.
 5. Publishes the release only after those checks pass.
 
+Draft staging and release PR generation run in separate Release Please steps. Before generating a PR, the workflow requires the version in the current `main` manifest to have a published GitHub release. A draft pauses PR generation until packaging succeeds; a missing release or API error stops the workflow instead of treating old commits as unreleased. A run with no releasable changes skips PR CI without parsing an absent PR output.
+
 No separate packaging action is required. A missing signing secret, failed CI/build/notarization, source mismatch, failed upload, or failed download verification leaves the release unpublished. The installer is built from the release PR's source, never a previously generated local DMG. Hosted build numbers are fixed to that source's Git commit count, which increases as commits land on `main`.
 
 Tags use `vMAJOR.MINOR.PATCH`. `fix:` changes produce a patch and `feat:` changes produce a minor release. Docs and chores alone do not normally produce a release PR. Release Please updates `version.txt`, `CHANGELOG.md`, and `.release-please-manifest.json` in its PR; the initial baseline is the existing `v1.0.0` release.

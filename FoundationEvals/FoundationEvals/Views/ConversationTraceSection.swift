@@ -43,7 +43,6 @@ struct ConversationTraceSection: View {
             }
             .padding(.top, 8)
         }
-        .disclosureGroupStyle(TraceDisclosureStyle(title: "Conversation trace"))
     }
 
     private var historyPolicyTitle: String {
@@ -114,7 +113,6 @@ private struct ConversationTurnTraceRow: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .disclosureGroupStyle(TraceDisclosureStyle(title: title))
         .padding(10)
         .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 8))
     }

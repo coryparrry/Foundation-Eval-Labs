@@ -52,7 +52,6 @@ struct FeatureTraceSection: View {
         } label: {
             Text("Foundation Models feature trace")
         }
-        .disclosureGroupStyle(TraceDisclosureStyle(title: "Foundation Models feature trace"))
         .font(.callout)
     }
 }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum AppSettingsPage: Hashable {
+private enum AppSettingsPage: String, Hashable {
     case mcp
     case judges
     case privacy
@@ -10,7 +10,7 @@ struct AppSettingsView: View {
     @Bindable var store: EvaluationStore
     @Bindable var mcpSettings: MCPSettingsController
     @Bindable var telemetry: TelemetryController
-    @State private var selectedPage = AppSettingsPage.mcp
+    @AppStorage("settingsPage") private var selectedPage = AppSettingsPage.mcp
 
     var body: some View {
         TabView(selection: $selectedPage) {

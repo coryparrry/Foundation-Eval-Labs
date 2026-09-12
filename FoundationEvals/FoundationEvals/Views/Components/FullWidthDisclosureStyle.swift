@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// Keep the named toggle separate from selectable native text in expanded traces.
-struct TraceDisclosureStyle: DisclosureGroupStyle {
-    let title: String
-
+/// Make the full section heading clickable while keeping expanded content separate.
+struct FullWidthDisclosureStyle: DisclosureGroupStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -17,15 +15,15 @@ struct TraceDisclosureStyle: DisclosureGroupStyle {
                     configuration.label
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(title)
             .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
 
             if configuration.isExpanded {
                 configuration.content
-                    .disclosureGroupStyle(.automatic)
+                    .disclosureGroupStyle(FullWidthDisclosureStyle())
             }
         }
     }

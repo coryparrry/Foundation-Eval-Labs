@@ -79,6 +79,7 @@ final class FoundationEvalsMCPRuntime {
     }
 
     func prepareForTermination() async {
+        store.saveSuite()
         store.cancelRun()
         await stop()
     }

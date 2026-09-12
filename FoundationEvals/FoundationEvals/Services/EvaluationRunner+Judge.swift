@@ -49,7 +49,8 @@ extension EvaluationRunner {
         contextSize: Int,
         modelName: String,
         externalJudge: EvaluationResolvedJudgeConnection?,
-        toolEvidence: String?
+        toolEvidence: String?,
+        workflowRecorder: EvaluationWorkflowRecorder? = nil
     ) async -> JudgeOutcome {
         guard suite.scoringMode == .modelJudge else {
             let score = MetricScorer.evaluate(
@@ -149,6 +150,10 @@ extension EvaluationRunner {
         }
 
         let started = ContinuousClock.now
+        let judgeSpanID = workflowRecorder?.begin(kind: .judge, title: "AI judge",
+            parentID: workflowRecorder?.activeParentID,
+            metadata: ["judgePromptVersion": Self.judgePromptVersion])
+        var attemptSpanID: UUID?
         let signpostID = signposter.makeSignpostID()
         let interval = signposter.beginInterval("Judge request", id: signpostID)
         defer { signposter.endInterval("Judge request", interval) }
@@ -190,6 +195,9 @@ extension EvaluationRunner {
                 }
                 let judge = LanguageModelSession(model: model, tools: [], instructions: Instructions(Self.judgeInstructions))
                 activeJudge = judge
+                attemptSpanID = workflowRecorder?.begin(kind: .generation, title: "Judge attempt \(attempts.count)",
+                    parentID: judgeSpanID, metadata: ["role": "judge", "judgeAttempt": String(attempts.count)])
+                workflowRecorder?.activeParentID = attemptSpanID
                 let verdict = try await judge.respond(
                     schema: schema,
                     options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: outputReserve,
@@ -202,6 +210,8 @@ extension EvaluationRunner {
                     attemptPrompt
                     for image in images { Attachment(imageURL: image.url).label(image.label) }
                 }
+                workflowRecorder?.finish(attemptSpanID, metadata: EvaluationWorkflowRecorder.usageMetadata(Self.usage(from: verdict.usage)))
+                workflowRecorder?.activeParentID = judgeSpanID
                 totalUsage.add(Self.usage(from: verdict.usage))
                 activeJudge = nil
                 if let text = Self.reasoningText(from: verdict.transcriptEntries) { reasoning.append(text) }
@@ -221,6 +231,7 @@ extension EvaluationRunner {
                     }
                     let judgment = EvaluationJudge.aggregate(checks: objectiveChecks + remappedChecks)
                     judgeTrace.checks = judgment.checks
+                    workflowRecorder?.finish(judgeSpanID, metadata: EvaluationWorkflowRecorder.usageMetadata(totalUsage))
                     return JudgeOutcome(
                         status: judgment.score >= EvaluationSuite.judgePassingScore ? .passed : .failed,
                         score: judgment.score, rationale: judgment.rationale,
@@ -261,12 +272,17 @@ extension EvaluationRunner {
                 }
             }
         } catch {
+            let failedAt = ContinuousClock.now
             if let activeJudge { totalUsage.add(Self.usage(from: activeJudge.usage)) }
             judgeTrace.refusal = await EvaluationRefusalTrace.capture(from: error)
             let invalidJudgment = error is EvaluationJudgeValidationError
             let traceError = invalidJudgment
                 ? (category: "invalidJudgeOutput", message: error.localizedDescription)
                 : Self.traceError(error)
+            workflowRecorder?.finish(attemptSpanID, status: EvaluationWorkflowRecorder.status(for: error),
+                errorMessage: traceError.message, at: failedAt)
+            workflowRecorder?.finish(judgeSpanID, status: EvaluationWorkflowRecorder.status(for: error),
+                errorMessage: traceError.message, metadata: EvaluationWorkflowRecorder.usageMetadata(totalUsage))
             judgeTrace.validationError = traceError.message
             if !attempts.isEmpty {
                 attempts[attempts.count - 1].validationError = traceError.message

@@ -16,7 +16,6 @@ struct SampleTraceSection: View {
             }
             .padding(.top, 10)
         }
-        .disclosureGroupStyle(TraceDisclosureStyle(title: "Execution trace"))
         .font(.callout)
     }
 
