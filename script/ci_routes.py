@@ -30,6 +30,7 @@ RELEASE_VALIDATION = {"script.tests.test_release_validation", "script.tests.test
                       "script.tests.test_release_dispatch"}
 PYTHON_DEPENDENCIES = {
     "script/release_pr.py": {"script.tests.test_release_pr"},
+    "script/release_notes.py": {"script.tests.test_release_notes"},
     "script/wait_release_ci.sh": {"script.tests.test_wait_release_ci"},
     "script/release_validation.py": RELEASE_VALIDATION,
     "script/release_dispatch.sh": RELEASE_VALIDATION,
@@ -38,7 +39,10 @@ PYTHON_DEPENDENCIES = {
     "script/release.sh": RELEASE_VALIDATION,
     "script/verify_installer.sh": RELEASE_VALIDATION,
     "script/ci_core_scheme.py": {"script.tests.test_ci_core_scheme"},
-    "release-please-config.json": {"script.tests.test_release_pr", "script.tests.test_release_dispatch"},
+    "release-please-config.json": {
+        "script.tests.test_release_notes", "script.tests.test_release_pr",
+        "script.tests.test_release_dispatch",
+    },
     ".github/workflows/release-me.yml": {
         "script.tests.test_release_pr", "script.tests.test_release_dispatch",
         "script.tests.test_release_validation", "script.tests.test_wait_release_ci",
