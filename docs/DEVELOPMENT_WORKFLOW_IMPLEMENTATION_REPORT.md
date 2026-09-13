@@ -23,6 +23,23 @@ The HTTP judge evidence uses a local deterministic fixture. No paid external
 provider call, live running-app CLI session, native visual inspection, or UI
 test pass is claimed.
 
+## Backend correction closure
+
+| Review item | Backend resolution and regression evidence |
+|---|---|
+| R1 | Release decisions bind current and approved assessments to the same cases, rubric, judge prompt version, and passing score. Easier-rubric reassessments fail closed. |
+| R2 | Every new run owns an integrity-checked subject-evidence snapshot. Reassessment and judge checks replay the original instructions, cases, and image bytes even after current attachments are removed. |
+| R3 | Experiment variants retain their actual definition revisions; release checks reject a candidate before adoption and accept its fresh revision after adoption. |
+| R4 | Baseline compatibility excludes the subject instructions/model being compared while retaining exact case and scoring compatibility checks. Instruction-only changes compare; case/rubric changes do not. |
+| R5 | Summary, analysis, comparison, error, usage, critical-case, and release consumers share the selected assessment projection without mutating subject results. |
+| R6 | Reassessment and judge-check activity blocks workspace changes until captured work finishes, preventing cross-suite loss or attribution. |
+| R7 | Experiment recommendations require complete, error-free, fully scored coverage for every case and repetition. Error-dominated, missing, and unscored candidates request more evidence. |
+| R8 | `eval_check` resolves an existing owned operation before busy validation and rejects project, suite, or revision conflicts. |
+| R9 | Run lookup and deletion resolve persisted ownership across the workspace catalog, so polling survives UI suite changes. |
+| R10 | `EvaluationStore.runFeatureAdapter` executes shared application code and persists a normal run that supports reload, reassessment, comparison, baseline approval, and release checks. |
+| R11 | `eval_project_release_report` aggregates all required suites and fails closed for missing, failed, stale, or incompatible evidence. Durable run ordering identifies the actual latest run. |
+| R12 | The structured-extraction schema includes `subtotal` and `discount`; tests verify every expected JSON key and assertion is represented. |
+
 ## Independent review
 
 The backend received an independent read-only review. Its findings were fixed
@@ -30,13 +47,15 @@ and covered where practical: failed workspace switches roll back, reassessment
 reapplies field assertions, disclosure approval is bound to the destination and
 model/provider configuration, release checks reject unscored evidence and
 invalid thresholds, structured starters are runnable, mixed judge identities
-fail closed, and MCP mutation annotations are accurate.
+fail closed, and MCP mutation annotations are accurate. The final pass also
+verified that project reports resolve nonselected repository definitions without
+mutating storage, failed evidence deletion retains a retry path, and scoring
+contracts ignore editor-only labels and nested IDs while preserving semantic
+case compatibility.
 
-## Astra handoff
+## Astra integration boundary
 
-- Finish the project overview and primary navigation surfaces.
-- Render stale disclosure approval using the bound connection digest, not only
-  the approval timestamp.
-- Complete native interaction and visual QA.
-- Repair and rerun the UI-test target. The earlier UI run was stopped at the
-  user's instruction, so backend evidence must not be presented as UI evidence.
+Astra owns the separate frontend branch, including reset/catalog integration,
+project overview, primary navigation, native interaction, and visual QA. This
+backend branch does not merge or duplicate that work. UI tests remain stopped at
+the user's instruction, so backend evidence must not be presented as UI evidence.

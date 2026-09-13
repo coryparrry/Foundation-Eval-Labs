@@ -55,6 +55,7 @@ native inspection and real-provider limitations are recorded separately below.
 ## Release checks
 
 - [x] Required suites, critical cases, bounded error/latency limits, and approved-baseline comparisons are supported.
+- [x] Project-scoped readiness aggregates every required suite without changing the selected UI workspace.
 - [x] Machine-readable and human-readable reports share the same decision.
 - [x] Exit statuses distinguish pass, regression, incomplete/incompatible evidence, and execution error.
 - [x] Missing, stale, unscored, mixed-judge, or incompatible evidence fails closed.
@@ -76,6 +77,7 @@ native inspection and real-provider limitations are recorded separately below.
 
 - Real paid compatible endpoints are tested only when existing credentials are available and use is authorized.
 - Local fixture HTTP services provide deterministic protocol, timeout, malformed-response, and capability evidence.
+- Reassessment replay is verified against run-owned instructions and image bytes after the current suite changes and removes its source attachment.
 - The initial CLI requires the running macOS app. No Linux/headless/standalone CI support is claimed.
 - Live running-app CLI execution was not performed; parser behavior and MCP protocol/store authority are covered independently.
 - Frontend completion, native visual inspection, and UI-test cleanup are assigned to Astra. UI tests were stopped at the user's instruction and no UI pass is claimed here.

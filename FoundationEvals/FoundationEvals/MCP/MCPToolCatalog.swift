@@ -95,6 +95,7 @@ enum MCPToolCall: Sendable {
     case listProjects
     case check(MCPCheckArguments)
     case releaseReport(MCPReleaseReportArguments)
+    case projectReleaseReport(MCPProjectReleaseReportArguments)
     case replaceSuite(MCPReplaceSuiteArguments)
     case uploadAttachment(MCPUploadAttachmentArguments)
     case removeAttachment(MCPRemoveAttachmentArguments)
@@ -117,6 +118,10 @@ struct MCPReleaseReportArguments: Codable, Sendable {
     var projectID: UUID
     var suiteID: UUID
     var runID: UUID?
+}
+
+struct MCPProjectReleaseReportArguments: Codable, Sendable {
+    var projectID: UUID
 }
 
 struct MCPReplaceSuiteArguments: Codable, Sendable {
@@ -340,6 +345,13 @@ enum MCPToolCatalog {
             ], required: ["projectID", "suiteID"]
         ),
         tool(
+            "eval_project_release_report", "Evaluate project release readiness",
+            "Evaluate every suite marked as required in one explicit project. Missing, failed, stale, or incompatible required-suite evidence fails the project report closed without changing UI selection.",
+            properties: [
+                "projectID": uuid("Stable project UUID from eval_list_projects.")
+            ], required: ["projectID"], readOnly: true
+        ),
+        tool(
             "eval_replace_suite", "Replace evaluation suite",
             "Atomically replace editable suite fields and ordered cases while preserving suite identity and attachments. Include suite.features to replace the Foundation Models feature configuration; omit it to preserve the current configuration.",
             properties: [
@@ -453,6 +465,8 @@ enum MCPToolCatalog {
                 return .check(try arguments.decode(MCPCheckArguments.self))
             case "eval_release_report":
                 return .releaseReport(try arguments.decode(MCPReleaseReportArguments.self))
+            case "eval_project_release_report":
+                return .projectReleaseReport(try arguments.decode(MCPProjectReleaseReportArguments.self))
             case "eval_replace_suite":
                 if arguments.objectValue?["suite"]?.objectValue?["features"] == .null {
                     throw MCPToolInputError.invalidArguments

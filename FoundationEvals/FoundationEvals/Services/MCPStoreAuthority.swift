@@ -18,11 +18,30 @@ enum MCPStoreAuthority {
             case .listProjects:
                 return listProjects(store)
             case .check(let arguments):
+                if let existing = store.runStatus(id: arguments.runID) {
+                    guard existing.projectID == arguments.projectID,
+                          existing.suiteID == arguments.suiteID else {
+                        throw EvaluationStoreError.resourceConflict(
+                            "Run ID already belongs to another project or suite."
+                        )
+                    }
+                    if let expectedRevision = arguments.expectedRevision,
+                       existing.suiteRevision != expectedRevision {
+                        throw EvaluationStoreError.resourceConflict(
+                            "Run ID already belongs to another suite revision."
+                        )
+                    }
+                    return mutation("duplicate", [
+                        "projectID": .string(arguments.projectID.uuidString),
+                        "suiteID": .string(arguments.suiteID.uuidString),
+                        "revision": .string(existing.suiteRevision ?? arguments.expectedRevision ?? "unavailable"),
+                        "run": try operationJSON(existing)
+                    ])
+                }
                 try store.activateAutomationTarget(projectID: arguments.projectID, suiteID: arguments.suiteID)
                 let revision = arguments.expectedRevision ?? store.suiteRevision
-                let duplicate = store.runStatus(id: arguments.runID) != nil
                 let operation = try store.startRun(id: arguments.runID, expectedRevision: revision)
-                return mutation(duplicate ? "duplicate" : "committed", [
+                return mutation("committed", [
                     "projectID": .string(arguments.projectID.uuidString),
                     "suiteID": .string(arguments.suiteID.uuidString),
                     "revision": .string(revision),
@@ -34,6 +53,12 @@ enum MCPStoreAuthority {
                 return readPayload([
                     "report": try json(report),
                     "markdown": .string(EvaluationReleaseCheckEvaluator.markdown(report))
+                ])
+            case .projectReleaseReport(let arguments):
+                let report = try store.projectReleaseCheckReport(projectID: arguments.projectID)
+                return readPayload([
+                    "report": try json(report),
+                    "markdown": .string(EvaluationReleaseCheckEvaluator.projectMarkdown(report))
                 ])
             case .replaceSuite(let arguments):
                 let before = store.suiteRevision

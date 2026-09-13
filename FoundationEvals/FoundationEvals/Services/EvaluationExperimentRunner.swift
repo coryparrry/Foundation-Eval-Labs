@@ -34,7 +34,7 @@ actor EvaluationExperimentRunner {
             one.repetitions = 1
             var part = await runner.run(
                 id: variantID == experiment.current.id ? currentRunID : candidateRunID,
-                suiteRevision: experiment.suiteRevision,
+                suiteRevision: variant.suiteRevision ?? experiment.suiteRevision,
                 startedAt: startedAt,
                 suite: one,
                 images: images,
@@ -57,11 +57,15 @@ actor EvaluationExperimentRunner {
         return .init(
             current: try combined(
                 parts: currentParts, id: currentRunID, suite: suite,
-                instructions: experiment.current.instructions, startedAt: startedAt
+                instructions: experiment.current.instructions,
+                suiteRevision: experiment.current.suiteRevision ?? experiment.suiteRevision,
+                startedAt: startedAt
             ),
             candidate: try combined(
                 parts: candidateParts, id: candidateRunID, suite: suite,
-                instructions: experiment.candidate.instructions, startedAt: startedAt
+                instructions: experiment.candidate.instructions,
+                suiteRevision: experiment.candidate.suiteRevision ?? experiment.suiteRevision,
+                startedAt: startedAt
             )
         )
     }
@@ -71,6 +75,7 @@ actor EvaluationExperimentRunner {
         id: UUID,
         suite: EvaluationSuite,
         instructions: String,
+        suiteRevision: String,
         startedAt: Date
     ) throws -> EvaluationRun {
         guard var run = parts.first else {
@@ -81,6 +86,7 @@ actor EvaluationExperimentRunner {
         run.suiteName = suite.name
         run.suiteVersion = suite.version
         run.instructions = instructions
+        run.suiteRevision = suiteRevision
         run.repetitions = suite.repetitions
         run.plannedSampleCount = suite.cases.count * suite.repetitions
         run.plannedCases = suite.cases
@@ -109,6 +115,7 @@ actor EvaluationExperimentRunner {
             }
             if let first = observedIdentities.first { assessment.judge = first }
             assessment.observedJudgeIdentities = observedIdentities
+            assessment.scoringContract = try? EvaluationScoringContract(suite: variantSuite)
             run.assessments = [assessment]
             run.selectedAssessmentID = assessment.id
         }
