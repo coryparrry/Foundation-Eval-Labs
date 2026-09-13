@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   workflow_dispatch:
@@ -48,6 +49,9 @@ jobs:
         env:
           ROUTING_RESULT: ${{ needs.changes.result }}
         run: test "$ROUTING_RESULT" = success
+      - name: Validate release notes
+        if: github.event_name == 'pull_request'
+        run: python3 script/release_notes.py validate-event
       - name: Validate workflows
         # actionlint has not listed GitHub's hosted Xcode 27 preview label yet.
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color -ignore 'label "xcode-27" is unknown'

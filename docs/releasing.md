@@ -16,6 +16,35 @@ No separate packaging action is required. A missing signing secret, failed CI/bu
 
 Tags use `vMAJOR.MINOR.PATCH`. `fix:` changes produce a patch and `feat:` changes produce a minor release. Docs and chores alone do not normally produce a release PR. Release Please updates `version.txt`, `CHANGELOG.md`, and `.release-please-manifest.json` in its PR; the initial baseline is the existing `v1.0.0` release.
 
+### Curate squash-merge release notes
+
+GitHub squash-merges each pull request into one commit, so Release Please cannot
+infer several user-facing capabilities from the file diff or the commit body.
+Every `feat:` and `fix:` pull request must therefore include one active Release
+Please override block in its body:
+
+```text
+BEGIN_COMMIT_OVERRIDE
+feat(workspace): organize evaluations into projects and saved suites
+feat(judging): configure independent judges and reassess saved responses
+END_COMMIT_OVERRIDE
+```
+
+Add one Conventional Commit line for each independently useful user-visible
+change. Keep implementation details, tests, CI, and maintenance out of the block.
+The pull request template contains a commented example, and CI fails releasable
+pull requests whose active block is missing, malformed, duplicated, or does not
+retain the pull request's `feat`/`fix` release type. Editing the pull request body
+reruns that validation. Breaking-change markers must agree between the pull
+request title and the override entries. Release Please reads the block after the
+squash merge and uses those entries for `CHANGELOG.md` and the GitHub release
+notes.
+
+The repository permits squash merges only. Do not change that setting without
+also replacing this release-note contract: merge commits and rebase merges do
+not preserve the single squash commit whose pull request body Release Please
+uses for the override.
+
 Enable **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests**. The workflow creates PRs but does not approve or merge them. Since PRs created with `GITHUB_TOKEN` do not trigger normal PR workflows, Release Me explicitly dispatches CI on the generated branch.
 
 ## Retry a failed release
