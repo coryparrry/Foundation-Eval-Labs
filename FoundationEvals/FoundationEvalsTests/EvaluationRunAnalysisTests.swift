@@ -107,6 +107,26 @@ struct EvaluationRunAnalysisTests {
         #expect(comparison.caseComparisons.isEmpty)
     }
 
+    @Test func modelJudgeRubricFormattingDoesNotBreakCompatibility() {
+        let suiteID = UUID()
+        let evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")
+        var baseline = makeRun(
+            suiteID: suiteID,
+            cases: [evaluationCase],
+            scoringMode: .modelJudge,
+            results: [sample(evaluationCase, repetition: 1, status: .passed)]
+        )
+        baseline.criteria = "First requirement\nSecond requirement"
+        var current = baseline
+        current.id = UUID()
+        current.criteria = "  First requirement  \n\nSecond requirement\n"
+
+        let comparison = EvaluationRunComparison(current: current, baseline: baseline)
+
+        #expect(comparison.compatibility == .compatible)
+        #expect(comparison.incompatibilityReasons.isEmpty)
+    }
+
     @Test func deterministicScoringIgnoresUnusedRubricChanges() {
         let suiteID = UUID()
         let evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")

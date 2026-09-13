@@ -16,7 +16,8 @@ struct WorkspaceResetTests {
         let reloaded = EvaluationStore(supportDirectory: directory)
         #expect(reloaded.suite == store.suite)
         #expect(reloaded.draftSuite == store.draftSuite)
-        #expect(reloaded.suite.id != originalID)
+        #expect(reloaded.suite.id == originalID)
+        #expect(reloaded.selectedSuiteRecord.name == "Untitled Suite")
         #expect(reloaded.draftSuite.name == "Untitled Suite")
         #expect(reloaded.draftSuite.cases.count == 1)
         #expect(reloaded.draftSuite.cases[0].prompt.isEmpty)
@@ -55,14 +56,20 @@ struct WorkspaceResetTests {
             attachments: [],
             results: []
         )
-        try CanonicalJSON.data(for: run).write(to: directory.appending(path: "Runs/\(run.id).json"))
+        try CanonicalJSON.data(for: run).write(to: suiteDirectory(store, in: directory).appending(path: "Runs/\(run.id).json"))
         store.runs = [run]
         store.selection = .run(run.id)
         store.draftSuite.cases[0].prompt = ""
         _ = store.saveSuite()
         let draft = store.draftSuite
-        try Data("unreadable".utf8).write(to: directory.appending(path: "Runs/broken.json"))
-        try Data("obsolete".utf8).write(to: directory.appending(path: "active-run.json"))
+        try Data("unreadable".utf8).write(to: suiteDirectory(store, in: directory).appending(path: "Runs/broken.json"))
+        try Data("obsolete".utf8).write(to: suiteDirectory(store, in: directory).appending(path: "active-run.json"))
+        let evidence = suiteDirectory(store, in: directory).appending(path: "RunEvidence/\(run.id)")
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        try Data("private image fixture".utf8).write(to: evidence.appending(path: "image.png"))
+        let pending = suiteDirectory(store, in: directory).appending(path: "RunDeletions")
+        try FileManager.default.createDirectory(at: pending, withIntermediateDirectories: true)
+        try Data("old tombstone".utf8).write(to: pending.appending(path: "previous.json"))
         try store.clearRunHistory()
         #expect(store.runs.isEmpty)
         #expect(store.selection == .suite)
@@ -70,6 +77,28 @@ struct WorkspaceResetTests {
         #expect(reloaded.runs.isEmpty)
         #expect(reloaded.draftSuite == draft)
         #expect(reloaded.notice == nil)
+        #expect(!FileManager.default.fileExists(atPath: evidence.deletingLastPathComponent().path))
+        #expect(!FileManager.default.fileExists(atPath: pending.path))
+    }
+
+    @Test func clearingHistoryCanRetryAfterCopiedEvidenceCleanupFails() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let root = suiteDirectory(store, in: directory)
+        let evidence = root.appending(path: "RunEvidence")
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        try Data("private fixture".utf8).write(to: evidence.appending(path: "image.png"))
+        try Data("unreadable run".utf8).write(to: root.appending(path: "Runs/broken.json"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: evidence.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: evidence.path) }
+        #expect(throws: (any Error).self) { try store.clearRunHistory() }
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "Runs/broken.json").path))
+        #expect(FileManager.default.fileExists(atPath: root.appending(path: "RunDeletions/broken.json").path))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: evidence.path)
+        try EvaluationStore(supportDirectory: directory).clearRunHistory()
+        #expect(!FileManager.default.fileExists(atPath: evidence.path))
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "RunDeletions").path))
     }
 
     @Test func resetRejectsRunningAndFileOperations() throws {
@@ -95,10 +124,59 @@ struct WorkspaceResetTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
         let original = store.draftSuite
-        try FileManager.default.removeItem(at: directory.appending(path: "suite.json"))
-        try FileManager.default.createDirectory(at: directory.appending(path: "suite.json"), withIntermediateDirectories: true)
+        try FileManager.default.removeItem(at: suiteDirectory(store, in: directory).appending(path: "suite.json"))
+        try FileManager.default.createDirectory(at: suiteDirectory(store, in: directory).appending(path: "suite.json"), withIntermediateDirectories: true)
         #expect(throws: (any Error).self) { try store.resetSuite() }
         #expect(store.draftSuite == original)
         #expect(store.suite == original)
+    }
+
+    @Test func resettingLinkedSuiteUpdatesItsDefinitionAndPreservesOtherSuites() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = directory.appending(path: "repo")
+        try FileManager.default.createDirectory(at: repository.appending(path: ".git"), withIntermediateDirectories: true)
+        let storage = directory.appending(path: "storage")
+        let store = EvaluationStore(supportDirectory: storage)
+        let untouchedID = store.selectedSuiteID
+        let untouchedSuite = store.suite
+        let resetID = try store.createSuite(name: "Reset this suite")
+        try store.linkSelectedProject(toRepository: repository.path)
+        let definitionURL = try #require(EvaluationWorkspacePersistence.repositoryDefinitionURL(
+            project: store.selectedProject, suite: store.selectedSuiteRecord
+        ))
+        try store.resetSuite()
+        let definition = try CanonicalJSON.decode(EvaluationSuiteDefinition.self, from: Data(contentsOf: definitionURL))
+        #expect(definition == EvaluationSuiteDefinition(suite: store.suite))
+        let reloaded = EvaluationStore(supportDirectory: storage)
+        #expect(reloaded.selectedSuiteID == resetID)
+        #expect(reloaded.draftSuite == store.draftSuite)
+        try reloaded.switchSuite(id: untouchedID)
+        #expect(reloaded.suite == untouchedSuite)
+    }
+
+    @Test func resettingLinkedSuitePreservesAnExternalDefinitionConflict() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = directory.appending(path: "repo")
+        try FileManager.default.createDirectory(at: repository.appending(path: ".git"), withIntermediateDirectories: true)
+        let store = EvaluationStore(supportDirectory: directory.appending(path: "storage"))
+        try store.linkSelectedProject(toRepository: repository.path)
+        let original = store.suite
+        let definitionURL = try #require(EvaluationWorkspacePersistence.repositoryDefinitionURL(
+            project: store.selectedProject, suite: store.selectedSuiteRecord
+        ))
+        var external = EvaluationSuiteDefinition(suite: original)
+        external.instructions = "Edited in the repository"
+        try CanonicalJSON.data(for: external).write(to: definitionURL)
+        #expect(throws: (any Error).self) { try store.resetSuite() }
+        #expect(store.suite == original)
+        #expect(try CanonicalJSON.decode(EvaluationSuiteDefinition.self, from: Data(contentsOf: definitionURL)) == external)
+    }
+
+    private func suiteDirectory(_ store: EvaluationStore, in directory: URL) -> URL {
+        EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        )
     }
 }

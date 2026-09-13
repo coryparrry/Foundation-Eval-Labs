@@ -15,6 +15,51 @@ enum MCPStoreAuthority {
             switch call {
             case .getState:
                 return try state(store)
+            case .listProjects:
+                return listProjects(store)
+            case .check(let arguments):
+                if let existing = store.runStatus(id: arguments.runID) {
+                    guard existing.projectID == arguments.projectID,
+                          existing.suiteID == arguments.suiteID else {
+                        throw EvaluationStoreError.resourceConflict(
+                            "Run ID already belongs to another project or suite."
+                        )
+                    }
+                    if let expectedRevision = arguments.expectedRevision,
+                       existing.suiteRevision != expectedRevision {
+                        throw EvaluationStoreError.resourceConflict(
+                            "Run ID already belongs to another suite revision."
+                        )
+                    }
+                    return mutation("duplicate", [
+                        "projectID": .string(arguments.projectID.uuidString),
+                        "suiteID": .string(arguments.suiteID.uuidString),
+                        "revision": .string(existing.suiteRevision ?? arguments.expectedRevision ?? "unavailable"),
+                        "run": try operationJSON(existing)
+                    ])
+                }
+                try store.activateAutomationTarget(projectID: arguments.projectID, suiteID: arguments.suiteID)
+                let revision = arguments.expectedRevision ?? store.suiteRevision
+                let operation = try store.startRun(id: arguments.runID, expectedRevision: revision)
+                return mutation("committed", [
+                    "projectID": .string(arguments.projectID.uuidString),
+                    "suiteID": .string(arguments.suiteID.uuidString),
+                    "revision": .string(revision),
+                    "run": try operationJSON(operation)
+                ])
+            case .releaseReport(let arguments):
+                try store.activateAutomationTarget(projectID: arguments.projectID, suiteID: arguments.suiteID)
+                let report = store.releaseCheckReport(runID: arguments.runID)
+                return readPayload([
+                    "report": try json(report),
+                    "markdown": .string(EvaluationReleaseCheckEvaluator.markdown(report))
+                ])
+            case .projectReleaseReport(let arguments):
+                let report = try store.projectReleaseCheckReport(projectID: arguments.projectID)
+                return readPayload([
+                    "report": try json(report),
+                    "markdown": .string(EvaluationReleaseCheckEvaluator.projectMarkdown(report))
+                ])
             case .replaceSuite(let arguments):
                 let before = store.suiteRevision
                 let revision = try store.replaceSuite(
@@ -75,6 +120,27 @@ enum MCPStoreAuthority {
         } catch {
             return failure(error)
         }
+    }
+
+    private static func listProjects(_ store: EvaluationStore) -> MCPToolPayload {
+        readPayload([
+            "selectedProjectID": .string(store.selectedProjectID.uuidString),
+            "selectedSuiteID": .string(store.selectedSuiteID.uuidString),
+            "projects": .array(store.projects.filter { !$0.isArchived }.map { project in
+                var value: [String: MCPJSONValue] = [
+                    "id": .string(project.id.uuidString),
+                    "name": .string(project.name),
+                    "suites": .array(project.suites.filter { !$0.isArchived }.map { suite in
+                        .object([
+                            "id": .string(suite.id.uuidString),
+                            "name": .string(suite.name)
+                        ])
+                    })
+                ]
+                value["repositoryRoot"] = project.repository.map { .string($0.rootPath) } ?? .null
+                return .object(value)
+            })
+        ])
     }
 
     private static func read(_ request: MCPResourceRequest, store: EvaluationStore) async -> MCPResourcePayload {
@@ -667,7 +733,7 @@ enum MCPStoreAuthority {
         case EvaluationStoreError.staleRevision(let current):
             outcome = "conflicted"
             fields["currentRevision"] = .string(current)
-        case EvaluationStoreError.resourceConflict:
+        case EvaluationStoreError.resourceConflict, EvaluationWorkspaceError.repositoryConflict:
             outcome = "conflicted"
         default:
             outcome = "failed"
@@ -686,6 +752,7 @@ enum MCPStoreAuthority {
         case EvaluationStoreError.resourceConflict: "resource_conflict"
         case EvaluationStoreError.resourceNotFound: "not_found"
         case EvaluationStoreError.persistence: "persistence_failed"
+        case EvaluationWorkspaceError.repositoryConflict: "resource_conflict"
         case MCPStoreAuthorityError.invalidCursor: "invalid_cursor"
         default: "invalid_request"
         }

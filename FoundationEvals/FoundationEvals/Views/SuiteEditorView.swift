@@ -49,27 +49,34 @@ private enum RubricTemplate: String, CaseIterable, Identifiable {
 
 private enum SuiteEditorPage: String, CaseIterable, Identifiable {
     case cases
-    case instructions
-    case scoring
-    case model
-    case features
+    case results
+    case compare
+    case configure
 
     var id: Self { self }
 
     var title: LocalizedStringResource {
         switch self {
         case .cases: "Cases"
-        case .instructions: "Instructions"
-        case .scoring: "Scoring"
-        case .model: "Model"
-        case .features: "Features"
+        case .results: "Results"
+        case .compare: "Compare"
+        case .configure: "Configure"
         }
     }
+}
+
+private enum SuiteConfigurationPage: String, CaseIterable, Identifiable {
+    case instructions = "Instructions"
+    case scoring = "Scoring"
+    case model = "Model"
+    case features = "Features"
+    var id: Self { self }
 }
 
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
     @State private var selectedPage = SuiteEditorPage.cases
+    @State private var configurationPage = SuiteConfigurationPage.instructions
     @State private var selectedCaseID: UUID?
     @FocusState private var isEditorFocused: Bool
 
@@ -78,8 +85,10 @@ struct SuiteEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 18) {
                     SuiteOverviewHeader(store: store)
-                    SuiteDashboardCards(store: store)
-                    RunReadinessPanel(store: store)
+                    if selectedPage == .cases {
+                        SuiteDashboardCards(store: store)
+                        RunReadinessPanel(store: store)
+                    }
                     if let response = store.liveResponse, store.isRunning {
                         LiveResponseSection(response: response)
                     }
@@ -116,7 +125,7 @@ struct SuiteEditorView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 500)
+                .frame(width: 380)
                 .accessibilityIdentifier("Editor page")
             }
             RunToolbarContent(store: store)
@@ -138,6 +147,28 @@ struct SuiteEditorView: View {
         switch selectedPage {
         case .cases:
             CasesSection(store: store, selectedCaseID: $selectedCaseID)
+        case .results:
+            SuiteResultsView(store: store)
+        case .compare:
+            SuiteCompareView(store: store)
+        case .configure:
+            VStack(alignment: .leading, spacing: 20) {
+                Picker("Configuration", selection: $configurationPage) {
+                    ForEach(SuiteConfigurationPage.allCases) { page in
+                        Text(page.rawValue).tag(page)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 480)
+                configurationContent
+                    .disabled(store.isRunning || store.isReassessing || store.isProcessingFiles)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var configurationContent: some View {
+        switch configurationPage {
         case .instructions:
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 350), alignment: .top)],
@@ -148,7 +179,11 @@ struct SuiteEditorView: View {
                 SharedReferenceFilesSection(store: store)
             }
         case .scoring:
-            ScoringSection(store: store, selectedCaseID: $selectedCaseID)
+            VStack(alignment: .leading, spacing: 18) {
+                ScoringSection(store: store, selectedCaseID: $selectedCaseID)
+                JudgeConfigurationSection(store: store)
+                ReleasePolicySection(store: store)
+            }
         case .model:
             ModelControlsSection(store: store)
         case .features:
@@ -591,6 +626,7 @@ private struct RubricScale: View {
 private struct CasesSection: View {
     @Bindable var store: EvaluationStore
     @Binding var selectedCaseID: UUID?
+    @State private var isImportingCases = false
 
     var body: some View {
         EditorSection(
@@ -625,6 +661,10 @@ private struct CasesSection: View {
                 .accessibilityIdentifier("Case selector")
 
                 Spacer()
+                Button("Import Cases", systemImage: "square.and.arrow.down") {
+                    isImportingCases = true
+                }
+                    .disabled(store.isRunning || store.isProcessingFiles)
                 Button("Add Case", systemImage: "plus") {
                     let previousCount = store.draftSuite.cases.count
                     store.addCase()
@@ -661,6 +701,9 @@ private struct CasesSection: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $isImportingCases) {
+            CaseImportView(store: store)
         }
     }
 

@@ -54,6 +54,13 @@ struct FoundationEvalsApp: App {
     private static var acceptanceStorageDirectory: URL? {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--evaluation-storage-name"),
+           arguments.indices.contains(index + 1),
+           let id = UUID(uuidString: arguments[index + 1]) {
+            return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appending(path: "FoundationEvalsUITests", directoryHint: .isDirectory)
+                .appending(path: id.uuidString, directoryHint: .isDirectory)
+        }
         if let index = arguments.firstIndex(of: "--evaluation-storage"),
            arguments.indices.contains(index + 1), arguments[index + 1].hasPrefix("/") {
             return URL(filePath: arguments[index + 1], directoryHint: .isDirectory)
@@ -122,7 +129,7 @@ struct FoundationEvalsApp: App {
         }
 
         Settings {
-            AppSettingsView(mcpSettings: mcpSettings, telemetry: telemetry)
+            AppSettingsView(store: store, mcpSettings: mcpSettings, telemetry: telemetry)
                 .disclosureGroupStyle(FullWidthDisclosureStyle())
         }
     }

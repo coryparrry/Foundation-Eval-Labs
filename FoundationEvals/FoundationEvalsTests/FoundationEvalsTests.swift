@@ -83,7 +83,7 @@ struct EvaluationWorkflowTests {
             results: []
         )
         let runURL = directory
-            .appending(path: "Runs", directoryHint: .isDirectory)
+            .appending(path: "Projects/\(store.selectedProjectID.uuidString)/Suites/\(store.selectedSuiteID.uuidString)/Runs", directoryHint: .isDirectory)
             .appending(path: "\(runID.uuidString).json")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -153,7 +153,11 @@ struct ModelConfigurationTests {
         let store = EvaluationStore(supportDirectory: directory)
         let persisted = try JSONDecoder().decode(
             EvaluationSuite.self,
-            from: Data(contentsOf: directory.appending(path: "suite.json"))
+            from: Data(contentsOf: EvaluationWorkspacePersistence.suiteDirectory(
+                supportDirectory: directory,
+                projectID: store.selectedProjectID,
+                suiteID: store.selectedSuiteID
+            ).appending(path: "suite.json"))
         )
 
         #expect(store.suite.modelConfiguration.provider == .privateCloudCompute)
@@ -174,7 +178,11 @@ struct ModelConfigurationTests {
 
         let persisted = try JSONDecoder().decode(
             EvaluationSuite.self,
-            from: Data(contentsOf: directory.appending(path: "suite.json"))
+            from: Data(contentsOf: EvaluationWorkspacePersistence.suiteDirectory(
+                supportDirectory: directory,
+                projectID: store.selectedProjectID,
+                suiteID: store.selectedSuiteID
+            ).appending(path: "suite.json"))
         )
         #expect(persisted.name == "Final")
         #expect(store.suite.name == "Final")
@@ -353,10 +361,13 @@ struct EvaluationStorePersistenceTests {
         let directory = Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        )
         store.draftSuite.scoringMode = .review
         #expect(store.saveSuite())
         let committed = store.suite
-        let suiteURL = directory.appending(path: "suite.json")
+        let suiteURL = suiteDirectory.appending(path: "suite.json")
 
         store.draftSuite.repetitions = 6
         #expect(!store.saveSuite())
@@ -369,15 +380,21 @@ struct EvaluationStorePersistenceTests {
         #expect(!store.saveSuite())
         #expect(store.suite == committed)
         #expect(store.notice?.contains("Could not save the suite") == true)
-        #expect(store.draftSaveFailed)
+        #expect(!store.draftSaveFailed)
 
-        let draftURL = directory.appending(path: "suite-draft.json")
+        let draftURL = suiteDirectory.appending(path: "suite-draft.json")
+        #expect(FileManager.default.fileExists(atPath: draftURL.path))
         try FileManager.default.removeItem(at: draftURL)
         try FileManager.default.createDirectory(at: draftURL, withIntermediateDirectories: false)
         store.draftSuite.cases[0].conversation.setupTurns.append(EvaluationSetupTurn())
         #expect(!store.saveSuite())
         #expect(store.draftSaveFailed)
         #expect(store.notice?.contains("Could not save the draft") == true)
+        let projectCount = store.projects.count
+        #expect(throws: EvaluationStoreError.self) {
+            _ = try store.createProject(name: "Must not be created")
+        }
+        #expect(store.projects.count == projectCount)
 
         try FileManager.default.removeItem(at: draftURL)
         try FileManager.default.removeItem(at: suiteURL)
@@ -391,6 +408,9 @@ struct EvaluationStorePersistenceTests {
         let directory = Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        )
         let canonical = store.suite
 
         store.draftSuite.name = "Recovered draft"
@@ -398,7 +418,7 @@ struct EvaluationStorePersistenceTests {
         #expect(!store.saveSuite())
         #expect(!store.draftSaveFailed)
         #expect(store.suite == canonical)
-        #expect(FileManager.default.fileExists(atPath: directory.appending(path: "suite-draft.json").path))
+        #expect(FileManager.default.fileExists(atPath: suiteDirectory.appending(path: "suite-draft.json").path))
 
         let recovered = EvaluationStore(supportDirectory: directory)
         #expect(recovered.suite == canonical)
@@ -411,7 +431,7 @@ struct EvaluationStorePersistenceTests {
         #expect(recovered.saveSuite())
         #expect(recovered.suite.name == "Recovered draft")
         #expect(recovered.draftSuite == recovered.suite)
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "suite-draft.json").path))
+        #expect(!FileManager.default.fileExists(atPath: suiteDirectory.appending(path: "suite-draft.json").path))
 
         let persisted = EvaluationStore(supportDirectory: directory)
         #expect(persisted.suite == recovered.suite)
@@ -423,6 +443,9 @@ struct EvaluationStorePersistenceTests {
         let directory = Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        )
         let revision = store.suiteRevision
 
         store.draftSuite.name = "Older local draft"
@@ -434,20 +457,20 @@ struct EvaluationStorePersistenceTests {
         _ = try store.replaceSuite(replacement, expectedRevision: revision, confirmDeletes: false)
 
         let staleDraft = try #require(
-            FileManager.default.contentsOfDirectory(atPath: directory.path).first {
+            FileManager.default.contentsOfDirectory(atPath: suiteDirectory.path).first {
                 $0.hasPrefix("suite-draft-stale-")
             }
         )
         try FileManager.default.moveItem(
-            at: directory.appending(path: staleDraft),
-            to: directory.appending(path: "suite-draft.json")
+            at: suiteDirectory.appending(path: staleDraft),
+            to: suiteDirectory.appending(path: "suite-draft.json")
         )
         let reloaded = EvaluationStore(supportDirectory: directory)
         #expect(reloaded.suite.name == "Canonical replacement")
         #expect(reloaded.draftSuite == reloaded.suite)
         #expect(reloaded.notice?.contains("An older draft did not match the current suite") == true)
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "suite-draft.json").path))
-        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains {
+        #expect(!FileManager.default.fileExists(atPath: suiteDirectory.appending(path: "suite-draft.json").path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: suiteDirectory.path).contains {
             $0.hasPrefix("suite-draft-stale-")
         })
     }
@@ -456,15 +479,19 @@ struct EvaluationStorePersistenceTests {
     @Test func malformedDraftIsVisibleAndPreservedForRecovery() throws {
         let directory = Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let canonical = EvaluationStore(supportDirectory: directory).suite
-        try Data("{not-json".utf8).write(to: directory.appending(path: "suite-draft.json"), options: .atomic)
+        let initialStore = EvaluationStore(supportDirectory: directory)
+        let canonical = initialStore.suite
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: initialStore.selectedProjectID, suiteID: initialStore.selectedSuiteID
+        )
+        try Data("{not-json".utf8).write(to: suiteDirectory.appending(path: "suite-draft.json"), options: .atomic)
 
         let reloaded = EvaluationStore(supportDirectory: directory)
 
         #expect(reloaded.suite == canonical)
         #expect(reloaded.draftSuite == canonical)
         #expect(reloaded.notice?.contains("The saved draft could not be read") == true)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).contains {
+        #expect(try FileManager.default.contentsOfDirectory(atPath: suiteDirectory.path).contains {
             $0.hasPrefix("suite-draft-unreadable-")
         })
     }
@@ -600,6 +627,9 @@ struct EvaluationStorePersistenceTests {
         let directory = Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         var store = EvaluationStore(supportDirectory: directory)
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        )
         store.draftSuite.scoringMode = .review
         store.draftSuite.modelConfiguration.provider = .customHTTP
         #expect(store.saveSuite())
@@ -608,7 +638,7 @@ struct EvaluationStorePersistenceTests {
         _ = try store.cancelRun(id: id)
 
         // Cancellation happens before the runner task executes; no model request is needed.
-        let runsDirectory = directory.appending(path: "Runs")
+        let runsDirectory = suiteDirectory.appending(path: "Runs")
         try FileManager.default.removeItem(at: runsDirectory)
         try Data().write(to: runsDirectory)
         while store.isRunning { try await Task.sleep(for: .milliseconds(10)) }
@@ -672,12 +702,19 @@ struct EvaluationStorePersistenceTests {
             judgeErrorMessage: nil
         )
         let fixture = ActiveRunFixture(summary: summary, suite: suite, results: [completedResult])
+        try CanonicalJSON.data(for: suite).write(
+            to: directory.appending(path: "suite.json"),
+            options: .atomic
+        )
         try CanonicalJSON.data(for: fixture).write(
             to: directory.appending(path: "active-run.json"),
             options: .atomic
         )
 
         let store = EvaluationStore(supportDirectory: directory)
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        )
 
         #expect(store.runs.first?.id == summary.id)
         #expect(store.runs.first?.terminationReason == "interrupted")
@@ -686,9 +723,9 @@ struct EvaluationStorePersistenceTests {
         #expect(store.runs.first?.execution?.features == suite.features)
         #expect(store.runs.first?.environment.model == "Custom local HTTP model (interrupted)")
         #expect(store.runs.first?.results.first?.response == "Completed before interruption")
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "active-run.json").path))
+        #expect(!FileManager.default.fileExists(atPath: suiteDirectory.appending(path: "active-run.json").path))
         #expect(FileManager.default.fileExists(
-            atPath: directory.appending(path: "Runs/\(summary.id.uuidString).json").path
+            atPath: suiteDirectory.appending(path: "Runs/\(summary.id.uuidString).json").path
         ))
     }
 

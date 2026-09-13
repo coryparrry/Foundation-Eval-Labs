@@ -137,14 +137,24 @@ struct MCPStoreAuthorityTests {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
-        let run = makeRun(
+        var run = makeRun(
             case: EvaluationCase(name: "Case", prompt: "Prompt", expected: ""),
             resultCount: 1,
             plannedCount: 1
         )
+        run.projectID = store.selectedProjectID
+        run.suiteID = store.selectedSuiteID
         let canonicalData = try CanonicalJSON.data(for: run)
-        let runURL = directory.appending(path: "Runs/\(run.id.uuidString).json")
+        let runURL = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        ).appending(path: "Runs/\(run.id.uuidString).json")
         try canonicalData.write(to: runURL, options: .atomic)
+        let suiteDirectory = runURL.deletingLastPathComponent().deletingLastPathComponent()
+        let evidenceURL = suiteDirectory.appending(path: "RunEvidence/\(run.id.uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: evidenceURL, withIntermediateDirectories: true)
+        try Data("private evidence".utf8).write(to: evidenceURL.appending(path: "source.bin"))
         store.runs = [run]
         let authority = MCPStoreAuthority.make(store: store)
 
@@ -158,9 +168,59 @@ struct MCPStoreAuthorityTests {
         #expect(outcome(deleted) == "committed")
         #expect(store.run(with: run.id) == nil)
         #expect(!FileManager.default.fileExists(atPath: runURL.path))
+        #expect(!FileManager.default.fileExists(atPath: evidenceURL.path))
 
         let duplicate = await authority.call(.deleteRun(.init(runID: run.id, confirm: true)))
         #expect(outcome(duplicate) == "duplicate")
+    }
+
+    @MainActor
+    @Test func failedEvidenceCleanupRetainsADeletionRetryPath() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        var run = makeRun(
+            case: EvaluationCase(name: "Case", prompt: "Prompt", expected: ""),
+            resultCount: 1,
+            plannedCount: 1
+        )
+        run.projectID = store.selectedProjectID
+        run.suiteID = store.selectedSuiteID
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        )
+        let runURL = suiteDirectory.appending(path: "Runs/\(run.id.uuidString).json")
+        try CanonicalJSON.data(for: run).write(to: runURL, options: .atomic)
+        let evidenceParent = suiteDirectory.appending(path: "RunEvidence", directoryHint: .isDirectory)
+        let evidenceURL = evidenceParent.appending(path: run.id.uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: evidenceURL, withIntermediateDirectories: true)
+        try Data("private evidence".utf8).write(to: evidenceURL.appending(path: "source.bin"))
+        store.runs = [run]
+        let authority = MCPStoreAuthority.make(store: store)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: evidenceParent.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: evidenceParent.path)
+        }
+
+        let failed = await authority.call(.deleteRun(.init(runID: run.id, confirm: true)))
+        #expect(failed.isError)
+        let tombstoneURL = suiteDirectory.appending(path: "RunDeletions/\(run.id.uuidString).json")
+        #expect(!FileManager.default.fileExists(atPath: runURL.path))
+        #expect(FileManager.default.fileExists(atPath: tombstoneURL.path))
+        #expect(FileManager.default.fileExists(atPath: evidenceURL.path))
+        #expect(store.run(with: run.id) == nil)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: evidenceParent.path)
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.run(with: run.id) == nil)
+        let reloadedAuthority = MCPStoreAuthority.make(store: reloaded)
+        let retried = await reloadedAuthority.call(.deleteRun(.init(runID: run.id, confirm: true)))
+        #expect(outcome(retried) == "committed")
+        #expect(!FileManager.default.fileExists(atPath: runURL.path))
+        #expect(!FileManager.default.fileExists(atPath: tombstoneURL.path))
+        #expect(!FileManager.default.fileExists(atPath: evidenceURL.path))
     }
 
     @MainActor
@@ -191,6 +251,108 @@ struct MCPStoreAuthorityTests {
         #expect(unknownBaseline.isError)
         let unknownRun = await authority.call(.analyzeRun(.init(runID: UUID(), baselineRunID: nil)))
         #expect(unknownRun.isError)
+    }
+
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func evalCheckRetryReturnsTheOwnedActiveOperationBeforeBusyValidation() async throws {
+        let fixture = try LifecycleCustomModelFixture(responseDelay: 1)
+        defer { fixture.stop() }
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.scoringMode = .review
+        store.draftSuite.modelConfiguration.provider = .customHTTP
+        store.draftSuite.modelConfiguration.customProviderSettings.endpoint = fixture.endpoint(path: "/text")
+        #expect(store.saveSuite())
+        let authority = MCPStoreAuthority.make(store: store)
+        let runID = UUID()
+        let arguments = MCPCheckArguments(
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID,
+            runID: runID,
+            expectedRevision: store.suiteRevision
+        )
+
+        let started = await authority.call(.check(arguments))
+        #expect(outcome(started) == "committed")
+        let duplicate = await authority.call(.check(arguments))
+        #expect(outcome(duplicate) == "duplicate")
+        #expect(duplicate.structuredContent.objectValue?["run"]?.objectValue?["id"] == .string(runID.uuidString))
+
+        let conflicting = await authority.call(.check(.init(
+            projectID: UUID(), suiteID: store.selectedSuiteID,
+            runID: runID, expectedRevision: store.suiteRevision
+        )))
+        #expect(conflicting.isError)
+        #expect(conflicting.structuredContent.objectValue?["error"]?.objectValue?["code"] == .string("resource_conflict"))
+        _ = await authority.call(.cancelRun(.init(runID: runID)))
+        try await waitForRunToFinish(in: store)
+    }
+
+    @MainActor
+    @Test func completedRunPollingSurvivesSuiteSelectionChanges() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let projectID = store.selectedProjectID
+        let originalSuiteID = store.selectedSuiteID
+        var run = makeRun(
+            case: EvaluationCase(name: "Owned", prompt: "Prompt", expected: ""),
+            resultCount: 1,
+            plannedCount: 1
+        )
+        run.projectID = projectID
+        run.suiteID = originalSuiteID
+        let runURL = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: projectID,
+            suiteID: originalSuiteID
+        ).appending(path: "Runs/\(run.id.uuidString).json")
+        try CanonicalJSON.data(for: run).write(to: runURL, options: .atomic)
+        store.runs = [run]
+
+        _ = try store.createSuite(name: "Visible elsewhere")
+        #expect(store.selectedSuiteID != originalSuiteID)
+        let response = await MCPStoreAuthority.make(store: store).call(.getRun(.init(
+            runID: run.id, cursor: nil, limit: 50
+        )))
+
+        #expect(!response.isError)
+        #expect(response.structuredContent.objectValue?["run"]?.objectValue?["id"] == .string(run.id.uuidString))
+        #expect(response.structuredContent.objectValue?["run"]?.objectValue?["phase"] == .string("completed"))
+
+        let requestBody = try JSONEncoder.sorted.encode(MCPJSONValue.object([
+            "jsonrpc": .string("2.0"),
+            "id": .integer(1),
+            "method": .string("tools/call"),
+            "params": .object([
+                "name": .string("eval_get_run"),
+                "arguments": .object([
+                    "runID": .string(run.id.uuidString),
+                    "limit": .integer(50)
+                ])
+            ])
+        ]))
+        let protocolResponse = await MCPProtocolHandler(
+            authority: MCPStoreAuthority.make(store: store)
+        ).handle(MCPHTTPRequest(
+            method: "POST",
+            headers: [
+                "Host": "127.0.0.1:17873",
+                "Content-Type": "application/json",
+                "MCP-Protocol-Version": "2025-06-18"
+            ],
+            body: requestBody
+        ))
+        let protocolJSON = try JSONDecoder().decode(
+            MCPJSONValue.self, from: #require(protocolResponse.body)
+        )
+        let protocolRun = protocolJSON.objectValue?["result"]?.objectValue?["structuredContent"]?
+            .objectValue?["run"]?.objectValue
+        #expect(protocolResponse.status == 200)
+        #expect(protocolRun?["id"] == .string(run.id.uuidString))
+        #expect(protocolRun?["phase"] == .string("completed"))
     }
 
     @Test func analysisRejectsInvalidIdentifiersAndUnknownOptions() throws {
@@ -253,6 +415,15 @@ struct MCPStoreAuthorityTests {
 
     private func outcome(_ payload: MCPToolPayload) -> String? {
         payload.structuredContent.objectValue?["outcome"]?.stringValue
+    }
+
+    @MainActor
+    private func waitForRunToFinish(in store: EvaluationStore) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while store.isRunning, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(!store.isRunning, "Run did not finish within ten seconds.")
     }
 
     private func temporaryDirectory() throws -> URL {

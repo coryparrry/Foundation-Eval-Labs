@@ -13,6 +13,8 @@ extension EvaluationRunner {
         var errorCategory: String? = nil
         var errorMessage: String? = nil
         var trace: EvaluationJudgeTrace? = nil
+        var identity: EvaluationJudgeIdentity? = nil
+        var cost: EvaluationCost? = nil
     }
 
     static let judgePromptVersion = "rubric-v7-required-assessments"
@@ -45,6 +47,8 @@ extension EvaluationRunner {
         images: [ImageEvaluationInput],
         model: Model,
         contextSize: Int,
+        modelName: String,
+        externalJudge: EvaluationResolvedJudgeConnection?,
         toolEvidence: String?,
         workflowRecorder: EvaluationWorkflowRecorder? = nil
     ) async -> JudgeOutcome {
@@ -78,12 +82,72 @@ extension EvaluationRunner {
                 status: judgment.score >= EvaluationSuite.judgePassingScore ? .passed : .failed,
                 score: judgment.score, rationale: judgment.rationale,
                 trace: EvaluationJudgeTrace(instructions: "", prompt: "", checks: objectiveChecks,
-                                            judgedCriterionIndexes: [])
+                                            judgedCriterionIndexes: []),
+                identity: EvaluationJudgeIdentity(
+                    mode: .sameModel, connectionID: nil, connectionName: "Deterministic checks",
+                    endpointKind: nil, baseURL: nil, requestedModelID: "none", reportedModelID: "none",
+                    provider: "local", providerOrder: []
+                ),
+                cost: EvaluationCost(availability: .known, usd: 0, explanation: "No model judge request was needed.")
             )
         }
         var semanticSuite = suite
         semanticSuite.criteria = semanticIndexes.map { criteria[$0] }.joined(separator: "\n")
         let semanticCriteria = semanticSuite.rubricCriteria
+
+        if let externalJudge {
+            let started = ContinuousClock.now
+            do {
+                let external = try await compatibleJudgeClient.judge(
+                    response: response,
+                    evaluationCase: evaluationCase,
+                    effectivePrompt: effectivePrompt,
+                    suite: semanticSuite,
+                    images: images,
+                    toolEvidence: toolEvidence,
+                    resolved: externalJudge
+                )
+                let remappedChecks = external.judgment.checks.map { check in
+                    var remapped = check
+                    remapped.criterionIndex = semanticIndexes[check.criterionIndex - 1] + 1
+                    return remapped
+                }
+                let judgment = EvaluationJudge.aggregate(checks: objectiveChecks + remappedChecks)
+                var trace = external.trace
+                trace.checks = judgment.checks
+                trace.judgedCriterionIndexes = semanticIndexes.map { $0 + 1 }
+                return JudgeOutcome(
+                    status: judgment.score >= EvaluationSuite.judgePassingScore ? .passed : .failed,
+                    score: judgment.score,
+                    rationale: judgment.rationale,
+                    durationMilliseconds: external.durationMilliseconds,
+                    usage: external.usage,
+                    trace: trace,
+                    identity: external.identity,
+                    cost: external.cost
+                )
+            } catch {
+                return JudgeOutcome(
+                    status: .unscored,
+                    rationale: "The subject response succeeded, but the independent judge did not produce valid evidence.",
+                    durationMilliseconds: Self.milliseconds(since: started),
+                    errorCategory: externalJudgeErrorCategory(error),
+                    errorMessage: error.localizedDescription,
+                    identity: EvaluationJudgeIdentity(
+                        mode: .connection,
+                        connectionID: externalJudge.connection.id,
+                        connectionName: externalJudge.connection.name,
+                        endpointKind: externalJudge.connection.kind,
+                        baseURL: externalJudge.connection.baseURL,
+                        requestedModelID: externalJudge.connection.modelID,
+                        reportedModelID: nil,
+                        provider: nil,
+                        providerOrder: externalJudge.connection.providerOrder
+                    ),
+                    cost: EvaluationCost(availability: .unavailable, usd: nil, explanation: "The judge request failed before cost was available.")
+                )
+            }
+        }
 
         let started = ContinuousClock.now
         let judgeSpanID = workflowRecorder?.begin(kind: .judge, title: "AI judge",
@@ -173,7 +237,17 @@ extension EvaluationRunner {
                         score: judgment.score, rationale: judgment.rationale,
                         durationMilliseconds: Self.milliseconds(since: started), usage: totalUsage,
                         reasoningText: reasoning.isEmpty ? nil : reasoning.joined(separator: "\n\n"),
-                        trace: judgeTrace
+                        trace: judgeTrace,
+                        identity: EvaluationJudgeIdentity(
+                            mode: .sameModel, connectionID: nil, connectionName: "Same model as subject",
+                            endpointKind: nil, baseURL: nil, requestedModelID: modelName,
+                            reportedModelID: modelName, provider: suite.modelConfiguration.provider.rawValue,
+                            providerOrder: []
+                        ),
+                        cost: EvaluationCost(
+                            availability: .unavailable, usd: nil,
+                            explanation: "Apple's model runtime does not report monetary cost."
+                        )
                     )
                 } catch let error as EvaluationJudgeValidationError {
                     attempts[attempts.count - 1].validationError = error.localizedDescription
@@ -224,6 +298,24 @@ extension EvaluationRunner {
                 errorCategory: traceError.category, errorMessage: traceError.message, trace: judgeTrace
             )
         }
+    }
+
+    private func externalJudgeErrorCategory(_ error: Error) -> String {
+        if error is CancellationError { return "cancelled" }
+        if let compatible = error as? EvaluationCompatibleJudgeError {
+            switch compatible {
+            case .disclosureNotApproved: return "judgeDisclosureRequired"
+            case .capabilityMismatch: return "incompatibleJudge"
+            case .exhausted, .missingAssessment: return "invalidJudgeOutput"
+            case .http: return "judgeHTTPFailure"
+            case .responseTooLarge: return "invalidJudgeOutput"
+            case .invalidConfiguration: return "invalidJudgeConfiguration"
+            case .keychain: return "judgeCredentialUnavailable"
+            case .invalidResponse: return "judgeNetworkFailure"
+            }
+        }
+        if error is EvaluationJudgeValidationError { return "invalidJudgeOutput" }
+        return "judgeFailure"
     }
 
     static func judgePrompt(

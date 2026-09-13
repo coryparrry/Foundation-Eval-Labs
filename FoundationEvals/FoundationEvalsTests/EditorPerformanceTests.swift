@@ -25,13 +25,13 @@ struct EditorPerformanceTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
-        let original = try Data(contentsOf: directory.appending(path: "suite.json"))
+        let original = try Data(contentsOf: suiteDirectory(store, in: directory).appending(path: "suite.json"))
         for index in 0..<20 {
             store.draftSuite.name = "Typed name \(index)"
             store.scheduleSuiteSave()
         }
         #expect(store.isDraftSavePending)
-        #expect(try Data(contentsOf: directory.appending(path: "suite.json")) == original)
+        #expect(try Data(contentsOf: suiteDirectory(store, in: directory).appending(path: "suite.json")) == original)
         try await waitForSave(store)
         #expect(EvaluationStore(supportDirectory: directory).draftSuite.name == "Typed name 19")
     }
@@ -89,7 +89,7 @@ struct EditorPerformanceTests {
         store.scheduleSuiteSave()
         try await waitForSave(store)
         #expect(EvaluationStore(supportDirectory: directory).draftSuite == original)
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "suite-draft.json").path))
+        #expect(!FileManager.default.fileExists(atPath: suiteDirectory(store, in: directory).appending(path: "suite-draft.json").path))
     }
 
     private func waitForSave(_ store: EvaluationStore) async throws {
@@ -98,5 +98,11 @@ struct EditorPerformanceTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(!store.isDraftSavePending)
+    }
+
+    private func suiteDirectory(_ store: EvaluationStore, in directory: URL) -> URL {
+        EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        )
     }
 }

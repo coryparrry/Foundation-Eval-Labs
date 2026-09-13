@@ -43,9 +43,14 @@ struct EvaluationStoreRunLifecycleTests {
         #expect(result.status == .passed)
         #expect(result.errorCategory == nil)
         #expect(store.runStatus(id: runID)?.phase == .completed)
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "active-run.json").path))
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        )
+        #expect(!FileManager.default.fileExists(atPath: suiteDirectory.appending(path: "active-run.json").path))
         #expect(FileManager.default.fileExists(
-            atPath: directory.appending(path: "Runs/\(runID.uuidString).json").path
+            atPath: suiteDirectory.appending(path: "Runs/\(runID.uuidString).json").path
         ))
 
         let reloadedStore = EvaluationStore(supportDirectory: directory)
@@ -138,13 +143,15 @@ struct EvaluationStoreRunLifecycleTests {
     }
 }
 
-private final class LifecycleCustomModelFixture: @unchecked Sendable {
+final class LifecycleCustomModelFixture: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "FoundationEvalsTests.LifecycleHTTPFixture")
     private let ready = DispatchSemaphore(value: 0)
+    private let responseDelay: TimeInterval
     private(set) var port: UInt16 = 0
 
-    init() throws {
+    init(responseDelay: TimeInterval = 0) throws {
+        self.responseDelay = responseDelay
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
@@ -225,15 +232,22 @@ private final class LifecycleCustomModelFixture: @unchecked Sendable {
             \r
             \(body)
             """
-        connection.send(
-            content: Data(response.utf8),
-            contentContext: .defaultMessage,
-            isComplete: true,
-            completion: .contentProcessed { _ in connection.cancel() }
-        )
+        let send: @Sendable () -> Void = {
+            connection.send(
+                content: Data(response.utf8),
+                contentContext: .defaultMessage,
+                isComplete: true,
+                completion: .contentProcessed { _ in connection.cancel() }
+            )
+        }
+        if responseDelay > 0 {
+            queue.asyncAfter(deadline: .now() + responseDelay, execute: send)
+        } else {
+            send()
+        }
     }
 }
 
-private enum LifecycleCustomModelFixtureError: Error {
+enum LifecycleCustomModelFixtureError: Error {
     case failedToListen
 }

@@ -147,7 +147,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
             .scroll(byDeltaX: 0, deltaY: -480)
         replaceText(in: expected, with: "Deterministic fixture stream.")
 
-        app.radioButtons["Model"].click()
+        app.radioButtons["Advanced"].click()
         let provider = app.popUpButtons["Model provider"]
         XCTAssertTrue(provider.waitForExistence(timeout: 3))
         provider.click()

@@ -207,6 +207,8 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
         )
     ]
     var attachments: [EvaluationAttachment] = []
+    var judgeConfiguration = EvaluationJudgeConfiguration()
+    var releasePolicy = EvaluationReleasePolicy()
 
     var needsModelJudge: Bool {
         scoringMode == .modelJudge && rubricCriteria.contains { EvaluationExactCriterion.expectedText(in: $0) == nil }
@@ -223,6 +225,7 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, version, instructions, criteria, scoringMode, repetitions, modelConfiguration, features, cases, attachments
+        case judgeConfiguration, releasePolicy
     }
 
     init(from decoder: Decoder) throws {
@@ -240,6 +243,10 @@ struct EvaluationSuite: Codable, Equatable, Sendable {
         features = try container.decodeIfPresent(EvaluationFeatureConfiguration.self, forKey: .features) ?? defaults.features
         cases = try container.decodeIfPresent([EvaluationCase].self, forKey: .cases) ?? defaults.cases
         attachments = try container.decodeIfPresent([EvaluationAttachment].self, forKey: .attachments) ?? defaults.attachments
+        judgeConfiguration = try container.decodeIfPresent(EvaluationJudgeConfiguration.self, forKey: .judgeConfiguration)
+            ?? defaults.judgeConfiguration
+        releasePolicy = try container.decodeIfPresent(EvaluationReleasePolicy.self, forKey: .releasePolicy)
+            ?? defaults.releasePolicy
     }
 }
 
@@ -291,6 +298,8 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var timing: EvaluationSampleTiming? = nil
     var featureTrace: EvaluationFeatureTrace? = nil
     var judgeTrace: EvaluationJudgeTrace? = nil
+    var judgeIdentity: EvaluationJudgeIdentity? = nil
+    var judgeCost: EvaluationCost? = nil
     var fieldAssertionResults: [EvaluationFieldAssertionResult]? = nil
     var refusal: EvaluationRefusalTrace? = nil
     var imageInputTokenCountAvailable: Bool? = nil
@@ -348,6 +357,8 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var plannedSampleCount: Int?
     var suiteRevision: String? = nil
     var plannedCases: [EvaluationCase]? = nil
+    /// Durable ordering assigned when a newly completed run enters history.
+    var historySequence: UInt64? = nil
     var startedAt: Date
     var completedAt: Date
     var cancelled: Bool
@@ -356,11 +367,45 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var attachments: [EvaluationAttachmentTrace]
     var results: [EvaluationSampleResult]
     var execution: EvaluationExecutionTrace? = nil
+    var projectID: UUID? = nil
+    var suiteDefinition: EvaluationSuiteDefinition? = nil
+    var repository: EvaluationRepositorySnapshot? = nil
+    var assessments: [EvaluationAssessment]? = nil
+    var selectedAssessmentID: UUID? = nil
+    var subjectEvidence: EvaluationSubjectEvidenceSnapshot? = nil
 
-    var passedCount: Int { results.count(where: { $0.status == .passed }) }
-    var failedCount: Int { results.count(where: { $0.status == .failed }) }
+    var effectiveResults: [EvaluationSampleResult] {
+        guard let assessment = selectedAssessment else { return results }
+        let samples = assessment.samples.reduce(into: [UUID: EvaluationSampleAssessment]()) {
+            if $0[$1.sampleID] == nil { $0[$1.sampleID] = $1 }
+        }
+        return results.map { original in
+            guard let assessed = samples[original.id] else { return original }
+            var result = original
+            result.status = assessed.status
+            result.score = assessed.score
+            result.rationale = assessed.rationale
+            result.judgeTrace = assessed.trace
+            result.judgeErrorCategory = assessed.errorCategory
+            result.judgeErrorMessage = assessed.errorMessage
+            result.judgeUsage = assessed.usage
+            result.judgeDurationMilliseconds = assessed.durationMilliseconds
+            result.judgeIdentity = assessment.judge
+            return result
+        }
+    }
+
+    var passedCount: Int {
+        effectiveResults.count(where: { $0.status == .passed })
+    }
+    var failedCount: Int {
+        effectiveResults.count(where: { $0.status == .failed })
+    }
     var errorCount: Int {
-        results.count(where: { $0.errorCategory != nil || $0.judgeErrorCategory != nil })
+        effectiveResults.count(where: {
+            $0.status == .error || $0.errorCategory != nil || $0.errorMessage != nil
+                || $0.judgeErrorCategory != nil || $0.judgeErrorMessage != nil
+        })
     }
     var scoredCount: Int { passedCount + failedCount }
     var plannedResultCount: Int { plannedSampleCount ?? results.count }
@@ -387,7 +432,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     }
 
     var averageScore: Double? {
-        let scores = results.compactMap(\.score)
+        let scores = effectiveResults.compactMap(\.score)
         return scores.isEmpty ? nil : Double(scores.reduce(0, +)) / Double(scores.count)
     }
 
@@ -400,7 +445,12 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     }
 
     var totalTokens: Int {
-        results.reduce(0) { $0 + $1.usage.totalTokens + ($1.judgeUsage?.totalTokens ?? 0) }
+        effectiveResults.reduce(0) { $0 + $1.usage.totalTokens + ($1.judgeUsage?.totalTokens ?? 0) }
+    }
+
+    var selectedAssessment: EvaluationAssessment? {
+        guard let selectedAssessmentID else { return assessments?.last }
+        return assessments?.first { $0.id == selectedAssessmentID }
     }
 }
 
@@ -420,6 +470,8 @@ struct EvaluationActiveRun: Codable, Equatable, Sendable {
     var completedSamples: Int
     var totalSamples: Int
     var cancellationRequested: Bool
+    var projectID: UUID? = nil
+    var suiteID: UUID? = nil
 }
 
 struct EvaluationRunOperation: Codable, Sendable {
@@ -430,9 +482,12 @@ struct EvaluationRunOperation: Codable, Sendable {
     var totalSamples: Int
     var startedAt: Date
     var completedAt: Date?
+    var projectID: UUID? = nil
+    var suiteID: UUID? = nil
 }
 
 enum SidebarSelection: Hashable {
+    case overview
     case suite
     case run(UUID)
 }
