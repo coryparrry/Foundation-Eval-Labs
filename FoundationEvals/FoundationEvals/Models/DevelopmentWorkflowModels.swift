@@ -281,6 +281,8 @@ struct EvaluationAssessment: Identifiable, Codable, Sendable {
     var cost: EvaluationCost
     var supersedesAssessmentID: UUID?
     var observedJudgeIdentities: [EvaluationJudgeIdentity]? = nil
+    var scoringContract: EvaluationScoringContract? = nil
+    var subjectEvidenceDigest: String? = nil
 
     var errorCount: Int { samples.count { $0.errorCategory != nil || $0.errorMessage != nil } }
 }
@@ -307,6 +309,8 @@ struct EvaluationReviewedJudgeExample: Identifiable, Codable, Sendable {
     var expectedStatus: EvaluationResultStatus
     var reason: String
     var createdAt: Date
+    var scoringContract: EvaluationScoringContract? = nil
+    var subjectEvidenceDigest: String? = nil
 }
 
 struct EvaluationBaselineApproval: Identifiable, Codable, Sendable {
@@ -317,8 +321,153 @@ struct EvaluationBaselineApproval: Identifiable, Codable, Sendable {
     var approvedAt: Date
     var note: String?
     var revokedAt: Date?
+    var scoringContract: EvaluationScoringContract? = nil
 
     var isCurrent: Bool { revokedAt == nil }
+}
+
+/// The parts of a suite that determine whether two score sets are comparable.
+/// Subject instructions and model settings are deliberately excluded so a
+/// prompt/model change can be measured against an older compatible baseline.
+struct EvaluationScoringContract: Codable, Equatable, Sendable {
+    var scoringMode: ScoringMode
+    var rubricCriteria: [String]
+    var judgePromptVersion: String?
+    var judgePassingScore: Int?
+    var casesDigest: String
+
+    init(
+        scoringMode: ScoringMode,
+        rubricCriteria: [String],
+        judgePromptVersion: String?,
+        judgePassingScore: Int?,
+        cases: [EvaluationCase]
+    ) throws {
+        self.scoringMode = scoringMode
+        self.rubricCriteria = rubricCriteria
+        self.judgePromptVersion = judgePromptVersion
+        self.judgePassingScore = judgePassingScore
+        let normalizedCases = cases
+            .map(EvaluationScoringCaseProjection.init(case:))
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        let data = try CanonicalJSON.data(for: normalizedCases, prettyPrinted: false)
+        casesDigest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    init(suite: EvaluationSuite) throws {
+        try self.init(
+            scoringMode: suite.scoringMode,
+            rubricCriteria: suite.scoringMode == .modelJudge ? suite.rubricCriteria : [],
+            judgePromptVersion: suite.scoringMode == .modelJudge ? EvaluationRunner.judgePromptVersion : nil,
+            judgePassingScore: suite.scoringMode == .modelJudge ? EvaluationSuite.judgePassingScore : nil,
+            cases: suite.cases
+        )
+    }
+
+    init(run: EvaluationRun) throws {
+        try self.init(
+            scoringMode: run.scoringMode,
+            rubricCriteria: run.scoringMode == .modelJudge
+                ? run.criteria
+                    .split(whereSeparator: \Character.isNewline)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                : [],
+            judgePromptVersion: run.scoringMode == .modelJudge ? run.judgePromptVersion : nil,
+            judgePassingScore: run.scoringMode == .modelJudge
+                ? (run.judgePassingScore ?? EvaluationSuite.judgePassingScore)
+                : nil,
+            cases: run.plannedCases ?? run.suiteDefinition?.cases ?? []
+        )
+    }
+}
+
+/// Mirrors the semantic case comparison contract while excluding editor-only
+/// labels, ordering, and nested identities that cannot affect a score.
+private struct EvaluationScoringCaseProjection: Codable {
+    var id: UUID
+    var prompt: String
+    var expected: String
+    var conversation: EvaluationScoringConversationProjection
+    var fieldAssertions: [EvaluationScoringAssertionProjection]
+
+    init(case evaluationCase: EvaluationCase) {
+        id = evaluationCase.id
+        prompt = evaluationCase.prompt
+        expected = evaluationCase.expected
+        conversation = .init(configuration: evaluationCase.conversation)
+        fieldAssertions = (evaluationCase.fieldAssertions ?? []).map(EvaluationScoringAssertionProjection.init(assertion:))
+    }
+}
+
+private struct EvaluationScoringConversationProjection: Codable {
+    var setupPrompts: [String]
+    var restoredTranscriptJSON: String?
+    var historyPolicy: EvaluationHistoryPolicy
+    var retainedTurnCount: Int?
+    var modelHistoryProjection: EvaluationModelHistoryProjection
+
+    init(configuration: EvaluationConversationConfiguration) {
+        setupPrompts = configuration.setupTurns.map(\.prompt)
+        restoredTranscriptJSON = configuration.restoredTranscriptJSON
+        historyPolicy = configuration.historyPolicy
+        retainedTurnCount = configuration.historyPolicy == .retainRecentCompleteTurns
+            ? configuration.retainedTurnCount
+            : nil
+        modelHistoryProjection = configuration.modelHistoryProjection ?? .init()
+    }
+}
+
+private struct EvaluationScoringAssertionProjection: Codable {
+    var pointer: String
+    var operation: EvaluationFieldAssertionOperation
+    var expectedValue: String?
+
+    init(assertion: EvaluationFieldAssertion) {
+        pointer = assertion.pointer
+        operation = assertion.operation
+        expectedValue = assertion.operation == .exists ? nil : assertion.expectedValue
+    }
+}
+
+struct EvaluationSubjectAttachmentSnapshot: Codable, Equatable, Sendable {
+    var id: UUID
+    var name: String
+    var kind: EvaluationAttachmentKind
+    var byteCount: Int
+    var sha256: String
+    var storedFilename: String?
+    var text: String?
+}
+
+/// Immutable subject-side context retained for reassessment and calibration.
+/// Image bytes live in the run-owned evidence directory named by the run ID.
+struct EvaluationSubjectEvidenceSnapshot: Codable, Equatable, Sendable {
+    var instructions: String
+    var cases: [EvaluationCase]
+    var attachments: [EvaluationSubjectAttachmentSnapshot]
+    var digest: String
+
+    static func digest(
+        instructions: String,
+        cases: [EvaluationCase],
+        attachments: [EvaluationSubjectAttachmentSnapshot]
+    ) throws -> String {
+        struct Payload: Codable {
+            var instructions: String
+            var cases: [EvaluationCase]
+            var attachments: [EvaluationSubjectAttachmentSnapshot]
+        }
+        let data = try CanonicalJSON.data(
+            for: Payload(instructions: instructions, cases: cases, attachments: attachments),
+            prettyPrinted: false
+        )
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    var hasValidDigest: Bool {
+        (try? Self.digest(instructions: instructions, cases: cases, attachments: attachments)) == digest
+    }
 }
 
 struct EvaluationSuiteLocalState: Codable, Sendable {
@@ -356,6 +505,7 @@ struct EvaluationExperimentVariant: Identifiable, Codable, Sendable {
     var id: UUID
     var name: String
     var instructions: String
+    var suiteRevision: String? = nil
 }
 
 struct EvaluationExperiment: Identifiable, Codable, Sendable {
@@ -413,5 +563,21 @@ struct EvaluationReleaseCheckReport: Codable, Sendable {
     var outcome: EvaluationReleaseCheckExit
     var summary: String
     var failures: [String]
+    var generatedAt: Date
+}
+
+struct EvaluationProjectReleaseSuiteReport: Codable, Sendable {
+    var suiteID: UUID
+    var suiteName: String
+    var required: Bool
+    var report: EvaluationReleaseCheckReport
+}
+
+struct EvaluationProjectReleaseCheckReport: Codable, Sendable {
+    var formatVersion = 1
+    var projectID: UUID
+    var outcome: EvaluationReleaseCheckExit
+    var summary: String
+    var suites: [EvaluationProjectReleaseSuiteReport]
     var generatedAt: Date
 }

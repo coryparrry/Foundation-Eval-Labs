@@ -43,6 +43,8 @@ enum EvaluationStarterPack: String, CaseIterable, Identifiable, Sendable {
         suite.features.outputFields = [
             .init(name: "merchant", description: "Merchant printed on the receipt"),
             .init(name: "date", description: "Printed ISO date"),
+            .init(name: "subtotal", description: "Printed subtotal before discounts", type: .number, isOptional: true),
+            .init(name: "discount", description: "Printed discount amount", type: .number, isOptional: true),
             .init(name: "total", description: "Final numeric total", type: .number),
             .init(name: "currency", description: "ISO currency code"),
             .init(name: "vat", description: "Printed VAT amount", type: .number, isOptional: true)

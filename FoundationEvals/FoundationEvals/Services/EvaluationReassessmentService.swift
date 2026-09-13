@@ -14,6 +14,15 @@ struct EvaluationJudgeCheckReport: Sendable {
     var passed: Bool { !results.isEmpty && results.allSatisfy(\.passed) }
 }
 
+struct EvaluationJudgeCheckSource: Sendable {
+    var example: EvaluationReviewedJudgeExample
+    var run: EvaluationRun?
+    var assessment: EvaluationAssessment?
+    var suite: EvaluationSuite?
+    var images: [ImageEvaluationInput]
+    var errorMessage: String?
+}
+
 actor EvaluationReassessmentService {
     private let client = EvaluationCompatibleJudgeClient()
 
@@ -21,7 +30,9 @@ actor EvaluationReassessmentService {
         run: EvaluationRun,
         suite: EvaluationSuite,
         images: [ImageEvaluationInput],
-        resolved: EvaluationResolvedJudgeConnection
+        resolved: EvaluationResolvedJudgeConnection,
+        scoringContract: EvaluationScoringContract? = nil,
+        subjectEvidenceDigest: String? = nil
     ) async -> EvaluationAssessment {
         let started = ContinuousClock.now
         var samples: [EvaluationSampleAssessment] = []
@@ -120,25 +131,35 @@ actor EvaluationReassessmentService {
             samples: samples, totalUsage: hasUsage ? totalUsage : nil,
             durationMilliseconds: milliseconds(since: started), cost: cost,
             supersedesAssessmentID: run.selectedAssessmentID,
-            observedJudgeIdentities: observedIdentities.isEmpty ? [assessmentIdentity] : observedIdentities
+            observedJudgeIdentities: observedIdentities.isEmpty ? [assessmentIdentity] : observedIdentities,
+            scoringContract: scoringContract ?? (try? EvaluationScoringContract(suite: suite)),
+            subjectEvidenceDigest: subjectEvidenceDigest
         )
     }
 
     func checkJudge(
-        examples: [EvaluationReviewedJudgeExample],
-        runs: [EvaluationRun],
-        suite: EvaluationSuite,
-        images: [ImageEvaluationInput],
+        sources: [EvaluationJudgeCheckSource],
         resolved: EvaluationResolvedJudgeConnection
     ) async -> EvaluationJudgeCheckReport {
         var results: [EvaluationJudgeCheckResult] = []
-        for example in examples {
-            guard let run = runs.first(where: { $0.id == example.sourceRunID }),
+        for source in sources {
+            let example = source.example
+            guard source.errorMessage == nil,
+                  let run = source.run,
+                  let assessment = source.assessment,
+                  let suite = source.suite,
                   let sample = run.results.first(where: { $0.id == example.sampleID }),
-                  let evaluationCase = (run.plannedCases ?? suite.cases).first(where: { $0.id == sample.caseID }) else {
+                  let evaluationCase = suite.cases.first(where: { $0.id == sample.caseID }) else {
                 results.append(.init(
                     example: example, actualStatus: .unscored, passed: false,
-                    errorMessage: "The reviewed example's saved evidence is missing."
+                    errorMessage: source.errorMessage ?? "The reviewed example's saved evidence is missing."
+                ))
+                continue
+            }
+            guard assessment.promptVersion == EvaluationRunner.judgePromptVersion else {
+                results.append(.init(
+                    example: example, actualStatus: .unscored, passed: false,
+                    errorMessage: "The reviewed example used a judge prompt policy that this version cannot replay."
                 ))
                 continue
             }
@@ -159,7 +180,7 @@ actor EvaluationReassessmentService {
                     let judged = try await client.judge(
                         response: sample.response, evaluationCase: evaluationCase,
                         effectivePrompt: sample.effectivePrompt ?? sample.prompt,
-                        suite: semanticSuite, images: images,
+                        suite: semanticSuite, images: source.images,
                         toolEvidence: evidence(from: sample), resolved: resolved
                     )
                     let remapped = judged.judgment.checks.map { check in
@@ -170,7 +191,8 @@ actor EvaluationReassessmentService {
                     judgment = EvaluationJudge.aggregate(checks: objective + remapped)
                 }
                 let status = gatedStatus(
-                    judgment: judgment, response: sample.response, evaluationCase: evaluationCase
+                    judgment: judgment, response: sample.response, evaluationCase: evaluationCase,
+                    passingScore: assessment.passingScore
                 )
                 results.append(.init(example: example, actualStatus: status,
                                      passed: status == example.expectedStatus, errorMessage: nil))
@@ -201,9 +223,10 @@ actor EvaluationReassessmentService {
     private func gatedStatus(
         judgment: EvaluationValidatedJudgment,
         response: String,
-        evaluationCase: EvaluationCase
+        evaluationCase: EvaluationCase,
+        passingScore: Int = EvaluationSuite.judgePassingScore
     ) -> EvaluationResultStatus {
-        let base: EvaluationResultStatus = judgment.score >= EvaluationSuite.judgePassingScore ? .passed : .failed
+        let base: EvaluationResultStatus = judgment.score >= passingScore ? .passed : .failed
         let assertions = EvaluationFieldAssertions.evaluate(
             response: response, assertions: evaluationCase.fieldAssertions ?? []
         )

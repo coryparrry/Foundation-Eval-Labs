@@ -126,6 +126,21 @@ struct WorkspacePresentationTests {
         #expect(store.suite.instructions != definition.instructions)
     }
 
+    @Test func overviewUsesDurableHistoryOrderWhenRunTimestampsDiffer() {
+        let suite = EvaluationSuite()
+        let record = EvaluationSuiteRecord(id: suite.id, name: suite.name, createdAt: .now, updatedAt: .now,
+                                           archivedAt: nil, repositoryDefinitionPath: nil, lastRepositoryRevision: nil)
+        var older = fixture(status: .failed)
+        older.historySequence = 1
+        older.startedAt = .distantFuture
+        var latest = fixture()
+        latest.historySequence = 2
+        let summary = SuiteOverviewSummary(record: record, suite: suite, currentRevision: "current", draft: nil,
+                                           runs: [older, latest], localState: .init())
+        #expect(summary.latestRunID == latest.id)
+        #expect(summary.state == .passed)
+    }
+
     private func assessment(for run: EvaluationRun, status: EvaluationResultStatus) -> EvaluationAssessment {
         .init(
             id: UUID(), runID: run.id, createdAt: .now, origin: .reassessment,

@@ -138,7 +138,7 @@ struct EvaluationCompatibleJudgeClientTests {
     }
 }
 
-private final class CompatibleJudgeFixture: @unchecked Sendable {
+final class CompatibleJudgeFixture: @unchecked Sendable {
     enum Mode { case valid, malformed }
 
     private let listener: NWListener
@@ -147,10 +147,12 @@ private final class CompatibleJudgeFixture: @unchecked Sendable {
     private let lock = NSLock()
     private let mode: Mode
     private var requestCount = 0
+    private var completionRequests: [String] = []
     private(set) var port: UInt16 = 0
 
     var baseURL: String { "http://127.0.0.1:\(port)/v1" }
     var completionRequestCount: Int { lock.withLock { requestCount } }
+    var lastCompletionRequest: String? { lock.withLock { completionRequests.last } }
 
     init(mode: Mode) throws {
         self.mode = mode
@@ -188,7 +190,7 @@ private final class CompatibleJudgeFixture: @unchecked Sendable {
             var request = accumulated
             if let data { request.append(data) }
             guard error == nil else { connection.cancel(); return }
-            guard request.range(of: Data("\r\n\r\n".utf8)) != nil else {
+            guard self.isCompleteHTTPRequest(request) else {
                 if complete { connection.cancel() } else { self.receive(connection, data: request) }
                 return
             }
@@ -202,7 +204,10 @@ private final class CompatibleJudgeFixture: @unchecked Sendable {
         if first.contains("/models") {
             body = Data(#"{"data":[{"id":"judge-fixture","supported_parameters":["response_format"],"architecture":{"input_modalities":["text"]}}]}"#.utf8)
         } else {
-            lock.withLock { requestCount += 1 }
+            lock.withLock {
+                requestCount += 1
+                completionRequests.append(String(decoding: request, as: UTF8.self))
+            }
             let content = mode == .valid
                 ? #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Supported by the saved evidence."}]}"#
                 : #"{"requirements":[]}"#
@@ -220,6 +225,17 @@ private final class CompatibleJudgeFixture: @unchecked Sendable {
             isComplete: true,
             completion: .contentProcessed { _ in connection.cancel() }
         )
+    }
+
+    private func isCompleteHTTPRequest(_ request: Data) -> Bool {
+        let separator = Data("\r\n\r\n".utf8)
+        guard let headerRange = request.range(of: separator) else { return false }
+        let header = String(decoding: request[..<headerRange.lowerBound], as: UTF8.self)
+        let contentLength = header.components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix("content-length:") }
+            .flatMap { Int($0.split(separator: ":", maxSplits: 1)[1].trimmingCharacters(in: .whitespaces)) }
+            ?? 0
+        return request.count >= headerRange.upperBound + contentLength
     }
 
     private enum FixtureError: Error { case listen }

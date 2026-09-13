@@ -887,7 +887,8 @@ actor EvaluationRunner {
             rubric: suite.criteria, passingScore: EvaluationSuite.judgePassingScore,
             samples: samples, totalUsage: hasUsage ? usage : nil,
             durationMilliseconds: duration, cost: cost, supersedesAssessmentID: nil,
-            observedJudgeIdentities: observedIdentities.isEmpty ? [identity] : observedIdentities
+            observedJudgeIdentities: observedIdentities.isEmpty ? [identity] : observedIdentities,
+            scoringContract: try? EvaluationScoringContract(suite: suite)
         )
     }
 }

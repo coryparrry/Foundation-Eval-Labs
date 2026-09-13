@@ -64,6 +64,12 @@ struct WorkspaceResetTests {
         let draft = store.draftSuite
         try Data("unreadable".utf8).write(to: suiteDirectory(store, in: directory).appending(path: "Runs/broken.json"))
         try Data("obsolete".utf8).write(to: suiteDirectory(store, in: directory).appending(path: "active-run.json"))
+        let evidence = suiteDirectory(store, in: directory).appending(path: "RunEvidence/\(run.id)")
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        try Data("private image fixture".utf8).write(to: evidence.appending(path: "image.png"))
+        let pending = suiteDirectory(store, in: directory).appending(path: "RunDeletions")
+        try FileManager.default.createDirectory(at: pending, withIntermediateDirectories: true)
+        try Data("old tombstone".utf8).write(to: pending.appending(path: "previous.json"))
         try store.clearRunHistory()
         #expect(store.runs.isEmpty)
         #expect(store.selection == .suite)
@@ -71,6 +77,28 @@ struct WorkspaceResetTests {
         #expect(reloaded.runs.isEmpty)
         #expect(reloaded.draftSuite == draft)
         #expect(reloaded.notice == nil)
+        #expect(!FileManager.default.fileExists(atPath: evidence.deletingLastPathComponent().path))
+        #expect(!FileManager.default.fileExists(atPath: pending.path))
+    }
+
+    @Test func clearingHistoryCanRetryAfterCopiedEvidenceCleanupFails() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let root = suiteDirectory(store, in: directory)
+        let evidence = root.appending(path: "RunEvidence")
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        try Data("private fixture".utf8).write(to: evidence.appending(path: "image.png"))
+        try Data("unreadable run".utf8).write(to: root.appending(path: "Runs/broken.json"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: evidence.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: evidence.path) }
+        #expect(throws: (any Error).self) { try store.clearRunHistory() }
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "Runs/broken.json").path))
+        #expect(FileManager.default.fileExists(atPath: root.appending(path: "RunDeletions/broken.json").path))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: evidence.path)
+        try EvaluationStore(supportDirectory: directory).clearRunHistory()
+        #expect(!FileManager.default.fileExists(atPath: evidence.path))
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "RunDeletions").path))
     }
 
     @Test func resetRejectsRunningAndFileOperations() throws {

@@ -92,7 +92,8 @@ struct EvaluationRunAnalysis: Codable, Equatable, Sendable {
     var cases: [EvaluationCaseAnalysis]
 
     init(run: EvaluationRun) {
-        let buckets = run.results.map(SampleBucket.init(result:))
+        let effectiveResults = run.effectiveResults
+        let buckets = effectiveResults.map(SampleBucket.init(result:))
         let passed = buckets.count(where: { $0 == .passed })
         let failed = buckets.count(where: { $0 == .failed })
         let scored = passed + failed
@@ -122,15 +123,18 @@ struct EvaluationRunAnalysis: Codable, Equatable, Sendable {
             usageUnavailableSampleCount: subjectUsageUnavailable
         )
         judgeUsage = EvaluationTokenSummary(
-            usages: run.results.compactMap(\.judgeUsage),
-            usageUnavailableSampleCount: run.results.count(where: {
+            usages: effectiveResults.compactMap(\.judgeUsage),
+            usageUnavailableSampleCount: effectiveResults.count(where: {
                 $0.hasJudgeError && $0.judgeUsage == nil
             })
         )
-        cases = Self.caseAnalyses(for: run)
+        cases = Self.caseAnalyses(for: run, results: effectiveResults)
     }
 
-    private static func caseAnalyses(for run: EvaluationRun) -> [EvaluationCaseAnalysis] {
+    private static func caseAnalyses(
+        for run: EvaluationRun,
+        results effectiveResults: [EvaluationSampleResult]
+    ) -> [EvaluationCaseAnalysis] {
         var definitions: [UUID: CaseDefinition] = [:]
         var orderedIDs: [UUID] = []
 
@@ -139,12 +143,12 @@ struct EvaluationRunAnalysis: Codable, Equatable, Sendable {
             definitions[evaluationCase.id] = CaseDefinition(evaluationCase)
             orderedIDs.append(evaluationCase.id)
         }
-        for result in run.results where definitions[result.caseID] == nil {
+        for result in effectiveResults where definitions[result.caseID] == nil {
             definitions[result.caseID] = CaseDefinition(result)
             orderedIDs.append(result.caseID)
         }
 
-        let resultsByCase = Dictionary(grouping: run.results, by: \.caseID)
+        let resultsByCase = Dictionary(grouping: effectiveResults, by: \.caseID)
         return orderedIDs.compactMap { caseID in
             guard let definition = definitions[caseID] else { return nil }
             let results = resultsByCase[caseID, default: []]
@@ -342,7 +346,9 @@ struct EvaluationRunComparison: Codable, Equatable, Sendable {
         if current.suiteID != baseline.suiteID { reasons.append("The runs belong to different suites.") }
         if current.scoringMode != baseline.scoringMode { reasons.append("The scoring mode changed.") }
         if current.scoringMode == .modelJudge, baseline.scoringMode == .modelJudge {
-            if current.criteria != baseline.criteria { reasons.append("The scoring rubric changed.") }
+            if normalizedRubric(current.criteria) != normalizedRubric(baseline.criteria) {
+                reasons.append("The scoring rubric changed.")
+            }
             if current.judgePromptVersion != baseline.judgePromptVersion {
                 reasons.append("The judge prompt policy changed.")
             }
@@ -353,6 +359,13 @@ struct EvaluationRunComparison: Codable, Equatable, Sendable {
             }
         }
         return reasons
+    }
+
+    private static func normalizedRubric(_ rubric: String) -> [String] {
+        rubric
+            .split(whereSeparator: \Character.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private static func warnings(

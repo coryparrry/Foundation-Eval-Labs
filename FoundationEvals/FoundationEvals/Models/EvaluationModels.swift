@@ -357,6 +357,8 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var plannedSampleCount: Int?
     var suiteRevision: String? = nil
     var plannedCases: [EvaluationCase]? = nil
+    /// Durable ordering assigned when a newly completed run enters history.
+    var historySequence: UInt64? = nil
     var startedAt: Date
     var completedAt: Date
     var cancelled: Bool
@@ -370,21 +372,40 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var repository: EvaluationRepositorySnapshot? = nil
     var assessments: [EvaluationAssessment]? = nil
     var selectedAssessmentID: UUID? = nil
+    var subjectEvidence: EvaluationSubjectEvidenceSnapshot? = nil
+
+    var effectiveResults: [EvaluationSampleResult] {
+        guard let assessment = selectedAssessment else { return results }
+        let samples = assessment.samples.reduce(into: [UUID: EvaluationSampleAssessment]()) {
+            if $0[$1.sampleID] == nil { $0[$1.sampleID] = $1 }
+        }
+        return results.map { original in
+            guard let assessed = samples[original.id] else { return original }
+            var result = original
+            result.status = assessed.status
+            result.score = assessed.score
+            result.rationale = assessed.rationale
+            result.judgeTrace = assessed.trace
+            result.judgeErrorCategory = assessed.errorCategory
+            result.judgeErrorMessage = assessed.errorMessage
+            result.judgeUsage = assessed.usage
+            result.judgeDurationMilliseconds = assessed.durationMilliseconds
+            result.judgeIdentity = assessment.judge
+            return result
+        }
+    }
 
     var passedCount: Int {
-        selectedAssessment?.samples.count(where: { $0.status == .passed })
-            ?? results.count(where: { $0.status == .passed })
+        effectiveResults.count(where: { $0.status == .passed })
     }
     var failedCount: Int {
-        selectedAssessment?.samples.count(where: { $0.status == .failed })
-            ?? results.count(where: { $0.status == .failed })
+        effectiveResults.count(where: { $0.status == .failed })
     }
     var errorCount: Int {
-        let subjectErrors = results.count(where: { $0.errorCategory != nil })
-        let judgeErrors = selectedAssessment?.samples.count(where: {
-            $0.errorCategory != nil || $0.errorMessage != nil
-        }) ?? results.count(where: { $0.judgeErrorCategory != nil })
-        return subjectErrors + judgeErrors
+        effectiveResults.count(where: {
+            $0.status == .error || $0.errorCategory != nil || $0.errorMessage != nil
+                || $0.judgeErrorCategory != nil || $0.judgeErrorMessage != nil
+        })
     }
     var scoredCount: Int { passedCount + failedCount }
     var plannedResultCount: Int { plannedSampleCount ?? results.count }
@@ -411,7 +432,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     }
 
     var averageScore: Double? {
-        let scores = selectedAssessment?.samples.compactMap(\.score) ?? results.compactMap(\.score)
+        let scores = effectiveResults.compactMap(\.score)
         return scores.isEmpty ? nil : Double(scores.reduce(0, +)) / Double(scores.count)
     }
 
@@ -424,7 +445,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     }
 
     var totalTokens: Int {
-        results.reduce(0) { $0 + $1.usage.totalTokens + ($1.judgeUsage?.totalTokens ?? 0) }
+        effectiveResults.reduce(0) { $0 + $1.usage.totalTokens + ($1.judgeUsage?.totalTokens ?? 0) }
     }
 
     var selectedAssessment: EvaluationAssessment? {

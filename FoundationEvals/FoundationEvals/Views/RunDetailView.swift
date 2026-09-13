@@ -206,7 +206,14 @@ private struct RunConfigurationSection: View {
                         FeatureConfigurationSummary(configuration: features)
                     }
                 }
-                if run.scoringMode == .modelJudge {
+                if let assessment = run.selectedAssessment {
+                    LabeledText(label: "Assessment rubric", text: assessment.rubric)
+                    LabeledText(label: "Selected judge", text: assessment.judge.displayName)
+                    LabeledText(
+                        label: "Assessment scoring",
+                        text: "Prompt \(assessment.promptVersion) · scores \(assessment.passingScore)–4 pass"
+                    )
+                } else if run.scoringMode == .modelJudge {
                     LabeledText(label: "AI rubric requirements", text: run.criteria)
                     LabeledText(
                         label: "AI judge",
@@ -259,7 +266,7 @@ private struct ResultsSection: View {
 
     private var results: [EvaluationSampleResult] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return run.results.filter { result in
+        return run.effectiveResults.filter { result in
             filter.includes(result)
                 && (query.isEmpty
                     || result.caseName.localizedCaseInsensitiveContains(query)

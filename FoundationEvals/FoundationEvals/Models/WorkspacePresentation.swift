@@ -67,7 +67,7 @@ struct SuiteOverviewSummary: Identifiable, Sendable {
         caseCount = (draft ?? suite).cases.count
         repetitions = (draft ?? suite).repetitions
         hasDraft = draft.map { $0 != suite } ?? false
-        let run = runs.max { $0.startedAt < $1.startedAt }
+        let run = runs.max { ($0.historySequence ?? 0, $0.startedAt) < ($1.historySequence ?? 0, $1.startedAt) }
         state = SuiteCheckState.evaluate(run: run, currentRevision: currentRevision, hasDraft: hasDraft)
         latestRunID = run?.id
         lastCheckedAt = run?.startedAt

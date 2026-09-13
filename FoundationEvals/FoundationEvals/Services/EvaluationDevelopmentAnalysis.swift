@@ -5,9 +5,26 @@ enum EvaluationExperimentAnalyzer {
         current: EvaluationRun,
         candidate: EvaluationRun
     ) -> EvaluationExperimentSummary {
-        let currentByCase = Dictionary(grouping: current.results, by: \.caseID)
-        let candidateByCase = Dictionary(grouping: candidate.results, by: \.caseID)
+        let currentResults = current.effectiveResults
+        let candidateResults = candidate.effectiveResults
+        let currentByCase = Dictionary(grouping: currentResults, by: \.caseID)
+        let candidateByCase = Dictionary(grouping: candidateResults, by: \.caseID)
         let common = Set(currentByCase.keys).intersection(candidateByCase.keys)
+        let expectedCurrentCases = Set((current.plannedCases ?? []).map(\.id))
+        let expectedCandidateCases = Set((candidate.plannedCases ?? []).map(\.id))
+        let expectedCommon = expectedCurrentCases.intersection(expectedCandidateCases)
+        let completeCoverage = currentResults.count == current.plannedResultCount
+            && candidateResults.count == candidate.plannedResultCount
+            && currentResults.allSatisfy { !hasError($0)
+                && ($0.status == .passed || $0.status == .failed) }
+            && candidateResults.allSatisfy { !hasError($0)
+                && ($0.status == .passed || $0.status == .failed) }
+            && expectedCurrentCases == expectedCandidateCases
+            && common == expectedCommon
+            && common.allSatisfy { id in
+                hasCompleteRepetitions(currentByCase[id] ?? [], count: current.repetitions)
+                    && hasCompleteRepetitions(candidateByCase[id] ?? [], count: candidate.repetitions)
+            }
         var improved: [UUID] = []
         var regressed: [UUID] = []
         var unchanged: [UUID] = []
@@ -24,7 +41,10 @@ enum EvaluationExperimentAnalyzer {
         let interval = discordant == 0 ? nil : wilsonInterval(successes: improved.count, total: discordant)
         let decision: EvaluationExperimentDecision
         let explanation: String
-        if common.count < 3 || discordant < 2 {
+        if !completeCoverage {
+            decision = .collectMoreEvidence
+            explanation = "The variants do not have complete, error-free, scored coverage for every planned case and repetition. Missing, unscored, or failed executions cannot justify adoption."
+        } else if common.count < 3 || discordant < 2 {
             decision = .collectMoreEvidence
             explanation = "Too few distinct comparable cases changed outcome to justify a winner. Repetitions improve stability but do not add case coverage."
         } else if let interval, interval.lowerBound > 0.5 {
@@ -70,6 +90,21 @@ enum EvaluationExperimentAnalyzer {
         return Double(scored.count { $0.status == .passed }) / Double(scored.count)
     }
 
+    private static func hasError(_ result: EvaluationSampleResult) -> Bool {
+        result.status == .error || result.errorCategory != nil || result.errorMessage != nil
+            || result.judgeErrorCategory != nil || result.judgeErrorMessage != nil
+    }
+
+    private static func hasCompleteRepetitions(
+        _ results: [EvaluationSampleResult],
+        count: Int
+    ) -> Bool {
+        count > 0
+            && results.count == count
+            && Set(results.map(\.repetition)) == Set(1...count)
+            && Set(results.map(\.id)).count == results.count
+    }
+
     private static func median(_ values: [Double]) -> Double? {
         guard !values.isEmpty else { return nil }
         let sorted = values.sorted()
@@ -105,6 +140,10 @@ enum EvaluationReleaseCheckEvaluator {
         var regressions: [String] = []
         var execution: [String] = []
         let policy = suite.releasePolicy
+        let currentScoringContract = try? EvaluationScoringContract(suite: suite)
+        if currentScoringContract == nil {
+            incomplete.append("The current scoring contract could not be captured.")
+        }
         if !(0...(EvaluationStore.maximumPlannedSamples * 2)).contains(policy.maximumErrorCount)
             || !policy.maximumPassRateRegression.isFinite
             || !(0...1).contains(policy.maximumPassRateRegression)
@@ -126,8 +165,18 @@ enum EvaluationReleaseCheckEvaluator {
                 generatedAt: Date()
             )
         }
-        if run.cancelled || run.stoppedEarly || run.results.count < run.plannedResultCount {
+        if run.cancelled || run.stoppedEarly || run.results.count != run.plannedResultCount {
             incomplete.append("The run did not complete every planned sample.")
+        }
+        let plannedCases = run.plannedCases ?? run.suiteDefinition?.cases ?? []
+        let expectedCoordinates = Set((0..<max(0, run.repetitions)).flatMap { offset in
+            plannedCases.map { "\($0.id.uuidString):\(offset + 1)" }
+        })
+        let actualCoordinates = Set(run.results.map { "\($0.caseID.uuidString):\($0.repetition)" })
+        if Set(run.results.map(\.id)).count != run.results.count
+            || actualCoordinates.count != run.results.count
+            || actualCoordinates != expectedCoordinates {
+            incomplete.append("The run does not contain exactly one result for every planned case and repetition.")
         }
         if run.suiteID != suite.id {
             incomplete.append("The run belongs to a different suite.")
@@ -137,6 +186,12 @@ enum EvaluationReleaseCheckEvaluator {
         }
         if run.suiteRevision == nil || run.suiteRevision != currentSuiteRevision {
             incomplete.append("The run is stale because the suite definition changed.")
+        }
+        if let evidence = run.subjectEvidence, !evidence.hasValidDigest {
+            incomplete.append("The run's immutable subject evidence failed its integrity check.")
+        }
+        if (try? EvaluationScoringContract(run: run)) != currentScoringContract {
+            incomplete.append("The run's captured cases or scoring configuration do not match the current suite.")
         }
         if run.scoringMode == .modelJudge {
             let resultIDs = Set(run.results.map(\.id))
@@ -151,6 +206,15 @@ enum EvaluationReleaseCheckEvaluator {
             if let assessment = run.selectedAssessment,
                (assessment.observedJudgeIdentities ?? [assessment.judge]).count != 1 {
                 incomplete.append("The selected assessment contains mixed judge model or provider identities.")
+            }
+            if let assessment = run.selectedAssessment,
+               resolvedScoringContract(for: assessment, run: run) != currentScoringContract {
+                incomplete.append("The selected assessment used a different rubric, judge prompt policy, passing score, or case scoring contract.")
+            }
+            if let assessment = run.selectedAssessment,
+               let evidence = run.subjectEvidence,
+               assessment.subjectEvidenceDigest != evidence.digest {
+                incomplete.append("The selected assessment is not bound to this run's immutable subject evidence.")
             }
         }
         if run.scoredCount != run.results.count {
@@ -182,7 +246,6 @@ enum EvaluationReleaseCheckEvaluator {
                               incomplete: incomplete, regressions: regressions, execution: execution)
             }
             guard approvedBaseline.isCurrent,
-                  approvedBaseline.suiteRevision == currentSuiteRevision,
                   let baseline,
                   baseline.id == approvedBaseline.runID else {
                 incomplete.append("The approved baseline run is missing or no longer current.")
@@ -190,15 +253,36 @@ enum EvaluationReleaseCheckEvaluator {
                               incomplete: incomplete, regressions: regressions, execution: execution)
             }
             var approvedBaselineRun = baseline
+            var approvedContract = approvedBaseline.scoringContract
             if baseline.scoringMode == .modelJudge {
                 guard let assessmentID = approvedBaseline.assessmentID,
                       let approvedAssessment = baseline.assessments?.first(where: { $0.id == assessmentID }),
+                      approvedAssessment.runID == baseline.id,
+                      approvedAssessment.samples.count == baseline.results.count,
+                      Set(approvedAssessment.samples.map(\.sampleID)) == Set(baseline.results.map(\.id)),
+                      approvedAssessment.samples.allSatisfy({ $0.status == .passed || $0.status == .failed }),
+                      baseline.subjectEvidence == nil
+                        || approvedAssessment.subjectEvidenceDigest == baseline.subjectEvidence?.digest,
                       (approvedAssessment.observedJudgeIdentities ?? [approvedAssessment.judge]).count == 1 else {
                     incomplete.append("The approved baseline assessment is missing or contains mixed judge identities.")
                     return result(projectID: projectID, suite: suite, run: run,
                                   incomplete: incomplete, regressions: regressions, execution: execution)
                 }
+                let assessmentContract = resolvedScoringContract(for: approvedAssessment, run: baseline)
+                if approvedContract == nil { approvedContract = assessmentContract }
+                guard assessmentContract == approvedContract else {
+                    incomplete.append("The approved baseline assessment no longer matches its approved scoring contract.")
+                    return result(projectID: projectID, suite: suite, run: run,
+                                  incomplete: incomplete, regressions: regressions, execution: execution)
+                }
                 approvedBaselineRun.selectedAssessmentID = assessmentID
+            } else if approvedContract == nil {
+                approvedContract = try? EvaluationScoringContract(run: baseline)
+            }
+            guard approvedContract == currentScoringContract else {
+                incomplete.append("The approved baseline uses incompatible cases or scoring conditions.")
+                return result(projectID: projectID, suite: suite, run: run,
+                              incomplete: incomplete, regressions: regressions, execution: execution)
             }
             let comparison = EvaluationRunComparison(current: run, baseline: approvedBaselineRun)
             guard comparison.compatibility == .compatible else {
@@ -218,6 +302,76 @@ enum EvaluationReleaseCheckEvaluator {
         }
         return result(projectID: projectID, suite: suite, run: run,
                       incomplete: incomplete, regressions: regressions, execution: execution)
+    }
+
+    static func projectMarkdown(_ report: EvaluationProjectReleaseCheckReport) -> String {
+        let heading = report.outcome == .passed ? "Project release check passed" : "Project release check did not pass"
+        let suites = report.suites.map { item in
+            "- \(item.suiteName) (`\(item.suiteID.uuidString)`): \(item.report.outcome.rawValue) — \(item.report.summary)"
+        }.joined(separator: "\n")
+        return """
+        # \(heading)
+
+        \(report.summary)
+
+        - Project: `\(report.projectID.uuidString)`
+        - Exit status: `\(report.outcome.rawValue)`
+
+        ## Required suites
+
+        \(suites.isEmpty ? "- None configured" : suites)
+        """
+    }
+
+    static func projectReport(
+        projectID: UUID,
+        suites: [EvaluationProjectReleaseSuiteReport]
+    ) -> EvaluationProjectReleaseCheckReport {
+        let required = suites.filter(\.required)
+        let outcome: EvaluationReleaseCheckExit
+        if required.contains(where: { $0.report.outcome == .executionError }) {
+            outcome = .executionError
+        } else if required.contains(where: { $0.report.outcome == .incompleteOrIncompatibleEvidence }) {
+            outcome = .incompleteOrIncompatibleEvidence
+        } else if required.contains(where: { $0.report.outcome == .regression }) {
+            outcome = .regression
+        } else {
+            outcome = .passed
+        }
+        let summary: String
+        if required.isEmpty {
+            summary = "No suites are currently required for this project."
+        } else if outcome == .passed {
+            summary = "All \(required.count) required suites passed."
+        } else {
+            let failed = required.count { $0.report.outcome != .passed }
+            summary = "\(failed) of \(required.count) required suites did not pass."
+        }
+        return EvaluationProjectReleaseCheckReport(
+            projectID: projectID,
+            outcome: outcome,
+            summary: summary,
+            suites: required,
+            generatedAt: Date()
+        )
+    }
+
+    private static func resolvedScoringContract(
+        for assessment: EvaluationAssessment,
+        run: EvaluationRun
+    ) -> EvaluationScoringContract? {
+        let derived = try? EvaluationScoringContract(
+            scoringMode: run.scoringMode,
+            rubricCriteria: assessment.rubric
+                .split(whereSeparator: \Character.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty },
+            judgePromptVersion: assessment.promptVersion,
+            judgePassingScore: assessment.passingScore,
+            cases: run.plannedCases ?? run.suiteDefinition?.cases ?? []
+        )
+        guard let scoringContract = assessment.scoringContract else { return derived }
+        return scoringContract == derived ? scoringContract : nil
     }
 
     static func markdown(_ report: EvaluationReleaseCheckReport) -> String {

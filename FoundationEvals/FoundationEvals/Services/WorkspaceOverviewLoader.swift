@@ -25,7 +25,7 @@ actor WorkspaceOverviewLoader {
                     try Task.checkCancellation()
                     runs.append(try CanonicalJSON.decode(EvaluationRun.self, from: Data(contentsOf: url)))
                 }
-                let revision = try await EvaluationStore.revision(for: suite)
+                let revision = try EvaluationStore.revision(for: suite)
                 summary = SuiteOverviewSummary(record: record, suite: suite, currentRevision: revision,
                                                      draft: draft, runs: runs, localState: local)
                 if let definitionURL = EvaluationWorkspacePersistence.repositoryDefinitionURL(project: project, suite: record) {
