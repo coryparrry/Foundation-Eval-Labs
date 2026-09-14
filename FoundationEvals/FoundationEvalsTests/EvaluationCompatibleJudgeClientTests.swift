@@ -49,6 +49,83 @@ struct EvaluationCompatibleJudgeClientTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func genericCompatibleRequestUsesPortableJSONModeAndExplicitInstructions() async throws {
+        let fixture = try CompatibleJudgeFixture(mode: .valid)
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Generic judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+        let suite = approvedSuite(for: connection)
+
+        _ = try await EvaluationCompatibleJudgeClient().judge(
+            response: "Response",
+            evaluationCase: suite.cases[0],
+            effectivePrompt: "Prompt",
+            suite: suite,
+            images: [],
+            toolEvidence: nil,
+            resolved: .init(connection: connection, apiKey: nil)
+        )
+
+        let request = try #require(fixture.lastCompletionRequest)
+        let separator = try #require(request.range(of: "\r\n\r\n"))
+        let body = Data(request[separator.upperBound...].utf8)
+        let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let responseFormat = try #require(json["response_format"] as? [String: Any])
+        #expect(responseFormat["type"] as? String == "json_object")
+        #expect(responseFormat["json_schema"] == nil)
+        let messages = try #require(json["messages"] as? [[String: Any]])
+        let system = try #require(messages.first?["content"] as? String)
+        #expect(system.localizedCaseInsensitiveContains("JSON"))
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func missingConfiguredModelReportsAvailableEndpointIDs() async throws {
+        let fixture = try CompatibleJudgeFixture(mode: .valid)
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Generic judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "missing-model"
+        )
+
+        let check = try await EvaluationCompatibleJudgeClient().checkConnection(
+            .init(connection: connection, apiKey: nil)
+        )
+
+        #expect(!check.modelFound)
+        #expect(check.message.contains("missing-model"))
+        #expect(check.message.contains("judge-fixture"))
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func HTTPFailureIncludesBoundedProviderMessage() async throws {
+        let fixture = try CompatibleJudgeFixture(mode: .status(400))
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Rejected judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+        let suite = approvedSuite(for: connection)
+
+        do {
+            _ = try await EvaluationCompatibleJudgeClient().judge(
+                response: "Response",
+                evaluationCase: suite.cases[0],
+                effectivePrompt: "Prompt",
+                suite: suite,
+                images: [],
+                toolEvidence: nil,
+                resolved: .init(connection: connection, apiKey: nil)
+            )
+            Issue.record("Expected the endpoint rejection to propagate.")
+        } catch {
+            #expect(error.localizedDescription.contains("Model Not Exist"))
+            #expect(error.localizedDescription.count < 1_024)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func malformedVerdictRetriesOnceThenFailsClosed() async throws {
         let fixture = try CompatibleJudgeFixture(mode: .malformed)
         defer { fixture.stop() }
@@ -76,6 +153,139 @@ struct EvaluationCompatibleJudgeClientTests {
             #expect(error.localizedDescription.contains("after one bounded retry"))
         }
         #expect(fixture.completionRequestCount == 2)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func HTTPFailuresAreNotRetriedAndPreserveTheirStatus() async throws {
+        let fixture = try CompatibleJudgeFixture(mode: .status(401))
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Unauthorized judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+
+        do {
+            _ = try await EvaluationCompatibleJudgeClient().judge(
+                response: "Response",
+                evaluationCase: approvedSuite(for: connection).cases[0],
+                effectivePrompt: "Prompt",
+                suite: approvedSuite(for: connection),
+                images: [],
+                toolEvidence: nil,
+                resolved: .init(connection: connection, apiKey: nil)
+            )
+            Issue.record("Expected the HTTP failure to propagate.")
+        } catch let error as EvaluationCompatibleJudgeError {
+            guard case .http(status: 401, detail: _) = error else {
+                Issue.record("Expected HTTP 401, received \(error).")
+                return
+            }
+        }
+        #expect(fixture.completionRequestCount == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func judgeTransportDoesNotFollowRedirects() async throws {
+        let fixture = try CompatibleJudgeFixture(mode: .redirect)
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Redirecting judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+
+        do {
+            _ = try await EvaluationCompatibleJudgeClient().judge(
+                response: "Response",
+                evaluationCase: approvedSuite(for: connection).cases[0],
+                effectivePrompt: "Prompt",
+                suite: approvedSuite(for: connection),
+                images: [],
+                toolEvidence: nil,
+                resolved: .init(connection: connection, apiKey: nil)
+            )
+            Issue.record("Expected the redirect response to be rejected.")
+        } catch let error as EvaluationCompatibleJudgeError {
+            guard case .http(status: 302, detail: _) = error else {
+                Issue.record("Expected HTTP 302, received \(error).")
+                return
+            }
+        }
+        #expect(fixture.completionRequestCount == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellationStopsBeforeStartingARepairRequest() async throws {
+        let fixture = try CompatibleJudgeFixture(mode: .stalled)
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Stalled judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+        let suite = approvedSuite(for: connection)
+        let task = Task {
+            try await EvaluationCompatibleJudgeClient().judge(
+                response: "Response",
+                evaluationCase: suite.cases[0],
+                effectivePrompt: "Prompt",
+                suite: suite,
+                images: [],
+                toolEvidence: nil,
+                resolved: .init(connection: connection, apiKey: nil)
+            )
+        }
+        try await waitForCompletionRequests(1, fixture: fixture)
+
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("Expected cancellation to propagate.")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        #expect(fixture.completionRequestCount == 1)
+    }
+
+    @Test func connectionValidationRestrictsPlainHTTPToLiteralLoopback() {
+        #expect(
+            EvaluationJudgeConnection(
+                id: UUID(), name: "Local", kind: .localCompatible,
+                baseURL: "http://127.0.0.1:11434/v1", modelID: "judge"
+            ).validationIssue == nil
+        )
+        #expect(
+            EvaluationJudgeConnection(
+                id: UUID(), name: "Not local", kind: .localCompatible,
+                baseURL: "http://example.com/v1", modelID: "judge"
+            ).validationIssue?.contains("loopback") == true
+        )
+        #expect(
+            EvaluationJudgeConnection(
+                id: UUID(), name: "Custom", kind: .customCompatible,
+                baseURL: "http://127.0.0.1:11434/v1", modelID: "judge"
+            ).validationIssue?.contains("HTTPS") == true
+        )
+        #expect(
+            EvaluationJudgeConnection(
+                id: UUID(), name: "Custom", kind: .customCompatible,
+                baseURL: "https://judge.example/v1?token=secret", modelID: "judge"
+            ).validationIssue?.contains("query") == true
+        )
+
+        let session = EvaluationCompatibleJudgeClient.sessionConfiguration(timeout: 12)
+        #expect(session.timeoutIntervalForRequest == 12)
+        #expect(session.timeoutIntervalForResource == 12)
+        #expect(session.httpCookieStorage == nil)
+        #expect(!session.httpShouldSetCookies)
+        #expect(session.urlCredentialStorage == nil)
+        #expect(session.connectionProxyDictionary?.isEmpty == true)
+
+        #expect(EvaluationRunner.externalJudgeErrorCategory(EvaluationCompatibleJudgeError.http(status: 429, detail: nil)) == "rateLimited")
+        #expect(EvaluationRunner.externalJudgeErrorCategory(EvaluationCompatibleJudgeError.http(status: 503, detail: nil)) == "serviceUnavailable")
+        #expect(EvaluationRunner.externalJudgeErrorCategory(EvaluationCompatibleJudgeError.http(status: 408, detail: nil)) == "timeout")
+        #expect(EvaluationRunner.stopsBatch(for: "rateLimited"))
+        #expect(EvaluationRunner.stopsBatch(for: "serviceUnavailable"))
+        #expect(EvaluationRunner.stopsBatch(for: "timeout"))
     }
 
     @Test func disclosureAndMultimodalCapabilitiesAreMandatory() async throws {
@@ -136,10 +346,39 @@ struct EvaluationCompatibleJudgeClientTests {
         connection.modelID = "different-judge"
         #expect(!configuration.hasCurrentExternalEvidenceApproval(for: connection))
     }
+
+    private func approvedSuite(for connection: EvaluationJudgeConnection) -> EvaluationSuite {
+        var suite = EvaluationSuite()
+        suite.criteria = "The answer is supported."
+        suite.judgeConfiguration = .init(
+            mode: .connection,
+            connectionID: connection.id,
+            externalEvidenceApprovedAt: Date(),
+            includeReferenceAttachments: false,
+            approvedConnectionID: connection.id,
+            approvedIncludeReferenceAttachments: false,
+            approvedConnectionDigest: connection.disclosureDigest
+        )
+        return suite
+    }
+
+    private func waitForCompletionRequests(_ count: Int, fixture: CompatibleJudgeFixture) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while fixture.completionRequestCount < count, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(fixture.completionRequestCount >= count, "Judge fixture did not receive a request.")
+    }
 }
 
 final class CompatibleJudgeFixture: @unchecked Sendable {
-    enum Mode { case valid, malformed }
+    enum Mode {
+        case valid
+        case malformed
+        case status(Int)
+        case redirect
+        case stalled
+    }
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "FoundationEvalsTests.CompatibleJudgeFixture")
@@ -148,6 +387,7 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
     private let mode: Mode
     private var requestCount = 0
     private var completionRequests: [String] = []
+    private var stalledConnections: [NWConnection] = []
     private(set) var port: UInt16 = 0
 
     var baseURL: String { "http://127.0.0.1:\(port)/v1" }
@@ -177,7 +417,13 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
         }
     }
 
-    func stop() { listener.cancel() }
+    func stop() {
+        listener.cancel()
+        lock.withLock {
+            stalledConnections.forEach { $0.cancel() }
+            stalledConnections.removeAll()
+        }
+    }
 
     private func accept(_ connection: NWConnection) {
         connection.start(queue: queue)
@@ -208,17 +454,46 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
                 requestCount += 1
                 completionRequests.append(String(decoding: request, as: UTF8.self))
             }
-            let content = mode == .valid
-                ? #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Supported by the saved evidence."}]}"#
-                : #"{"requirements":[]}"#
-            body = try! JSONSerialization.data(withJSONObject: [
-                "choices": [["message": ["content": content]]],
-                "model": "judge-fixture-reported",
-                "provider": "fixture-provider",
-                "usage": ["prompt_tokens": 10, "completion_tokens": 5]
-            ], options: [.sortedKeys])
+            switch mode {
+            case .status(let status):
+                let error = #"{"error":{"message":"Model Not Exist"}}"#
+                send(status: status, body: Data(error.utf8), to: connection)
+                return
+            case .redirect where !first.contains("/redirected"):
+                let head = "HTTP/1.1 302 Found\r\nLocation: /v1/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                connection.send(
+                    content: Data(head.utf8),
+                    contentContext: .defaultMessage,
+                    isComplete: true,
+                    completion: .contentProcessed { _ in connection.cancel() }
+                )
+                return
+            case .stalled:
+                lock.withLock { stalledConnections.append(connection) }
+                return
+            case .valid, .redirect, .malformed:
+                let content = switch mode {
+                case .valid, .redirect:
+                    #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Supported by the saved evidence."}]}"#
+                case .malformed:
+                    #"{"requirements":[]}"#
+                default:
+                    fatalError("Handled above")
+                }
+                body = try! JSONSerialization.data(withJSONObject: [
+                    "choices": [["message": ["content": content]]],
+                    "model": "judge-fixture-reported",
+                    "provider": "fixture-provider",
+                    "usage": ["prompt_tokens": 10, "completion_tokens": 5]
+                ], options: [.sortedKeys])
+            }
         }
-        let head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        send(status: 200, body: body, to: connection)
+    }
+
+    private func send(status: Int, body: Data, to connection: NWConnection) {
+        let reason = status == 200 ? "OK" : "Error"
+        let head = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         connection.send(
             content: Data(head.utf8) + body,
             contentContext: .defaultMessage,

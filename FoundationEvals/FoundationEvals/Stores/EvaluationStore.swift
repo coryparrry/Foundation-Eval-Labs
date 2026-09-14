@@ -93,7 +93,7 @@ final class EvaluationStore {
             startupNotice = "Could not create local storage: \(error.localizedDescription)"
         }
 
-        let legacySuite = Self.loadSuite(from: base)
+        let legacySuite = EvaluationWorkspaceStatePersistence.loadSuite(from: base)
         let bootstrap: EvaluationWorkspaceBootstrap
         do {
             bootstrap = try EvaluationWorkspacePersistence.bootstrap(in: base, legacySuite: legacySuite.suite)
@@ -131,7 +131,7 @@ final class EvaluationStore {
                 .compactMap { $0 }.joined(separator: "\n")
         }
 
-        let loadedSuite = Self.loadSuite(from: activeDirectory)
+        let loadedSuite = EvaluationWorkspaceStatePersistence.loadSuite(from: activeDirectory)
         var initialSuite = loadedSuite.suite ?? EvaluationSuite()
         let migratedRubric = initialSuite.criteria == EvaluationSuite.legacyDefaultCriteria
         if migratedRubric {
@@ -153,17 +153,19 @@ final class EvaluationStore {
             loadedRuns.runs.append(recoveredRun)
             loadedRuns.runs.sort { ($0.historySequence ?? 0, $0.startedAt) > ($1.historySequence ?? 0, $1.startedAt) }
         }
-        let loadedLocalState = Self.loadSuiteLocalState(from: activeDirectory.appending(path: "state.json"))
-        let loadedJudgeConnections = Self.loadJudgeConnections(from: base.appending(path: "judge-connections.json"))
+        let loadedJudgeConnections = EvaluationWorkspaceStatePersistence.loadJudgeConnections(
+            from: base.appending(path: "judge-connections.json")
+        )
         let initialNotice = [startupNotice, legacySuite.notice, loadedSuite.notice,
-                             loadedDraft.notice, loadedRuns.notice, recovery.notice]
+                             loadedDraft.notice, loadedRuns.notice, recovery.notice,
+                             loadedJudgeConnections.notice]
             .compactMap { $0 }
             .joined(separator: "\n")
         workspace = bootstrap.catalog
         selectedProjectID = initialProjectID
         selectedSuiteID = initialSuiteID
-        suiteLocalState = loadedLocalState
-        judgeConnections = loadedJudgeConnections
+        suiteLocalState = EvaluationSuiteLocalState()
+        judgeConnections = loadedJudgeConnections.connections
         suite = initialSuite
         draftSuite = loadedDraft.suite ?? initialSuite
         runs = loadedRuns.runs
@@ -214,7 +216,7 @@ final class EvaluationStore {
                 let directory = EvaluationWorkspacePersistence.suiteDirectory(
                     supportDirectory: supportDirectory, projectID: project.id, suiteID: record.id
                 )
-                let suite = Self.loadSuite(from: directory).suite
+                let suite = EvaluationWorkspaceStatePersistence.loadSuite(from: directory).suite
                 let runs = Self.loadRuns(from: directory.appending(path: "Runs", directoryHint: .isDirectory)).runs
                 latest = [latest, runs.first?.startedAt].compactMap { $0 }.max()
                 if let suite,
@@ -275,7 +277,9 @@ final class EvaluationStore {
             let sourceDirectory = EvaluationWorkspacePersistence.suiteDirectory(
                 supportDirectory: supportDirectory, projectID: source.id, suiteID: sourceRecord.id
             )
-            guard var copiedSuite = Self.loadSuite(from: sourceDirectory).suite else { continue }
+            guard var copiedSuite = EvaluationWorkspaceStatePersistence.loadSuite(from: sourceDirectory).suite else {
+                continue
+            }
             copiedSuite.id = UUID()
             copiedSuite.name += " copy"
             let target = EvaluationWorkspacePersistence.suiteDirectory(
@@ -367,7 +371,7 @@ final class EvaluationStore {
         let sourceDirectory = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: supportDirectory, projectID: selectedProjectID, suiteID: id
         )
-        guard var copied = Self.loadSuite(from: sourceDirectory).suite else {
+        guard var copied = EvaluationWorkspaceStatePersistence.loadSuite(from: sourceDirectory).suite else {
             throw EvaluationWorkspaceError.missingSuite
         }
         copied.id = UUID()
@@ -533,7 +537,7 @@ final class EvaluationStore {
     }
 
     private func loadSelectedSuite() throws {
-        let loaded = Self.loadSuite(from: suiteDirectory)
+        let loaded = EvaluationWorkspaceStatePersistence.loadSuite(from: suiteDirectory)
         guard var canonical = loaded.suite, canonical.id == selectedSuiteID else {
             throw EvaluationWorkspaceError.missingSuite
         }
@@ -559,7 +563,8 @@ final class EvaluationStore {
         suite = canonical
         draftSuite = draft.suite ?? canonical
         runs = loadedRuns.runs
-        suiteLocalState = Self.loadSuiteLocalState(from: suiteStateURL)
+        let loadedLocalState = EvaluationWorkspaceStatePersistence.loadSuiteLocalState(from: suiteStateURL)
+        suiteLocalState = loadedLocalState.state
         activeRun = recovery.pending?.summary
         activeRunSuite = recovery.pending?.suite
         activeRunEvidence = recovery.pending?.subjectEvidence
@@ -570,7 +575,14 @@ final class EvaluationStore {
         let repositoryNotice = repositoryConflict
             ? "The repository suite changed while this suite has an autosaved local draft. Both versions were preserved; review them before saving."
             : nil
-        let messages = [loaded.notice, draft.notice, loadedRuns.notice, recovery.notice, repositoryNotice]
+        let messages = [
+            loaded.notice,
+            draft.notice,
+            loadedRuns.notice,
+            recovery.notice,
+            loadedLocalState.notice,
+            repositoryNotice
+        ]
             .compactMap { $0 }
             .joined(separator: "\n")
         notice = messages.isEmpty ? nil : messages
@@ -621,9 +633,13 @@ final class EvaluationStore {
     func deleteJudgeConnection(id: UUID) throws {
         guard !workspace.projects.contains(where: { project in
             project.suites.contains { record in
-                guard let suite = Self.loadSuite(from: EvaluationWorkspacePersistence.suiteDirectory(
-                    supportDirectory: supportDirectory, projectID: project.id, suiteID: record.id
-                )).suite else { return false }
+                guard let suite = EvaluationWorkspaceStatePersistence.loadSuite(
+                    from: EvaluationWorkspacePersistence.suiteDirectory(
+                        supportDirectory: supportDirectory,
+                        projectID: project.id,
+                        suiteID: record.id
+                    )
+                ).suite else { return false }
                 return suite.judgeConfiguration.connectionID == id
             }
         }) else {
@@ -706,7 +722,7 @@ final class EvaluationStore {
                     throw EvaluationCompatibleJudgeError.disclosureNotApproved
                 }
                 let context = try reassessmentContext(for: run, scoringSuite: judgingSuite)
-                let assessment = await reassessmentService.reassess(
+                let assessment = try await reassessmentService.reassess(
                     run: run,
                     suite: context.suite,
                     images: context.images,
@@ -806,7 +822,7 @@ final class EvaluationStore {
                         )
                     }
                 }
-                latestJudgeCheck = await reassessmentService.checkJudge(
+                latestJudgeCheck = try await reassessmentService.checkJudge(
                     sources: sources,
                     resolved: resolved
                 )
@@ -934,7 +950,7 @@ final class EvaluationStore {
             }
             let externalJudge = try resolvedJudge(for: suite)
             let suiteSnapshot = suite
-            let images = imageInputs(for: suiteSnapshot)
+            let images = try imageInputs(for: suiteSnapshot)
             let ownerProjectID = selectedProjectID
             let ownerSuiteID = selectedSuiteID
             let repositoryRoot = selectedProject.repository?.rootPath
@@ -1100,8 +1116,30 @@ final class EvaluationStore {
                 continue
             }
             let storedRuns = loadedRuns.runs
-            let localState = Self.loadSuiteLocalState(from: directory.appending(path: "state.json"))
-            let approval = localState.baselineApprovals.last(where: \.isCurrent)
+            let loadedLocalState = EvaluationWorkspaceStatePersistence.loadSuiteLocalState(
+                from: directory.appending(path: "state.json"),
+                preserveUnreadable: false
+            )
+            if loadedLocalState.notice != nil {
+                let unavailable = EvaluationReleaseCheckReport(
+                    projectID: project.id,
+                    suiteID: record.id,
+                    runID: nil,
+                    assessmentID: nil,
+                    outcome: .incompleteOrIncompatibleEvidence,
+                    summary: "The required suite has unreadable local approval state.",
+                    failures: ["Restore the unreadable suite state before evaluating project readiness."],
+                    generatedAt: Date()
+                )
+                suiteReports.append(.init(
+                    suiteID: record.id,
+                    suiteName: storedSuite.name,
+                    required: true,
+                    report: unavailable
+                ))
+                continue
+            }
+            let approval = loadedLocalState.state.baselineApprovals.last(where: \.isCurrent)
             let baseline = approval.flatMap { approved in storedRuns.first { $0.id == approved.runID } }
             let report = EvaluationReleaseCheckEvaluator.report(
                 projectID: project.id,
@@ -1737,17 +1775,16 @@ final class EvaluationStore {
             do {
                 let inputs = try await Task.detached(priority: .userInitiated) {
                     try urls.map { url -> AttachmentInput in
+                        guard url.isFileURL else { throw ImportError.notRegularLocalFile }
                         let accessed = url.startAccessingSecurityScopedResource()
                         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
                         let type = UTType(filenameExtension: url.pathExtension)
                         let isImage = type?.conforms(to: .image) == true
-                        guard let byteCount = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
-                            throw ImportError.unknownFileSize
-                        }
-                        guard byteCount <= (isImage ? Self.maximumImageBytes : Self.maximumTextFileBytes) else {
-                            throw isImage ? ImportError.imageTooLarge : ImportError.fileTooLarge
-                        }
-                        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                        let data = try EvaluationAttachmentStorage.readImportFile(
+                            at: url,
+                            isImage: isImage,
+                            maximumBytes: isImage ? Self.maximumImageBytes : Self.maximumTextFileBytes
+                        )
                         return AttachmentInput(
                             id: UUID(),
                             name: url.lastPathComponent,
@@ -1808,6 +1845,11 @@ final class EvaluationStore {
         try requireIdle()
         guard let attachment = suite.attachments.first(where: { $0.id == id }) else { return false }
         try requireRevision(expectedRevision)
+        let storedURL = try attachment.storedFilename.map {
+            try EvaluationAttachmentStorage.storedFileURL(
+                filename: $0, attachmentID: attachment.id, in: attachmentsDirectory
+            )
+        }
 
         var candidate = suite
         candidate.attachments.removeAll { $0.id == id }
@@ -1821,9 +1863,9 @@ final class EvaluationStore {
         try commitSuite(candidate)
         draftSuite.attachments.removeAll { $0.id == id }
 
-        if let storedFilename = attachment.storedFilename {
+        if let storedURL {
             do {
-                try FileManager.default.removeItem(at: attachmentsDirectory.appending(path: storedFilename))
+                try FileManager.default.removeItem(at: storedURL)
             } catch CocoaError.fileNoSuchFile {
                 // Missing content is already unreferenced.
             } catch {
@@ -2103,8 +2145,12 @@ final class EvaluationStore {
             throw EvaluationStoreError.persistence("The attachment has no stored content.")
         }
         do {
-            return (attachment, try Data(contentsOf: attachmentsDirectory.appending(path: storedFilename)))
+            let url = try EvaluationAttachmentStorage.storedFileURL(
+                filename: storedFilename, attachmentID: attachment.id, in: attachmentsDirectory
+            )
+            return (attachment, try Data(contentsOf: url))
         } catch {
+            if let storeError = error as? EvaluationStoreError { throw storeError }
             throw EvaluationStoreError.persistence(error.localizedDescription)
         }
     }
@@ -2209,6 +2255,11 @@ final class EvaluationStore {
         }
         if candidate.features.tools.contains(where: { vision.enabledToolNames.contains($0.name) }) {
             return "Custom tool names must differ from the enabled image tool names."
+        }
+        if candidate.features.tools.contains(where: {
+            candidate.features.spotlightSearch.enabledToolNames.contains($0.name)
+        }) {
+            return "Custom tool names must differ from the enabled Spotlight tool name."
         }
         if !candidate.features.tools.isEmpty, validateCapabilities && !capabilities.contains(.toolCalling) {
             return "The current model does not support custom tool calls."
@@ -2393,15 +2444,19 @@ final class EvaluationStore {
         return includeModelReadiness && !status.isAvailable ? status.detail : nil
     }
 
-    private func imageInputs(for suite: EvaluationSuite) -> [ImageEvaluationInput] {
-        suite.attachments
+    private func imageInputs(for suite: EvaluationSuite) throws -> [ImageEvaluationInput] {
+        try suite.attachments
             .filter { $0.kind == .image }
             .enumerated()
-            .compactMap { index, attachment in
-                guard let storedFilename = attachment.storedFilename else { return nil }
+            .map { index, attachment in
+                guard let storedFilename = attachment.storedFilename else {
+                    throw EvaluationStoreError.persistence("Image evidence has no stored filename.")
+                }
                 return ImageEvaluationInput(
                     label: "file-\(index + 1)",
-                    url: attachmentsDirectory.appending(path: storedFilename)
+                    url: try EvaluationAttachmentStorage.storedFileURL(
+                        filename: storedFilename, attachmentID: attachment.id, in: attachmentsDirectory
+                    )
                 )
             }
     }
@@ -2443,7 +2498,9 @@ final class EvaluationStore {
                     guard let storedFilename = attachment.storedFilename else {
                         throw EvaluationStoreError.persistence("Image evidence has no stored filename.")
                     }
-                    let source = sourceAttachments.appending(path: storedFilename)
+                    let source = try EvaluationAttachmentStorage.storedFileURL(
+                        filename: storedFilename, attachmentID: attachment.id, in: sourceAttachments
+                    )
                     let data = try Data(contentsOf: source, options: .mappedIfSafe)
                     guard data.count == attachment.byteCount, Self.sha256(data) == attachment.sha256 else {
                         throw EvaluationStoreError.persistence("Image evidence does not match its saved digest.")
@@ -2501,10 +2558,13 @@ final class EvaluationStore {
                 throw EvaluationStoreError.persistence("The run's historical attachment evidence is unavailable.")
             }
             if current.kind == .image {
-                guard let storedFilename = current.storedFilename,
-                      FileManager.default.fileExists(
-                        atPath: attachmentsDirectory.appending(path: storedFilename).path
-                      ) else {
+                guard let storedFilename = current.storedFilename else {
+                    throw EvaluationStoreError.persistence("The run's historical image evidence is unavailable.")
+                }
+                let storedURL = try EvaluationAttachmentStorage.storedFileURL(
+                    filename: storedFilename, attachmentID: current.id, in: attachmentsDirectory
+                )
+                guard FileManager.default.fileExists(atPath: storedURL.path) else {
                     throw EvaluationStoreError.persistence("The run's historical image evidence is unavailable.")
                 }
                 return .init(
@@ -2545,7 +2605,9 @@ final class EvaluationStore {
             guard let storedFilename = attachment.storedFilename else {
                 throw EvaluationStoreError.persistence("The run's historical image evidence has no stored content.")
             }
-            let url = directory.appending(path: storedFilename)
+            let url = try EvaluationAttachmentStorage.storedFileURL(
+                filename: storedFilename, attachmentID: attachment.id, in: directory
+            )
             let data = try Data(contentsOf: url, options: .mappedIfSafe)
             guard data.count == attachment.byteCount, Self.sha256(data) == attachment.sha256 else {
                 throw EvaluationStoreError.persistence("The run's historical image evidence failed its integrity check.")
@@ -2717,7 +2779,9 @@ final class EvaluationStore {
             for item in newItems {
                 guard let data = item.imageData,
                       let storedFilename = item.attachment.storedFilename else { continue }
-                let url = attachmentsDirectory.appending(path: storedFilename)
+                let url = try EvaluationAttachmentStorage.storedFileURL(
+                    filename: storedFilename, attachmentID: item.attachment.id, in: attachmentsDirectory
+                )
                 try data.write(to: url, options: .atomic)
                 writtenURLs.append(url)
             }
@@ -2956,36 +3020,6 @@ final class EvaluationStore {
 
     private nonisolated static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func loadSuite(from directory: URL) -> (suite: EvaluationSuite?, notice: String?) {
-        let url = directory.appending(path: "suite.json")
-        guard FileManager.default.fileExists(atPath: url.path) else { return (nil, nil) }
-        do {
-            let data = try Data(contentsOf: url)
-            return (try CanonicalJSON.decode(EvaluationSuite.self, from: data), nil)
-        } catch {
-            let backup = directory.appending(path: "suite-unreadable-\(UUID().uuidString).json")
-            let preserved = (try? FileManager.default.copyItem(at: url, to: backup)) != nil
-            let suffix = preserved ? " It was preserved as \(backup.lastPathComponent)." : ""
-            return (nil, "The saved suite could not be read.\(suffix)")
-        }
-    }
-
-    private static func loadSuiteLocalState(from url: URL) -> EvaluationSuiteLocalState {
-        guard let data = try? Data(contentsOf: url),
-              let state = try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: data) else {
-            return EvaluationSuiteLocalState()
-        }
-        return state
-    }
-
-    private static func loadJudgeConnections(from url: URL) -> [EvaluationJudgeConnection] {
-        guard let data = try? Data(contentsOf: url),
-              let connections = try? CanonicalJSON.decode([EvaluationJudgeConnection].self, from: data) else {
-            return []
-        }
-        return connections
     }
 
     private func persistSuiteLocalState() throws {
@@ -3344,34 +3378,4 @@ private struct RevisionAttachment: Codable {
     var kind: EvaluationAttachmentKind
     var byteCount: Int
     var sha256: String
-}
-
-private enum ImportError: LocalizedError {
-    case tooManyFiles
-    case tooManyImages
-    case imageTooLarge
-    case fileTooLarge
-    case unknownFileSize
-    case invalidFilename
-    case unsupportedType
-    case typeMismatch
-    case unreadableImage
-    case unreadablePDF
-    case notUTF8
-
-    var errorDescription: String? {
-        switch self {
-        case .tooManyFiles: "A suite can attach up to 20 files."
-        case .tooManyImages: "A suite can attach up to four images."
-        case .imageTooLarge: "Images must be 10 MB or smaller."
-        case .fileTooLarge: "Text and PDF files must be 5 MB or smaller."
-        case .unknownFileSize: "The selected file size could not be determined."
-        case .invalidFilename: "Attachment names must be plain filenames without path components."
-        case .unsupportedType: "Attachments must be UTF-8 text, JSON, CSV, PDF, or an image."
-        case .typeMismatch: "The declared media type does not match the filename extension."
-        case .unreadableImage: "The image data could not be decoded."
-        case .unreadablePDF: "The PDF contains no extractable text."
-        case .notUTF8: "Text files must use UTF-8 encoding."
-        }
-    }
 }

@@ -197,12 +197,27 @@ struct EvaluationJudgeConnection: Identifiable, Codable, Equatable, Sendable {
         let trimmedModel = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return "Name the judge connection." }
         guard !trimmedModel.isEmpty else { return "Enter the exact judge model ID." }
-        guard let url = URL(string: baseURL), let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https", url.host != nil else {
+        guard let components = URLComponents(string: baseURL),
+              let url = components.url,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host?.lowercased() else {
             return "Enter an absolute HTTP or HTTPS base URL."
         }
-        if kind == .openRouter, scheme != "https" {
-            return "OpenRouter connections must use HTTPS."
+        guard components.user == nil, components.password == nil else {
+            return "Judge base URLs cannot contain credentials. Store API keys in Keychain instead."
+        }
+        guard components.query == nil else { return "Judge base URLs cannot contain a query." }
+        guard components.fragment == nil else { return "Judge base URLs cannot contain a fragment." }
+        switch kind {
+        case .localCompatible:
+            guard host == "127.0.0.1" || host == "::1" else {
+                return "Local compatible connections must use a literal loopback host."
+            }
+        case .openRouter:
+            guard scheme == "https" else { return "OpenRouter connections must use HTTPS." }
+        case .customCompatible:
+            guard scheme == "https" else { return "Custom compatible connections must use HTTPS." }
         }
         guard (1...300).contains(requestTimeoutSeconds) else {
             return "Judge timeout must be between 1 and 300 seconds."
@@ -277,6 +292,7 @@ struct EvaluationAssessment: Identifiable, Codable, Sendable {
     var passingScore: Int
     var samples: [EvaluationSampleAssessment]
     var totalUsage: EvaluationUsage?
+    /// Sum of the per-sample judge request durations, excluding non-judge orchestration time.
     var durationMilliseconds: Double
     var cost: EvaluationCost
     var supersedesAssessmentID: UUID?
@@ -285,6 +301,15 @@ struct EvaluationAssessment: Identifiable, Codable, Sendable {
     var subjectEvidenceDigest: String? = nil
 
     var errorCount: Int { samples.count { $0.errorCategory != nil || $0.errorMessage != nil } }
+
+    static func summedJudgeDurationMilliseconds(_ samples: [EvaluationSampleAssessment]) -> Double {
+        samples.compactMap(\.durationMilliseconds)
+            .filter { $0.isFinite && $0 >= 0 }
+            .reduce(0) { total, duration in
+                let sum = total + duration
+                return sum.isFinite ? sum : .greatestFiniteMagnitude
+            }
+    }
 }
 
 struct EvaluationHumanCorrection: Identifiable, Codable, Sendable {

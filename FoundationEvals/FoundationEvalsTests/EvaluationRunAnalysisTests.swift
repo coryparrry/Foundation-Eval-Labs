@@ -3,6 +3,61 @@ import Testing
 @testable import FoundationEvals
 
 struct EvaluationRunAnalysisTests {
+    @Test func usageAdditionAndTotalsSaturateAtIntegerBounds() {
+        var total = EvaluationUsage(
+            inputTokens: Int.max,
+            cachedInputTokens: Int.max,
+            outputTokens: Int.max,
+            reasoningTokens: Int.max
+        )
+
+        total.add(.init(inputTokens: 1, cachedInputTokens: 1, outputTokens: 1, reasoningTokens: 1))
+
+        #expect(total.inputTokens == Int.max)
+        #expect(total.cachedInputTokens == Int.max)
+        #expect(total.outputTokens == Int.max)
+        #expect(total.reasoningTokens == Int.max)
+        #expect(total.totalTokens == Int.max)
+    }
+
+    @Test func analysisTokenSummariesSaturateAtIntegerBounds() {
+        let evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")
+        let maximum = EvaluationUsage(
+            inputTokens: Int.max,
+            cachedInputTokens: Int.max,
+            outputTokens: Int.max,
+            reasoningTokens: Int.max
+        )
+        let run = makeRun(
+            cases: [evaluationCase],
+            repetitions: 2,
+            results: [
+                sample(evaluationCase, repetition: 1, status: .passed, usage: maximum),
+                sample(evaluationCase, repetition: 2, status: .passed, usage: maximum)
+            ]
+        )
+
+        let summary = EvaluationRunAnalysis(run: run).subjectUsage
+
+        #expect(summary.inputTokens == Int.max)
+        #expect(summary.cachedInputTokens == Int.max)
+        #expect(summary.outputTokens == Int.max)
+        #expect(summary.reasoningTokens == Int.max)
+        #expect(summary.totalTokens == Int.max)
+        #expect(run.totalTokens == Int.max)
+    }
+
+    @Test func runAverageScoreDoesNotOverflowOnDecodedScores() {
+        let evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")
+        var first = sample(evaluationCase, repetition: 1, status: .passed)
+        var second = sample(evaluationCase, repetition: 2, status: .passed)
+        first.score = Int.max
+        second.score = Int.max
+        let run = makeRun(cases: [evaluationCase], repetitions: 2, results: [first, second])
+
+        #expect(run.averageScore == Double(Int.max))
+    }
+
     @Test func analysisPartitionsResultsAndSeparatesOperationalMetrics() {
         let evaluationCase = EvaluationCase(name: "Case", prompt: "Prompt", expected: "Expected")
         let run = makeRun(

@@ -66,10 +66,16 @@ enum CoreAIModelControlStatus: Equatable, Sendable {
 actor CoreAIModelLoader {
     static let shared = CoreAIModelLoader()
 
+    struct ResourceStamp: Hashable, Sendable {
+        let relativePath: String
+        let modificationDate: Date?
+        let fileSize: Int?
+        let fileIdentifier: String?
+    }
+
     private struct CacheKey: Hashable, Sendable {
         let resourceURL: URL
-        let metadataModificationDate: Date?
-        let metadataFileSize: Int?
+        let resourceFingerprint: [ResourceStamp]
     }
 
     private struct CachedModel: Sendable {
@@ -83,7 +89,17 @@ actor CoreAIModelLoader {
     func load(configuration: EvaluationCoreAIConfiguration) async throws -> CoreAIModelLoadResult {
         try Task.checkCancellation()
         let resolved = try Self.resolveResources(configuration)
-        let key = Self.cacheKey(for: resolved.url)
+        let key: CacheKey
+        do {
+            key = try Self.cacheKey(for: resolved.url)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw CoreAIModelLoadingError.modelLoadFailed(
+                path: resolved.url.path(percentEncoded: false),
+                message: "Could not inspect the model resource files: \(error.localizedDescription)"
+            )
+        }
 
         latestRequestedKey = key
         if let cachedModel, cachedModel.key == key {
@@ -171,17 +187,51 @@ actor CoreAIModelLoader {
         return (canonicalURL, access)
     }
 
-    private static func cacheKey(for url: URL) -> CacheKey {
-        let metadataURL = url.appending(path: "metadata.json", directoryHint: .notDirectory)
-        let values = try? metadataURL.resourceValues(forKeys: [
-            .contentModificationDateKey,
-            .fileSizeKey,
-        ])
+    private static func cacheKey(for url: URL) throws -> CacheKey {
         return CacheKey(
             resourceURL: url,
-            metadataModificationDate: values?.contentModificationDate,
-            metadataFileSize: values?.fileSize
+            resourceFingerprint: try resourceFingerprint(for: url)
         )
+    }
+
+    nonisolated static func resourceFingerprint(for url: URL) throws -> [ResourceStamp] {
+        let keys: Set<URLResourceKey> = [
+            .isRegularFileKey,
+            .contentModificationDateKey,
+            .fileSizeKey,
+            .fileResourceIdentifierKey,
+        ]
+        var enumerationError: Error?
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: Array(keys),
+            options: [],
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
+        ) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+
+        let rootComponents = url.standardizedFileURL.pathComponents
+        var fingerprint: [ResourceStamp] = []
+        for case let fileURL as URL in enumerator {
+            try Task.checkCancellation()
+            let values = try fileURL.resourceValues(forKeys: keys)
+            guard values.isRegularFile == true else { continue }
+            let relativePath = fileURL.standardizedFileURL.pathComponents
+                .dropFirst(rootComponents.count)
+                .joined(separator: "/")
+            fingerprint.append(ResourceStamp(
+                relativePath: relativePath,
+                modificationDate: values.contentModificationDate,
+                fileSize: values.fileSize,
+                fileIdentifier: values.fileResourceIdentifier.map { String(describing: $0) }
+            ))
+        }
+        if let enumerationError { throw enumerationError }
+        return fingerprint.sorted { $0.relativePath < $1.relativePath }
     }
 }
 

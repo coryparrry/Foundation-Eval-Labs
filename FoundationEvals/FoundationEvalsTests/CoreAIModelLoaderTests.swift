@@ -91,6 +91,35 @@ struct CoreAIModelLoaderTests {
         }
     }
 
+    @Test func cacheFingerprintChangesWhenAModelAssetChanges() throws {
+        let directory = try coreAITemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metadataURL = directory.appending(path: "metadata.json", directoryHint: .notDirectory)
+        let assetURL = directory.appending(path: "weights.bin", directoryHint: .notDirectory)
+        try Data("{}".utf8).write(to: metadataURL)
+        try Data([0, 1, 2, 3]).write(to: assetURL)
+        let fixedMetadataDate = Date(timeIntervalSinceReferenceDate: 1_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: fixedMetadataDate],
+            ofItemAtPath: metadataURL.path
+        )
+
+        let first = try CoreAIModelLoader.resourceFingerprint(for: directory)
+        #expect(try CoreAIModelLoader.resourceFingerprint(for: directory) == first)
+        try Data([3, 2, 1, 0]).write(to: assetURL, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceReferenceDate: 2_000)],
+            ofItemAtPath: assetURL.path
+        )
+        let second = try CoreAIModelLoader.resourceFingerprint(for: directory)
+        let metadataDate = try metadataURL.resourceValues(
+            forKeys: [.contentModificationDateKey]
+        ).contentModificationDate
+
+        #expect(metadataDate == fixedMetadataDate)
+        #expect(first != second)
+    }
+
     @Test func cancelledCoreAIRunIsNotRecordedAsAModelLoadFailure() async {
         var suite = EvaluationSuite()
         suite.scoringMode = .review

@@ -103,7 +103,7 @@ actor EvaluationExperimentRunner {
             assessment.id = UUID()
             assessment.runID = id
             assessment.samples = assessments.flatMap(\.samples)
-            assessment.durationMilliseconds = assessments.map(\.durationMilliseconds).reduce(0, +)
+            assessment.durationMilliseconds = EvaluationAssessment.summedJudgeDurationMilliseconds(assessment.samples)
             let usage = assessments.compactMap(\.totalUsage)
             assessment.totalUsage = usage.isEmpty ? nil : usage.reduce(into: EvaluationUsage()) { $0.add($1) }
             assessment.cost = combinedCost(assessments.map(\.cost))

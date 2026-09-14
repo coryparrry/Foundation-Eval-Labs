@@ -74,7 +74,8 @@ struct SuiteOverviewSummary: Identifiable, Sendable {
         passedCount = run?.passedCount ?? 0
         failedCount = run?.failedCount ?? 0
         errorCount = run?.errorCount ?? 0
-        approvedRunID = localState.baselineApprovals.last { $0.isCurrent }?.runID
+        let approval = localState.baselineApprovals.last { $0.isCurrent }
+        approvedRunID = BaselinePresentation.approvedRun(approval: approval, runs: runs)?.id
     }
 }
 

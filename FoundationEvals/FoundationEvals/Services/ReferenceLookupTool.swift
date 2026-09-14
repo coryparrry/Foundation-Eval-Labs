@@ -151,22 +151,38 @@ private enum ReferenceLookupError: LocalizedError {
 actor ReferenceToolRecorder {
     let workflowRecorder: EvaluationWorkflowRecorder?
     private let maximumCalls: Int
-    private let callLimiter: EvaluationToolCallLimiter?
+    private let callLimiter: (any EvaluationToolCallLimiting)?
+    private var attemptedCallCount = 0
     private var reservedCallCount = 0
     private var traces: [EvaluationToolCallTrace] = []
     private var ephemeralOutputs: [(callIndex: Int, text: String)] = []
 
-    init(maximumCalls: Int, callLimiter: EvaluationToolCallLimiter? = nil, workflowRecorder: EvaluationWorkflowRecorder? = nil) {
+    init(
+        maximumCalls: Int,
+        callLimiter: (any EvaluationToolCallLimiting)? = nil,
+        workflowRecorder: EvaluationWorkflowRecorder? = nil
+    ) {
         self.workflowRecorder = workflowRecorder
         self.maximumCalls = max(1, min(maximumCalls, 4))
         self.callLimiter = callLimiter
     }
 
     func reserveCall() async throws -> Int {
-        try await callLimiter?.beginCall()
-        guard reservedCallCount < maximumCalls else { throw ReferenceLookupError.callLimitReached }
+        attemptedCallCount += 1
+        let callIndex = attemptedCallCount
+        guard reservedCallCount < maximumCalls else {
+            recordRejectedCall(callIndex: callIndex, durationMilliseconds: 0)
+            throw ReferenceLookupError.callLimitReached
+        }
         reservedCallCount += 1
-        return reservedCallCount
+        do {
+            try await callLimiter?.beginCall()
+        } catch {
+            reservedCallCount -= 1
+            recordRejectedCall(callIndex: callIndex, durationMilliseconds: 0)
+            throw error
+        }
+        return callIndex
     }
 
     func record(
@@ -189,6 +205,10 @@ actor ReferenceToolRecorder {
     }
 
     func recordRejectedCall(callIndex: Int, durationMilliseconds: Double) {
+        ephemeralOutputs.append((
+            callIndex,
+            "[Reference search rejected before producing results.]"
+        ))
         traces.append(
             EvaluationToolCallTrace(
                 toolName: ReferenceLookupTool.toolName,

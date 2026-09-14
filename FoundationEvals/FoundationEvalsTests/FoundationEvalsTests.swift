@@ -302,8 +302,10 @@ struct ModelConfigurationTests {
 
         let traces = await recorder.snapshot()
         let encodedTrace = String(decoding: try JSONEncoder().encode(traces), as: UTF8.self)
-        #expect(traces.count == 1)
+        #expect(traces.count == 2)
         #expect(traces[0].matchedFiles == ["Private.txt"])
+        #expect(traces[1].outcome == "rejected")
+        #expect(traces[1].matchedFiles.isEmpty)
         #expect(!encodedTrace.contains("ORCHARD"))
         #expect(!encodedTrace.contains("launch code word"))
         #expect(await recorder.evidenceText()?.contains("ORCHARD") == true)

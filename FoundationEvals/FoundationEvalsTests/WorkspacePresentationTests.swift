@@ -141,6 +141,68 @@ struct WorkspacePresentationTests {
         #expect(summary.state == .passed)
     }
 
+    @Test func overviewHidesBaselineApprovalWhenItsRunOrAssessmentIsMissing() {
+        let suite = EvaluationSuite()
+        let record = EvaluationSuiteRecord(
+            id: suite.id,
+            name: suite.name,
+            createdAt: .now,
+            updatedAt: .now,
+            archivedAt: nil,
+            repositoryDefinitionPath: nil,
+            lastRepositoryRevision: nil
+        )
+        var run = fixture()
+        run.suiteID = suite.id
+        let assessment = assessment(for: run, status: .passed)
+        run.assessments = [assessment]
+
+        var state = EvaluationSuiteLocalState()
+        state.baselineApprovals = [
+            .init(
+                id: UUID(),
+                runID: run.id,
+                assessmentID: assessment.id,
+                suiteRevision: "current",
+                approvedAt: .now,
+                note: nil,
+                revokedAt: nil
+            )
+        ]
+
+        let valid = SuiteOverviewSummary(
+            record: record,
+            suite: suite,
+            currentRevision: "current",
+            draft: nil,
+            runs: [run],
+            localState: state
+        )
+        #expect(valid.approvedRunID == run.id)
+
+        state.baselineApprovals[0].assessmentID = UUID()
+        let missingAssessment = SuiteOverviewSummary(
+            record: record,
+            suite: suite,
+            currentRevision: "current",
+            draft: nil,
+            runs: [run],
+            localState: state
+        )
+        #expect(missingAssessment.approvedRunID == nil)
+
+        state.baselineApprovals[0].assessmentID = assessment.id
+        let missingRun = SuiteOverviewSummary(
+            record: record,
+            suite: suite,
+            currentRevision: "current",
+            draft: nil,
+            runs: [],
+            localState: state
+        )
+        #expect(missingRun.approvedRunID == nil)
+    }
+
     private func assessment(for run: EvaluationRun, status: EvaluationResultStatus) -> EvaluationAssessment {
         .init(
             id: UUID(), runID: run.id, createdAt: .now, origin: .reassessment,

@@ -379,7 +379,7 @@ enum MCPStoreAuthority {
                 name: declaredCase.name,
                 prompt: declaredCase.prompt,
                 expected: declaredCase.expected,
-                conversation: declaredCase.conversation ?? EvaluationConversationConfiguration(),
+                conversation: declaredCase.conversation ?? currentCase?.conversation ?? EvaluationConversationConfiguration(),
                 fieldAssertions: declaredCase.fieldAssertions ?? currentCase?.fieldAssertions
             )
         }

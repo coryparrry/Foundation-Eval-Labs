@@ -85,15 +85,21 @@ actor EvaluationCompatibleJudgeClient {
         var request = URLRequest(url: url)
         request.timeoutInterval = connection.requestTimeoutSeconds
         applyHeaders(to: &request, resolved: resolved)
-        let (data, response) = try await session(timeout: connection.requestTimeoutSeconds).data(for: request)
-        try validate(response: response)
+        let (data, response) = try await data(
+            for: request, timeout: connection.requestTimeoutSeconds
+        )
         guard data.count <= Self.maximumResponseBytes else { throw EvaluationCompatibleJudgeError.responseTooLarge }
+        try validate(response: response, data: data)
         let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
         guard let model = decoded.data.first(where: { $0.id == connection.modelID }) else {
+            let available = decoded.data.map(\.id).sorted().prefix(8).joined(separator: ", ")
+            let detail = available.isEmpty
+                ? "The endpoint did not return any model IDs."
+                : "Available model IDs: \(available)."
             return .init(
                 checkedAt: Date(), modelFound: false,
                 structuredOutputsVerified: nil, multimodalVerified: nil,
-                message: "The endpoint responded, but did not list model '\(connection.modelID)'."
+                message: "The endpoint responded, but did not list model '\(connection.modelID)'. \(detail)"
             )
         }
         let supported = Set(model.supportedParameters ?? [])
@@ -151,6 +157,7 @@ actor EvaluationCompatibleJudgeClient {
         var lastError: Error?
         // One bounded repair request is permitted. Every response is validated locally.
         for attempt in 1...2 {
+            try Task.checkCancellation()
             let repair = attempt == 1 ? nil : """
                 The prior response was rejected by the application as incomplete or malformed.
                 Return a complete JSON verdict for every numbered requirement. Do not add fields or prose.
@@ -196,9 +203,15 @@ actor EvaluationCompatibleJudgeClient {
                     durationMilliseconds: milliseconds(since: started),
                     cost: cost(connection: connection, response: responseEnvelope)
                 )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as URLError where error.code == .cancelled {
+                throw CancellationError()
             } catch {
                 lastError = error
                 attempts[attempt - 1].validationError = error.localizedDescription
+                guard Self.isRepairableOutputError(error) else { throw error }
+                if attempt == 1 { try Task.checkCancellation() }
             }
         }
         throw EvaluationCompatibleJudgeError.exhausted(lastError?.localizedDescription ?? "The judge did not return a valid verdict.")
@@ -212,6 +225,13 @@ actor EvaluationCompatibleJudgeClient {
     ) async throws -> CompletionEnvelope {
         let connection = resolved.connection
         let url = try endpointURL(baseURL: connection.baseURL, component: "chat/completions")
+        let outputInstructions = """
+            \(EvaluationRunner.judgeInstructions)
+
+            Return only a JSON object with one top-level `requirements` array. Include exactly \(criteriaCount) objects. \
+            Each object must contain an integer `criterionIndex`, an integer `score`, and a string `rationale`. \
+            Use criterion indexes 1 through \(criteriaCount) exactly once.
+            """
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = connection.requestTimeoutSeconds
@@ -220,10 +240,12 @@ actor EvaluationCompatibleJudgeClient {
         let body = CompletionRequest(
             model: connection.modelID,
             messages: [
-                .init(role: "system", content: .text(EvaluationRunner.judgeInstructions)),
+                .init(role: "system", content: .text(outputInstructions)),
                 .init(role: "user", content: try messageContent(prompt: prompt, images: images))
             ],
-            responseFormat: .verdict(criteriaCount: criteriaCount),
+            responseFormat: connection.kind == .openRouter
+                ? .verdict(criteriaCount: criteriaCount)
+                : .jsonObject,
             temperature: 0,
             stream: false,
             provider: connection.kind == .openRouter
@@ -231,9 +253,11 @@ actor EvaluationCompatibleJudgeClient {
                 : nil
         )
         request.httpBody = try JSONEncoder().encode(body)
-        let (data, response) = try await session(timeout: connection.requestTimeoutSeconds).data(for: request)
-        try validate(response: response)
+        let (data, response) = try await data(
+            for: request, timeout: connection.requestTimeoutSeconds
+        )
         guard data.count <= Self.maximumResponseBytes else { throw EvaluationCompatibleJudgeError.responseTooLarge }
+        try validate(response: response, data: data)
         let raw = try JSONDecoder().decode(CompletionResponse.self, from: data)
         guard raw.choices.count == 1, let content = raw.choices.first?.message.content,
               let contentData = content.data(using: .utf8) else {
@@ -293,20 +317,56 @@ actor EvaluationCompatibleJudgeClient {
         }
     }
 
-    private func validate(response: URLResponse) throws {
+    private func validate(response: URLResponse, data: Data) throws {
         guard let response = response as? HTTPURLResponse else { throw EvaluationCompatibleJudgeError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
-            throw EvaluationCompatibleJudgeError.http(response.statusCode)
+            throw EvaluationCompatibleJudgeError.http(
+                status: response.statusCode,
+                detail: Self.providerErrorDetail(from: data)
+            )
         }
     }
 
-    private func session(timeout: Double) -> URLSession {
+    private nonisolated static func providerErrorDetail(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let nested = (object["error"] as? [String: Any])?["message"] as? String
+        let raw = nested ?? object["message"] as? String ?? object["detail"] as? String
+        guard let raw else { return nil }
+        let normalized = raw.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !normalized.isEmpty else { return nil }
+        return String(normalized.prefix(512))
+    }
+
+    private func data(for request: URLRequest, timeout: Double) async throws -> (Data, URLResponse) {
+        let session = URLSession(
+            configuration: Self.sessionConfiguration(timeout: timeout),
+            delegate: EvaluationNoRedirectDelegate(),
+            delegateQueue: nil
+        )
+        defer { session.invalidateAndCancel() }
+        return try await session.data(for: request)
+    }
+
+    nonisolated static func sessionConfiguration(timeout: Double) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = timeout
         configuration.urlCache = nil
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: configuration)
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.urlCredentialStorage = nil
+        configuration.connectionProxyDictionary = [:]
+        return configuration
+    }
+
+    private nonisolated static func isRepairableOutputError(_ error: Error) -> Bool {
+        if error is EvaluationJudgeValidationError || error is DecodingError { return true }
+        guard let compatible = error as? EvaluationCompatibleJudgeError else { return false }
+        if case .missingAssessment = compatible { return true }
+        return false
     }
 
     private func identity(connection: EvaluationJudgeConnection, response: CompletionEnvelope) -> EvaluationJudgeIdentity {
@@ -466,8 +526,12 @@ private struct ResponseFormat: Encodable {
             case type, properties, required, items, minimum, maximum, additionalProperties, minItems, maxItems
         }
     }
-    var type = "json_schema"
-    var jsonSchema: JSONSchema
+    var type: String
+    var jsonSchema: JSONSchema?
+
+    static var jsonObject: Self {
+        Self(type: "json_object", jsonSchema: nil)
+    }
 
     static func verdict(criteriaCount: Int) -> Self {
         let requirement = Property.object(
@@ -478,7 +542,7 @@ private struct ResponseFormat: Encodable {
             ],
             required: ["criterionIndex", "score", "rationale"]
         )
-        return Self(jsonSchema: JSONSchema(
+        return Self(type: "json_schema", jsonSchema: JSONSchema(
             name: "foundation_evals_verdict",
             strict: true,
             schema: Schema(
@@ -539,7 +603,7 @@ enum EvaluationCompatibleJudgeError: LocalizedError, Sendable {
     case capabilityMismatch(String)
     case keychain(OSStatus)
     case invalidResponse
-    case http(Int)
+    case http(status: Int, detail: String?)
     case responseTooLarge
     case missingAssessment
     case exhausted(String)
@@ -551,7 +615,9 @@ enum EvaluationCompatibleJudgeError: LocalizedError, Sendable {
         case .capabilityMismatch(let message): message
         case .keychain(let status): "The judge credential could not be read or saved (Keychain status \(status))."
         case .invalidResponse: "The judge endpoint returned a non-HTTP response."
-        case .http(let status): "The judge endpoint returned HTTP \(status)."
+        case .http(let status, let detail):
+            if let detail { "The judge endpoint returned HTTP \(status): \(detail)" }
+            else { "The judge endpoint returned HTTP \(status)." }
         case .responseTooLarge: "The judge response exceeded the 1 MB safety limit."
         case .missingAssessment: "The judge response did not contain exactly one assessment."
         case .exhausted(let message): "The judge did not produce a valid verdict after one bounded retry: \(message)"

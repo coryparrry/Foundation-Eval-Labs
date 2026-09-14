@@ -118,12 +118,25 @@ struct EvaluationSpotlightSearchConfiguration: Codable, Equatable, Sendable {
     }
 
     static func isDisallowedFileScope(_ url: URL) -> Bool {
-        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
-        let broadPaths = [
+        let canonicalURL = url.standardizedFileURL.resolvingSymlinksInPath()
+        let path = canonicalURL.path
+        let broadPaths = Set([
             "/",
             "/Applications",
+            "/bin",
+            "/dev",
+            "/etc",
             "/Library",
+            "/opt",
+            "/private",
+            "/private/etc",
+            "/private/tmp",
+            "/private/var",
+            "/sbin",
             "/System",
+            "/System/Volumes/Data",
+            "/usr",
+            "/var",
             "/Users",
             "/Volumes",
             FileManager.default.homeDirectoryForCurrentUser
@@ -134,8 +147,12 @@ struct EvaluationSpotlightSearchConfiguration: Codable, Equatable, Sendable {
                 .standardizedFileURL
                 .resolvingSymlinksInPath()
                 .path
-        ]
-        return broadPaths.contains(path)
+        ])
+        if broadPaths.contains(path) { return true }
+
+        let components = canonicalURL.pathComponents
+        guard components.count == 3 else { return false }
+        return components[1] == "Users" || components[1] == "Volumes"
     }
 }
 

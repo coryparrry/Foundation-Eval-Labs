@@ -466,6 +466,7 @@ actor EvaluationRunner {
                             "imageInputTokenCountAvailable": setupPrepared.imageInputTokenCountAvailable
                         ],
                         onPartial: { content in
+                            guard suite.modelConfiguration.provider != .customHTTP else { return }
                             await liveResponse(EvaluationLiveResponse(
                                 caseID: evaluationCase.id,
                                 caseName: evaluationCase.name,
@@ -581,6 +582,7 @@ actor EvaluationRunner {
                            "repetition": repetition, "estimatedInputTokens": prepared.tokenCount,
                            "imageInputTokenCountAvailable": prepared.imageInputTokenCountAvailable],
                 onPartial: { content in
+                    guard suite.modelConfiguration.provider != .customHTTP else { return }
                     await liveResponse(EvaluationLiveResponse(
                         caseID: evaluationCase.id,
                         caseName: evaluationCase.name,
@@ -840,7 +842,6 @@ actor EvaluationRunner {
         )
         var usage = EvaluationUsage()
         var hasUsage = false
-        var duration = 0.0
         var knownCost = 0.0
         var hasKnownCost = false
         var hasEstimatedCost = false
@@ -850,7 +851,6 @@ actor EvaluationRunner {
                 usage.add(judgeUsage)
                 hasUsage = true
             }
-            duration += result.judgeDurationMilliseconds ?? 0
             if let cost = result.judgeCost, let usd = cost.usd {
                 knownCost += usd
                 hasKnownCost = true
@@ -886,7 +886,8 @@ actor EvaluationRunner {
             judge: identity, promptVersion: EvaluationRunner.judgePromptVersion,
             rubric: suite.criteria, passingScore: EvaluationSuite.judgePassingScore,
             samples: samples, totalUsage: hasUsage ? usage : nil,
-            durationMilliseconds: duration, cost: cost, supersedesAssessmentID: nil,
+            durationMilliseconds: EvaluationAssessment.summedJudgeDurationMilliseconds(samples),
+            cost: cost, supersedesAssessmentID: nil,
             observedJudgeIdentities: observedIdentities.isEmpty ? [identity] : observedIdentities,
             scoringContract: try? EvaluationScoringContract(suite: suite)
         )
