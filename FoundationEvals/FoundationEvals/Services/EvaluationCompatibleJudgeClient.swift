@@ -214,7 +214,10 @@ actor EvaluationCompatibleJudgeClient {
                 if attempt == 1 { try Task.checkCancellation() }
             }
         }
-        throw EvaluationCompatibleJudgeError.exhausted(lastError?.localizedDescription ?? "The judge did not return a valid verdict.")
+        throw EvaluationCompatibleJudgeError.exhausted(
+            message: lastError?.localizedDescription ?? "The judge did not return a valid verdict.",
+            attempts: attempts
+        )
     }
 
     private func requestVerdict(
@@ -264,17 +267,14 @@ actor EvaluationCompatibleJudgeClient {
             throw EvaluationCompatibleJudgeError.missingAssessment
         }
         let verdict = try JSONDecoder().decode(CompatibleVerdict.self, from: contentData)
-        let usage = raw.usage.map {
-            EvaluationUsage(inputTokens: $0.promptTokens ?? 0, cachedInputTokens: 0,
-                            outputTokens: $0.completionTokens ?? 0, reasoningTokens: 0)
-        }
+        let usage = raw.usage?.evaluationUsage
         return CompletionEnvelope(
             content: verdict,
             rawContent: content,
             model: raw.model,
             provider: raw.provider,
             usage: usage,
-            reportedCost: raw.usage?.cost
+            reportedCost: raw.usage?.reportedCost
         )
     }
 
@@ -346,7 +346,17 @@ actor EvaluationCompatibleJudgeClient {
             delegateQueue: nil
         )
         defer { session.invalidateAndCancel() }
-        return try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
+        var data = Data()
+        data.reserveCapacity(Self.maximumResponseBytes)
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < Self.maximumResponseBytes else {
+                throw EvaluationCompatibleJudgeError.responseTooLarge
+            }
+            data.append(byte)
+        }
+        return (data, response)
     }
 
     nonisolated static func sessionConfiguration(timeout: Double) -> URLSessionConfiguration {
@@ -568,6 +578,31 @@ private struct CompletionResponse: Decodable {
         var completionTokens: Int?
         var cost: Double?
 
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            // Treat malformed or unrepresentable fields as unavailable metadata. The
+            // verdict itself remains usable when a provider emits bad usage values.
+            promptTokens = try? container.decode(Int.self, forKey: .promptTokens)
+            completionTokens = try? container.decode(Int.self, forKey: .completionTokens)
+            cost = try? container.decode(Double.self, forKey: .cost)
+        }
+
+        var evaluationUsage: EvaluationUsage? {
+            guard let promptTokens, promptTokens >= 0,
+                  let completionTokens, completionTokens >= 0 else { return nil }
+            return EvaluationUsage(
+                inputTokens: promptTokens,
+                cachedInputTokens: 0,
+                outputTokens: completionTokens,
+                reasoningTokens: 0
+            )
+        }
+
+        var reportedCost: Double? {
+            guard evaluationUsage != nil, let cost, cost.isFinite, cost >= 0 else { return nil }
+            return cost
+        }
+
         enum CodingKeys: String, CodingKey {
             case promptTokens = "prompt_tokens"
             case completionTokens = "completion_tokens"
@@ -578,6 +613,18 @@ private struct CompletionResponse: Decodable {
     var model: String?
     var provider: String?
     var usage: Usage?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        choices = try container.decode([Choice].self, forKey: .choices)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        provider = try container.decodeIfPresent(String.self, forKey: .provider)
+        usage = try? container.decodeIfPresent(Usage.self, forKey: .usage)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case choices, model, provider, usage
+    }
 }
 
 private struct ModelsResponse: Decodable {
@@ -606,7 +653,7 @@ enum EvaluationCompatibleJudgeError: LocalizedError, Sendable {
     case http(status: Int, detail: String?)
     case responseTooLarge
     case missingAssessment
-    case exhausted(String)
+    case exhausted(message: String, attempts: [EvaluationJudgeAttemptTrace])
 
     var errorDescription: String? {
         switch self {
@@ -620,7 +667,7 @@ enum EvaluationCompatibleJudgeError: LocalizedError, Sendable {
             else { "The judge endpoint returned HTTP \(status)." }
         case .responseTooLarge: "The judge response exceeded the 1 MB safety limit."
         case .missingAssessment: "The judge response did not contain exactly one assessment."
-        case .exhausted(let message): "The judge did not produce a valid verdict after one bounded retry: \(message)"
+        case .exhausted(let message, _): "The judge did not produce a valid verdict after one bounded retry: \(message)"
         }
     }
 }

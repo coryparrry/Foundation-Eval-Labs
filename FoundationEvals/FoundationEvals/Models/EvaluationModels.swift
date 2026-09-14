@@ -312,6 +312,12 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var refusal: EvaluationRefusalTrace? = nil
     var imageInputTokenCountAvailable: Bool? = nil
     var workflowTrace: EvaluationWorkflowTrace? = nil
+
+    var hasCompleteSubjectEvidenceForJudging: Bool {
+        errorCategory == nil
+            && errorMessage == nil
+            && !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 
 struct EvaluationToolCallTrace: Codable, Sendable {

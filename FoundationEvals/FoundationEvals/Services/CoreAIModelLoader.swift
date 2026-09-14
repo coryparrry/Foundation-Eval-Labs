@@ -1,4 +1,5 @@
 import CoreAILanguageModels
+import Darwin
 import Foundation
 import FoundationModels
 
@@ -31,6 +32,7 @@ struct CoreAIModelLoadResult: Sendable {
     let contextSize: Int
     let capabilities: LanguageModelCapabilities
     let estimatedSizeOnDiskBytes: Int?
+    let resourceIdentity: CoreAIModelLoader.ResourceIdentity
 
     fileprivate let securityScopedAccess: CoreAISecurityScopedAccess
 }
@@ -71,27 +73,33 @@ actor CoreAIModelLoader {
         let modificationDate: Date?
         let fileSize: Int?
         let fileIdentifier: String?
+        let statusChangeTime: FileStatusChangeTime
     }
 
-    private struct CacheKey: Hashable, Sendable {
+    struct FileStatusChangeTime: Hashable, Sendable {
+        let seconds: Int64
+        let nanoseconds: Int64
+    }
+
+    struct ResourceIdentity: Hashable, Sendable {
         let resourceURL: URL
         let resourceFingerprint: [ResourceStamp]
     }
 
     private struct CachedModel: Sendable {
-        let key: CacheKey
+        let key: ResourceIdentity
         let result: CoreAIModelLoadResult
     }
 
     private var cachedModel: CachedModel?
-    private var latestRequestedKey: CacheKey?
+    private var latestRequestedKey: ResourceIdentity?
 
     func load(configuration: EvaluationCoreAIConfiguration) async throws -> CoreAIModelLoadResult {
         try Task.checkCancellation()
         let resolved = try Self.resolveResources(configuration)
-        let key: CacheKey
+        let key: ResourceIdentity
         do {
-            key = try Self.cacheKey(for: resolved.url)
+            key = try Self.resourceIdentity(for: resolved.url)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -121,6 +129,7 @@ actor CoreAIModelLoader {
                     contextSize: bundle.maxContextLength,
                     capabilities: model.capabilities,
                     estimatedSizeOnDiskBytes: model.estimatedSizeOnDiskBytes,
+                    resourceIdentity: key,
                     securityScopedAccess: resolved.securityScopedAccess
                 )
             } catch {
@@ -187,8 +196,17 @@ actor CoreAIModelLoader {
         return (canonicalURL, access)
     }
 
-    private static func cacheKey(for url: URL) throws -> CacheKey {
-        return CacheKey(
+    nonisolated static func resourceIdentity(
+        for configuration: EvaluationCoreAIConfiguration
+    ) throws -> ResourceIdentity {
+        let resolved = try resolveResources(configuration)
+        return try withExtendedLifetime(resolved.securityScopedAccess) {
+            try resourceIdentity(for: resolved.url)
+        }
+    }
+
+    private nonisolated static func resourceIdentity(for url: URL) throws -> ResourceIdentity {
+        ResourceIdentity(
             resourceURL: url,
             resourceFingerprint: try resourceFingerprint(for: url)
         )
@@ -227,11 +245,32 @@ actor CoreAIModelLoader {
                 relativePath: relativePath,
                 modificationDate: values.contentModificationDate,
                 fileSize: values.fileSize,
-                fileIdentifier: values.fileResourceIdentifier.map { String(describing: $0) }
+                fileIdentifier: values.fileResourceIdentifier.map { String(describing: $0) },
+                statusChangeTime: try statusChangeTime(for: fileURL)
             ))
         }
         if let enumerationError { throw enumerationError }
         return fingerprint.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    private nonisolated static func statusChangeTime(for url: URL) throws -> FileStatusChangeTime {
+        var metadata = stat()
+        let (result, errorCode) = url.withUnsafeFileSystemRepresentation { path -> (Int32, Int32) in
+            guard let path else { return (-1, EINVAL) }
+            let result = stat(path, &metadata)
+            return (result, result == 0 ? 0 : errno)
+        }
+        guard result == 0 else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(errorCode),
+                userInfo: [NSFilePathErrorKey: url.path]
+            )
+        }
+        return FileStatusChangeTime(
+            seconds: Int64(metadata.st_ctimespec.tv_sec),
+            nanoseconds: Int64(metadata.st_ctimespec.tv_nsec)
+        )
     }
 }
 

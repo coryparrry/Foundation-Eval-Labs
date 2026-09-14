@@ -143,6 +143,7 @@ actor EvaluationRunner {
                     images: images, model: SystemLanguageModel.default, contextSize: 0,
                     modelName: "Core AI · resources unavailable",
                     admissionError: admissionError,
+                    executionCapabilities: LanguageModelCapabilities([]),
                     externalJudge: externalJudge,
                     liveResponse: liveResponse, progress: progress
                 )
@@ -160,6 +161,7 @@ actor EvaluationRunner {
         contextSize: Int,
         modelName: String,
         admissionError: (category: String, message: String)?,
+        executionCapabilities: LanguageModelCapabilities? = nil,
         externalJudge: EvaluationResolvedJudgeConnection?,
         liveResponse: @Sendable (EvaluationLiveResponse) async -> Void,
         progress: @Sendable (EvaluationSampleResult, Int, Int) async -> Void
@@ -212,7 +214,9 @@ actor EvaluationRunner {
                 completed += 1
                 await progress(result, completed, total)
 
-                if result.errorCategory == "cancelled" || result.judgeErrorCategory == "cancelled" {
+                if Task.isCancelled
+                    || result.errorCategory == "cancelled"
+                    || result.judgeErrorCategory == "cancelled" {
                     cancelled = true
                     terminationReason = "cancelled"
                     break outer
@@ -262,7 +266,7 @@ actor EvaluationRunner {
                 behaviorVersion: EvaluationModelConfiguration.currentBehaviorVersion,
                 configuration: suite.modelConfiguration,
                 modelDisplayName: modelName,
-                capabilities: model.capabilities.evaluationNames,
+                capabilities: (executionCapabilities ?? model.capabilities).evaluationNames,
                 toolNames: (suite.modelConfiguration.referenceMode == .lookupTool
                     ? [ReferenceLookupTool.toolName] : [])
                     + suite.features.tools.map(\.name)

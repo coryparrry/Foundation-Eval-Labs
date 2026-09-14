@@ -15,7 +15,7 @@ enum EvaluationWorkspacePersistence {
     ) throws -> EvaluationWorkspaceBootstrap {
         let catalogURL = supportDirectory.appending(path: catalogFilename)
         if FileManager.default.fileExists(atPath: catalogURL.path) {
-            let catalog = try CanonicalJSON.decode(
+            var catalog = try CanonicalJSON.decode(
                 EvaluationWorkspaceCatalog.self,
                 from: Data(contentsOf: catalogURL)
             )
@@ -23,7 +23,39 @@ enum EvaluationWorkspacePersistence {
                   !catalog.projects.isEmpty else {
                 throw EvaluationWorkspaceError.unsupportedCatalog
             }
-            return EvaluationWorkspaceBootstrap(catalog: catalog)
+
+            guard let legacySuite,
+                  let matchingProject = catalog.projects.first(where: {
+                      $0.suites.contains { $0.id == legacySuite.id }
+                  }),
+                  let matchingSuite = matchingProject.suites.first(where: {
+                      $0.id == legacySuite.id
+                  }) else {
+                return EvaluationWorkspaceBootstrap(catalog: catalog)
+            }
+
+            let target = suiteDirectory(
+                supportDirectory: supportDirectory,
+                projectID: matchingProject.id,
+                suiteID: matchingSuite.id
+            )
+            try createSuiteDirectories(at: target)
+            // A catalog means the original workspace migration already ran. Repair
+            // only the local-state omission; recopying stale suite, attachment, or
+            // run files into an established workspace would broaden the recovery.
+            let migrated = try copyLegacyStateIfMissing(from: supportDirectory, to: target)
+            guard migrated else {
+                return EvaluationWorkspaceBootstrap(catalog: catalog)
+            }
+
+            catalog.migratedLegacyStorageAt = Date(
+                timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down)
+            )
+            try save(catalog, in: supportDirectory)
+            return EvaluationWorkspaceBootstrap(
+                catalog: catalog,
+                notice: legacyMigrationNotice
+            )
         }
 
         let now = Date()
@@ -50,7 +82,7 @@ enum EvaluationWorkspacePersistence {
         var catalog = EvaluationWorkspaceCatalog(
             selectedProjectID: project.id,
             projects: [project],
-            migratedLegacyStorageAt: legacySuite == nil ? nil : now
+            migratedLegacyStorageAt: nil
         )
         let target = suiteDirectory(
             supportDirectory: supportDirectory,
@@ -67,19 +99,18 @@ enum EvaluationWorkspacePersistence {
         if !FileManager.default.fileExists(atPath: suiteURL.path) {
             try CanonicalJSON.data(for: seedSuite).write(to: suiteURL, options: .atomic)
         }
-        try save(catalog, in: supportDirectory)
-        // Reassign to force a complete value before returning under strict concurrency.
-        catalog.migratedLegacyStorageAt = migrated ? now : catalog.migratedLegacyStorageAt
         if migrated {
-            try save(catalog, in: supportDirectory)
+            catalog.migratedLegacyStorageAt = now
         }
+        try save(catalog, in: supportDirectory)
         return EvaluationWorkspaceBootstrap(
             catalog: catalog,
-            notice: migrated
-                ? "Your existing suite, draft, attachments, and run history were copied into the new workspace. The legacy files were left unchanged for recovery."
-                : nil
+            notice: migrated ? legacyMigrationNotice : nil
         )
     }
+
+    private static let legacyMigrationNotice =
+        "Existing legacy files were copied into the matching workspace suite where destinations were missing. The legacy files were left unchanged for recovery."
 
     static func save(_ catalog: EvaluationWorkspaceCatalog, in supportDirectory: URL) throws {
         try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
@@ -134,9 +165,10 @@ enum EvaluationWorkspacePersistence {
         return !path.split(separator: "/", omittingEmptySubsequences: false).contains("..")
     }
 
-    private static func copyLegacyStorage(from source: URL, to target: URL) throws -> Bool {
+    static func copyLegacyStorage(from source: URL, to target: URL) throws -> Bool {
         let mappings = [
             (source.appending(path: "suite.json"), target.appending(path: "suite.json")),
+            (source.appending(path: "state.json"), target.appending(path: "state.json")),
             (source.appending(path: "suite-draft.json"), target.appending(path: "suite-draft.json")),
             (source.appending(path: "active-run.json"), target.appending(path: "active-run.json")),
             (source.appending(path: "Attachments", directoryHint: .isDirectory),
@@ -164,6 +196,15 @@ enum EvaluationWorkspacePersistence {
             }
         }
         return copied
+    }
+
+    private static func copyLegacyStateIfMissing(from source: URL, to target: URL) throws -> Bool {
+        let legacy = source.appending(path: "state.json")
+        let destination = target.appending(path: "state.json")
+        guard FileManager.default.fileExists(atPath: legacy.path),
+              !FileManager.default.fileExists(atPath: destination.path) else { return false }
+        try FileManager.default.copyItem(at: legacy, to: destination)
+        return true
     }
 }
 
