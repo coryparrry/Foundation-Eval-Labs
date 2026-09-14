@@ -21,6 +21,15 @@ struct EditorPerformanceTests {
         #expect(reads == 3)
     }
 
+    @Test func unavailableOnDeviceContextSizeUsesDocumentedWindow() {
+        var reads = 0
+        let cache = ModelContextSizeCache { _ in reads += 1; return 0 }
+
+        #expect(cache.value(for: EvaluationModelConfiguration()) == 4_096)
+        #expect(cache.value(for: EvaluationModelConfiguration()) == 4_096)
+        #expect(reads == 1)
+    }
+
     @Test func typingBurstSavesOnlyLatestDraftAfterPause() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -73,6 +73,13 @@ private enum SuiteConfigurationPage: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+enum SuiteCasePickerSelection {
+    static func resolved(_ selection: UUID?, in cases: [EvaluationCase]) -> UUID? {
+        guard let selection, cases.contains(where: { $0.id == selection }) else { return nil }
+        return selection
+    }
+}
+
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
     @State private var selectedPage = SuiteEditorPage.cases
@@ -628,6 +635,13 @@ private struct CasesSection: View {
     @Binding var selectedCaseID: UUID?
     @State private var isImportingCases = false
 
+    private var pickerSelection: Binding<UUID?> {
+        Binding(
+            get: { SuiteCasePickerSelection.resolved(selectedCaseID, in: store.draftSuite.cases) },
+            set: { selectedCaseID = $0 }
+        )
+    }
+
     var body: some View {
         EditorSection(
             "Test cases",
@@ -639,7 +653,8 @@ private struct CasesSection: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                Picker("Editing case", selection: $selectedCaseID) {
+                Picker("Editing case", selection: pickerSelection) {
+                    Text("Choose a case").tag(UUID?.none)
                     ForEach(store.draftSuite.cases) { evaluationCase in
                         Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
                             .tag(Optional(evaluationCase.id))

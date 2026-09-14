@@ -27,6 +27,7 @@ actor EvaluationRunner {
         switch suite.modelConfiguration.provider {
         case .onDevice:
             let model = suite.modelConfiguration.systemModel
+            let contextSize = ModelContextSizeCache.resolvedOnDeviceContextSize(model.contextSize)
             return await run(
                 id: id,
                 suiteRevision: suiteRevision,
@@ -34,7 +35,7 @@ actor EvaluationRunner {
                 suite: suite,
                 images: images,
                 model: model,
-                contextSize: model.contextSize,
+                contextSize: contextSize,
                 modelName: "On-device · \(model.variant.displayName)",
                 admissionError: Self.unavailableMessage(for: model.availability).map {
                     (category: "modelUnavailable", message: $0)

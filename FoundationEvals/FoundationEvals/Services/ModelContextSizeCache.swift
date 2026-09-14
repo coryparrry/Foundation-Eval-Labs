@@ -4,6 +4,12 @@ import FoundationModels
 /// rather than from every validation pass while a text editor is handling input.
 @MainActor
 final class ModelContextSizeCache {
+    /// Apple's on-device model has a documented 4,096-token context window.
+    /// Some model-service builds temporarily report zero even while the model is
+    /// available, so use the documented window instead of turning every prompt
+    /// into a one-token input budget.
+    nonisolated static let onDeviceFallback = 4_096
+
     private struct Key: Hashable {
         var useCase: EvaluationSystemUseCase
         var guardrails: EvaluationGuardrails
@@ -22,9 +28,13 @@ final class ModelContextSizeCache {
             guardrails: configuration.customizationSettings.guardrails
         )
         if let value = values[key] { return value }
-        let value = read(configuration)
+        let value = Self.resolvedOnDeviceContextSize(read(configuration))
         values[key] = value
         return value
+    }
+
+    nonisolated static func resolvedOnDeviceContextSize(_ reportedValue: Int) -> Int {
+        reportedValue > 0 ? reportedValue : onDeviceFallback
     }
 
     func invalidate() {
