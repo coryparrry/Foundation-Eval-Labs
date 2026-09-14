@@ -156,6 +156,47 @@ struct SpotlightSearchToolTests {
         #expect(configuration.validationIssue == nil)
     }
 
+    @Test func validationRejectsBroadSystemAndOtherUserHomeScopes() {
+        for path in [
+            "/private", "/etc", "/var", "/usr", "/bin", "/sbin",
+            "/System/Volumes/Data", "/Users/foundation-evals-other-user",
+        ] {
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+            #expect(EvaluationSpotlightSearchConfiguration.isDisallowedFileScope(url), "Expected \(path) to be rejected")
+        }
+
+        #expect(
+            !EvaluationSpotlightSearchConfiguration.isDisallowedFileScope(
+                URL(fileURLWithPath: "/Users/foundation-evals-other-user/Documents/Project", isDirectory: true)
+            )
+        )
+    }
+
+    @MainActor
+    @Test func suiteValidationRejectsCustomToolNameReservedBySpotlight() {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "SpotlightCollision-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        var suite = store.suite
+        suite.scoringMode = .review
+        suite.features.spotlightSearch = .init(
+            enabled: true,
+            fileSource: .init(folderPath: "/tmp/foundation-evals-narrow-project")
+        )
+        suite.features.tools = [
+            .init(
+                name: try! #require(EvaluationSpotlightSearchConfiguration.knownToolNames.first),
+                description: "Collides with the built-in Spotlight tool.",
+                fixtureResponse: "ok"
+            )
+        ]
+
+        #expect(
+            store.validationIssue(for: suite, includeModelReadiness: false)?
+                .contains("Spotlight") == true
+        )
+    }
+
     @Test func runtimeBuildsWithoutSearchingAndTraceContainsOnlyMetadata() async throws {
         let fixtureFolder = FileManager.default.temporaryDirectory
             .appending(path: "foundation-evals-spotlight-\(UUID().uuidString)", directoryHint: .isDirectory)

@@ -131,7 +131,7 @@ extension EvaluationRunner {
                     status: .unscored,
                     rationale: "The subject response succeeded, but the independent judge did not produce valid evidence.",
                     durationMilliseconds: Self.milliseconds(since: started),
-                    errorCategory: externalJudgeErrorCategory(error),
+                    errorCategory: Self.externalJudgeErrorCategory(error),
                     errorMessage: error.localizedDescription,
                     identity: EvaluationJudgeIdentity(
                         mode: .connection,
@@ -300,14 +300,28 @@ extension EvaluationRunner {
         }
     }
 
-    private func externalJudgeErrorCategory(_ error: Error) -> String {
+    nonisolated static func externalJudgeErrorCategory(_ error: Error) -> String {
         if error is CancellationError { return "cancelled" }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cancelled: return "cancelled"
+            case .timedOut: return "timeout"
+            case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+                 .networkConnectionLost, .notConnectedToInternet:
+                return "serviceUnavailable"
+            default: return "judgeNetworkFailure"
+            }
+        }
         if let compatible = error as? EvaluationCompatibleJudgeError {
             switch compatible {
             case .disclosureNotApproved: return "judgeDisclosureRequired"
             case .capabilityMismatch: return "incompatibleJudge"
             case .exhausted, .missingAssessment: return "invalidJudgeOutput"
-            case .http: return "judgeHTTPFailure"
+            case .http(let status, _):
+                if status == 429 { return "rateLimited" }
+                if status == 408 { return "timeout" }
+                if (500...599).contains(status) { return "serviceUnavailable" }
+                return "judgeHTTPFailure"
             case .responseTooLarge: return "invalidJudgeOutput"
             case .invalidConfiguration: return "invalidJudgeConfiguration"
             case .keychain: return "judgeCredentialUnavailable"

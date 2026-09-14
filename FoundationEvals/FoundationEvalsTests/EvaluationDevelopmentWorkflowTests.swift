@@ -119,6 +119,44 @@ struct EvaluationDevelopmentWorkflowTests {
         }
     }
 
+    @Test func caseImportHandlesBOMAndDiscoversJSONLColumnsAcrossRows() throws {
+        let csv = Data("\u{FEFF}title,input,want\nBlue,Why blue?,Rayleigh\n".utf8)
+        #expect(try EvaluationCaseImporter.columns(in: csv, format: .csv) == ["title", "input", "want"])
+
+        let jsonl = Data("\u{FEFF}{\"name\":\"One\",\"prompt\":\"P\"}\n{\"name\":\"Two\",\"prompt\":\"Q\",\"expected\":\"E\",\"tag\":\"later\"}\n".utf8)
+        #expect(
+            try EvaluationCaseImporter.columns(in: jsonl, format: .jsonLines)
+                == ["expected", "name", "prompt", "tag"]
+        )
+    }
+
+    @Test func caseImportPreviewRejectsRowsBeyondTheGlobalBound() throws {
+        let jsonl = (0...EvaluationStore.maximumCases)
+            .map { "{\"prompt\":\"Prompt \($0)\"}" }
+            .joined(separator: "\n")
+
+        #expect(throws: EvaluationCaseImportError.self) {
+            _ = try EvaluationCaseImporter.preview(
+                data: Data(jsonl.utf8),
+                format: .jsonLines,
+                mapping: .init(nameColumn: nil, promptColumn: "prompt", expectedColumn: nil)
+            )
+        }
+    }
+
+    @Test func csvImportIgnoresBlankRowsAtTheCaseLimit() throws {
+        let csv = Data("prompt\nFirst\n\nSecond\n".utf8)
+
+        let cases = try EvaluationCaseImporter.cases(
+            data: csv,
+            format: .csv,
+            mapping: .init(nameColumn: nil, promptColumn: "prompt", expectedColumn: nil),
+            maximumCases: 2
+        )
+
+        #expect(cases.map(\.prompt) == ["First", "Second"])
+    }
+
     @MainActor
     @Test func starterPacksAreCompleteRunnableAndUseRelevantScoring() throws {
         let directory = try temporaryDirectory()
@@ -1151,6 +1189,69 @@ struct EvaluationDevelopmentWorkflowTests {
     }
 
     @MainActor
+    @Test func corruptLocalStateAndJudgeConnectionsArePreservedAndSurfaced() throws {
+        let support = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: support) }
+        let store = EvaluationStore(supportDirectory: support)
+        store.draftSuite.releasePolicy.required = true
+        #expect(store.saveSuite())
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: support,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        )
+        let stateURL = suiteDirectory.appending(path: "state.json")
+        let connectionsURL = support.appending(path: "judge-connections.json")
+        let corruptState = Data("not-state-json".utf8)
+        let corruptConnections = Data("not-connections-json".utf8)
+        try corruptState.write(to: stateURL, options: .atomic)
+        try corruptConnections.write(to: connectionsURL, options: .atomic)
+
+        let restored = EvaluationStore(supportDirectory: support)
+
+        #expect(restored.notice?.contains("saved suite state could not be read") == true)
+        #expect(restored.notice?.contains("saved judge connections could not be read") == true)
+        let reloaded = EvaluationStore(supportDirectory: support)
+        #expect(reloaded.notice?.contains("saved suite state could not be read") == true)
+        #expect(reloaded.notice?.contains("saved judge connections could not be read") == true)
+        let suiteFiles = try FileManager.default.contentsOfDirectory(atPath: suiteDirectory.path)
+        let stateBackups = suiteFiles.filter { $0.hasPrefix("state-unreadable-") }
+        #expect(stateBackups.count == 1)
+        let stateBackup = try #require(stateBackups.first)
+        #expect(try Data(contentsOf: suiteDirectory.appending(path: stateBackup)) == corruptState)
+        let rootFiles = try FileManager.default.contentsOfDirectory(atPath: support.path)
+        let connectionBackups = rootFiles.filter { $0.hasPrefix("judge-connections-unreadable-") }
+        #expect(connectionBackups.count == 1)
+        let connectionsBackup = try #require(connectionBackups.first)
+        #expect(try Data(contentsOf: support.appending(path: connectionsBackup)) == corruptConnections)
+    }
+
+    @MainActor
+    @Test func projectReleaseReportFailsClosedOnUnreadableSuiteStateWithoutWriting() throws {
+        let support = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: support) }
+        let store = EvaluationStore(supportDirectory: support)
+        store.draftSuite.releasePolicy.required = true
+        #expect(store.saveSuite())
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: support,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        )
+        try Data("not-state-json".utf8).write(
+            to: suiteDirectory.appending(path: "state.json"),
+            options: .atomic
+        )
+        let pathsBefore = try FileManager.default.subpathsOfDirectory(atPath: support.path).sorted()
+
+        let report = try store.projectReleaseCheckReport(projectID: store.selectedProjectID)
+
+        #expect(report.outcome == .incompleteOrIncompatibleEvidence)
+        #expect(report.suites.first?.report.failures.contains { $0.contains("unreadable suite state") } == true)
+        #expect(try FileManager.default.subpathsOfDirectory(atPath: support.path).sorted() == pathsBefore)
+    }
+
+    @MainActor
     @Test func targetedMCPListsAndActivatesStableWorkspaceIDs() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1199,7 +1300,7 @@ struct EvaluationDevelopmentWorkflowTests {
         #expect(snapshot.isDirty == true)
     }
 
-    @Test func reassessmentReappliesFieldAssertionsWithoutGeneration() async {
+    @Test func reassessmentReappliesFieldAssertionsWithoutGeneration() async throws {
         var suite = EvaluationSuite()
         suite.criteria = "The response is exactly READY."
         suite.cases[0].fieldAssertions = [
@@ -1213,7 +1314,7 @@ struct EvaluationDevelopmentWorkflowTests {
             baseURL: "http://127.0.0.1:1/v1", modelID: "unused"
         )
 
-        let assessment = await EvaluationReassessmentService().reassess(
+        let assessment = try await EvaluationReassessmentService().reassess(
             run: run, suite: suite, images: [],
             resolved: .init(connection: connection, apiKey: nil)
         )
@@ -1223,6 +1324,74 @@ struct EvaluationDevelopmentWorkflowTests {
         #expect(assessment.samples[0].status == .failed)
         #expect(assessment.samples[0].trace?.judgedCriterionIndexes == [])
         #expect(assessment.errorCount == 0)
+        #expect(assessment.durationMilliseconds == 0)
+    }
+
+    @Test func failedReassessmentRecordsJudgeAttemptDuration() async throws {
+        var suite = EvaluationSuite()
+        suite.criteria = "The answer is supported by the evidence."
+        var run = makeRun(cases: suite.cases, statuses: [[.passed]])
+        run.results[0].response = "A complete response."
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Unavailable fixture", kind: .localCompatible,
+            baseURL: "http://127.0.0.1:1/v1", modelID: "unavailable"
+        )
+        suite.judgeConfiguration = .init(
+            mode: .connection,
+            connectionID: connection.id,
+            externalEvidenceApprovedAt: Date(),
+            includeReferenceAttachments: false,
+            approvedConnectionID: connection.id,
+            approvedIncludeReferenceAttachments: false,
+            approvedConnectionDigest: connection.disclosureDigest
+        )
+
+        let assessment = try await EvaluationReassessmentService().reassess(
+            run: run, suite: suite, images: [],
+            resolved: .init(connection: connection, apiKey: nil)
+        )
+
+        let sampleDuration = assessment.samples[0].durationMilliseconds
+        #expect(sampleDuration != nil)
+        #expect(assessment.durationMilliseconds == sampleDuration)
+    }
+
+    @Test func cancelledReassessmentStopsInsteadOfRecordingJudgeFailure() async {
+        var suite = EvaluationSuite()
+        suite.criteria = "The answer is supported by the evidence."
+        var run = makeRun(cases: suite.cases, statuses: [[.passed]])
+        run.results[0].response = "A complete response."
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Unused fixture", kind: .localCompatible,
+            baseURL: "http://127.0.0.1:1/v1", modelID: "unused"
+        )
+        suite.judgeConfiguration = .init(
+            mode: .connection,
+            connectionID: connection.id,
+            externalEvidenceApprovedAt: Date(),
+            includeReferenceAttachments: false,
+            approvedConnectionID: connection.id,
+            approvedIncludeReferenceAttachments: false,
+            approvedConnectionDigest: connection.disclosureDigest
+        )
+
+        let result = await Task { () -> Result<EvaluationAssessment, Error> in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                return .success(try await EvaluationReassessmentService().reassess(
+                    run: run, suite: suite, images: [],
+                    resolved: .init(connection: connection, apiKey: nil)
+                ))
+            } catch {
+                return .failure(error)
+            }
+        }.value
+
+        guard case .failure(let error) = result else {
+            Issue.record("Expected cancellation to stop reassessment.")
+            return
+        }
+        #expect(error is CancellationError)
     }
 
     @MainActor
@@ -1240,7 +1409,7 @@ struct EvaluationDevelopmentWorkflowTests {
             id: UUID(), name: "Unused fixture", kind: .localCompatible,
             baseURL: "http://127.0.0.1:1/v1", modelID: "unused"
         )
-        let assessment = await EvaluationReassessmentService().reassess(
+        let assessment = try await EvaluationReassessmentService().reassess(
             run: run, suite: store.suite, images: [],
             resolved: .init(connection: connection, apiKey: nil)
         )

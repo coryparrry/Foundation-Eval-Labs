@@ -256,13 +256,21 @@ struct EvaluationUsage: Codable, Sendable {
     var outputTokens = 0
     var reasoningTokens = 0
 
-    var totalTokens: Int { inputTokens + outputTokens }
+    var totalTokens: Int { inputTokens.saturatedAdding(outputTokens) }
 
     mutating func add(_ other: Self) {
-        inputTokens += other.inputTokens
-        cachedInputTokens += other.cachedInputTokens
-        outputTokens += other.outputTokens
-        reasoningTokens += other.reasoningTokens
+        inputTokens = inputTokens.saturatedAdding(other.inputTokens)
+        cachedInputTokens = cachedInputTokens.saturatedAdding(other.cachedInputTokens)
+        outputTokens = outputTokens.saturatedAdding(other.outputTokens)
+        reasoningTokens = reasoningTokens.saturatedAdding(other.reasoningTokens)
+    }
+}
+
+extension Int {
+    func saturatedAdding(_ other: Int) -> Int {
+        let (sum, overflowed) = addingReportingOverflow(other)
+        guard overflowed else { return sum }
+        return other >= 0 ? .max : .min
     }
 }
 
@@ -433,7 +441,8 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
 
     var averageScore: Double? {
         let scores = effectiveResults.compactMap(\.score)
-        return scores.isEmpty ? nil : Double(scores.reduce(0, +)) / Double(scores.count)
+        return scores.isEmpty ? nil
+            : scores.reduce(0.0) { $0 + Double($1) } / Double(scores.count)
     }
 
     var averageDurationMilliseconds: Double {
@@ -445,7 +454,10 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     }
 
     var totalTokens: Int {
-        effectiveResults.reduce(0) { $0 + $1.usage.totalTokens + ($1.judgeUsage?.totalTokens ?? 0) }
+        effectiveResults.reduce(0) { total, result in
+            total.saturatedAdding(result.usage.totalTokens)
+                .saturatedAdding(result.judgeUsage?.totalTokens ?? 0)
+        }
     }
 
     var selectedAssessment: EvaluationAssessment? {

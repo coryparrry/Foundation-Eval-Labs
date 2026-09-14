@@ -33,8 +33,7 @@ actor EvaluationReassessmentService {
         resolved: EvaluationResolvedJudgeConnection,
         scoringContract: EvaluationScoringContract? = nil,
         subjectEvidenceDigest: String? = nil
-    ) async -> EvaluationAssessment {
-        let started = ContinuousClock.now
+    ) async throws -> EvaluationAssessment {
         var samples: [EvaluationSampleAssessment] = []
         var totalUsage = EvaluationUsage()
         var hasUsage = false
@@ -44,6 +43,7 @@ actor EvaluationReassessmentService {
         var observedIdentities: [EvaluationJudgeIdentity] = []
 
         for saved in run.results {
+            try Task.checkCancellation()
             guard saved.errorCategory == nil, !saved.response.isEmpty,
                   let evaluationCase = (run.plannedCases ?? suite.cases).first(where: { $0.id == saved.caseID }) else {
                 samples.append(.init(
@@ -74,6 +74,7 @@ actor EvaluationReassessmentService {
             }
             var semanticSuite = suite
             semanticSuite.criteria = semanticIndexes.map { criteria[$0] }.joined(separator: "\n")
+            let judgeStarted = ContinuousClock.now
             do {
                 let judged = try await client.judge(
                     response: saved.response,
@@ -109,12 +110,16 @@ actor EvaluationReassessmentService {
                     errorCategory: nil, errorMessage: nil, usage: judged.usage,
                     durationMilliseconds: judged.durationMilliseconds
                 ))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as URLError where error.code == .cancelled {
+                throw CancellationError()
             } catch {
                 samples.append(.init(
                     id: UUID(), sampleID: saved.id, status: .unscored, score: nil,
                     rationale: "The independent judge did not produce valid evidence.", trace: nil,
                     errorCategory: "judgeFailure", errorMessage: error.localizedDescription,
-                    usage: nil, durationMilliseconds: nil
+                    usage: nil, durationMilliseconds: milliseconds(since: judgeStarted)
                 ))
                 costAvailability = .unavailable
             }
@@ -129,7 +134,7 @@ actor EvaluationReassessmentService {
             judge: assessmentIdentity, promptVersion: EvaluationRunner.judgePromptVersion,
             rubric: suite.criteria, passingScore: EvaluationSuite.judgePassingScore,
             samples: samples, totalUsage: hasUsage ? totalUsage : nil,
-            durationMilliseconds: milliseconds(since: started), cost: cost,
+            durationMilliseconds: EvaluationAssessment.summedJudgeDurationMilliseconds(samples), cost: cost,
             supersedesAssessmentID: run.selectedAssessmentID,
             observedJudgeIdentities: observedIdentities.isEmpty ? [assessmentIdentity] : observedIdentities,
             scoringContract: scoringContract ?? (try? EvaluationScoringContract(suite: suite)),
@@ -140,9 +145,10 @@ actor EvaluationReassessmentService {
     func checkJudge(
         sources: [EvaluationJudgeCheckSource],
         resolved: EvaluationResolvedJudgeConnection
-    ) async -> EvaluationJudgeCheckReport {
+    ) async throws -> EvaluationJudgeCheckReport {
         var results: [EvaluationJudgeCheckResult] = []
         for source in sources {
+            try Task.checkCancellation()
             let example = source.example
             guard source.errorMessage == nil,
                   let run = source.run,
@@ -196,6 +202,10 @@ actor EvaluationReassessmentService {
                 )
                 results.append(.init(example: example, actualStatus: status,
                                      passed: status == example.expectedStatus, errorMessage: nil))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as URLError where error.code == .cancelled {
+                throw CancellationError()
             } catch {
                 results.append(.init(example: example, actualStatus: .unscored,
                                      passed: false, errorMessage: error.localizedDescription))

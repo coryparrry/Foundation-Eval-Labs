@@ -292,6 +292,14 @@ struct EvaluationHTTPLanguageModelTests {
                     $0.caseID == evaluationCase.id && $0.repetition == repetition
                 }
                 #expect(sampleUpdates.contains { $0.content == "Deterministic " })
+                #expect(
+                    sampleUpdates.map(\.content)
+                        == [
+                            "Deterministic ",
+                            "Deterministic fixture ",
+                            "Deterministic fixture stream.",
+                        ]
+                )
                 #expect(sampleUpdates.allSatisfy { $0.caseName == evaluationCase.name })
                 #expect(sampleUpdates.allSatisfy { $0.turnName == "Scored prompt" })
             }

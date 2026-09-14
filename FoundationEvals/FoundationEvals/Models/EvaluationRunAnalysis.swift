@@ -8,15 +8,15 @@ struct EvaluationTokenSummary: Codable, Equatable, Sendable {
     var outputTokens: Int
     var reasoningTokens: Int
 
-    var totalTokens: Int { inputTokens + outputTokens }
+    var totalTokens: Int { inputTokens.saturatedAdding(outputTokens) }
 
     fileprivate init(usages: [EvaluationUsage], usageUnavailableSampleCount: Int = 0) {
         requestCount = usages.count
         self.usageUnavailableSampleCount = usageUnavailableSampleCount
-        inputTokens = usages.reduce(0) { $0 + $1.inputTokens }
-        cachedInputTokens = usages.reduce(0) { $0 + $1.cachedInputTokens }
-        outputTokens = usages.reduce(0) { $0 + $1.outputTokens }
-        reasoningTokens = usages.reduce(0) { $0 + $1.reasoningTokens }
+        inputTokens = usages.reduce(0) { $0.saturatedAdding($1.inputTokens) }
+        cachedInputTokens = usages.reduce(0) { $0.saturatedAdding($1.cachedInputTokens) }
+        outputTokens = usages.reduce(0) { $0.saturatedAdding($1.outputTokens) }
+        reasoningTokens = usages.reduce(0) { $0.saturatedAdding($1.reasoningTokens) }
     }
 }
 

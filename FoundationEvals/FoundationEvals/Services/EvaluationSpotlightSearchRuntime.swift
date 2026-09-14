@@ -226,7 +226,7 @@ private actor EvaluationSpotlightSearchRecorder {
             trace.groupedItemResultCount += groups.values.reduce(0) { $0 + $1.count }
         case .count(let count):
             trace.countReplyCount += 1
-            trace.countResultTotal = Self.saturatingAdd(trace.countResultTotal, count.value)
+            trace.countResultTotal = trace.countResultTotal.saturatedAdding(count.value)
         case .table(let table):
             trace.tableReplyCount += 1
             trace.tableRowCount += table.rows.count
@@ -261,11 +261,6 @@ private actor EvaluationSpotlightSearchRecorder {
         return snapshot()
     }
 
-    private static func saturatingAdd(_ lhs: Int, _ rhs: Int) -> Int {
-        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
-        if !overflow { return sum }
-        return rhs >= 0 ? .max : .min
-    }
 }
 
 enum EvaluationSpotlightRecordingDrain {

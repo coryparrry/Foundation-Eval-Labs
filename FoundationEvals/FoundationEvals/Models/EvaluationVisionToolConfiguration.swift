@@ -96,7 +96,11 @@ struct EvaluationBuiltinToolBoundary: LanguageModelSession.DynamicProfileModifie
     }
 }
 
-actor EvaluationToolCallLimiter {
+protocol EvaluationToolCallLimiting: Sendable {
+    func beginCall() async throws
+}
+
+actor EvaluationToolCallLimiter: EvaluationToolCallLimiting {
     private let maximumCalls: Int
     private var callCount = 0
 
@@ -107,7 +111,7 @@ actor EvaluationToolCallLimiter {
         )
     }
 
-    func beginCall() throws {
+    func beginCall() async throws {
         guard callCount < maximumCalls else {
             throw EvaluationBoundedToolError.callLimitReached(maximum: maximumCalls)
         }

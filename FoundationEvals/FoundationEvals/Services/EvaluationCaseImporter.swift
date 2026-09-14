@@ -40,13 +40,15 @@ enum EvaluationCaseImporter {
         try validateFileSize(data)
         switch format {
         case .csv:
-            let rows = try csvRows(data)
+            let rows = try csvRows(data, stopAfterRows: 1)
             guard let header = rows.first else { throw EvaluationCaseImportError.emptyFile }
             return try validatedColumns(header.fields)
         case .jsonLines:
-            let records = try jsonLineRecords(data)
-            guard let first = records.first else { throw EvaluationCaseImportError.emptyFile }
-            return first.object.keys.sorted()
+            let records = try jsonLineRecords(data, maximumRecords: EvaluationStore.maximumCases)
+            guard !records.isEmpty else { throw EvaluationCaseImportError.emptyFile }
+            return records.reduce(into: Set<String>()) { columns, record in
+                columns.formUnion(record.object.keys)
+            }.sorted()
         }
     }
 
@@ -59,9 +61,19 @@ enum EvaluationCaseImporter {
         try validateFileSize(data)
         switch format {
         case .csv:
-            return try csvPreview(data: data, mapping: mapping, limit: limit)
+            return try csvPreview(
+                data: data,
+                mapping: mapping,
+                limit: limit,
+                maximumCases: EvaluationStore.maximumCases
+            )
         case .jsonLines:
-            return try jsonLinesPreview(data: data, mapping: mapping, limit: limit)
+            return try jsonLinesPreview(
+                data: data,
+                mapping: mapping,
+                limit: limit,
+                maximumCases: EvaluationStore.maximumCases
+            )
         }
     }
 
@@ -71,11 +83,25 @@ enum EvaluationCaseImporter {
         mapping: EvaluationCaseImportMapping,
         maximumCases: Int
     ) throws -> [EvaluationCase] {
-        let preview = try preview(data: data, format: format, mapping: mapping, limit: .max)
-        guard preview.issues.isEmpty else { throw EvaluationCaseImportError.validation(preview.issues) }
-        guard preview.rows.count <= maximumCases else {
-            throw EvaluationCaseImportError.tooManyRows(maximum: maximumCases)
+        try validateFileSize(data)
+        let preview: EvaluationCaseImportPreview
+        switch format {
+        case .csv:
+            preview = try csvPreview(
+                data: data,
+                mapping: mapping,
+                limit: maximumCases,
+                maximumCases: maximumCases
+            )
+        case .jsonLines:
+            preview = try jsonLinesPreview(
+                data: data,
+                mapping: mapping,
+                limit: maximumCases,
+                maximumCases: maximumCases
+            )
         }
+        guard preview.issues.isEmpty else { throw EvaluationCaseImportError.validation(preview.issues) }
         return preview.rows.map {
             EvaluationCase(name: $0.name, prompt: $0.prompt, expected: $0.expected)
         }
@@ -84,9 +110,10 @@ enum EvaluationCaseImporter {
     private static func csvPreview(
         data: Data,
         mapping: EvaluationCaseImportMapping,
-        limit: Int
+        limit: Int,
+        maximumCases: Int
     ) throws -> EvaluationCaseImportPreview {
-        let parsed = try csvRows(data)
+        let parsed = try csvRows(data, maximumDataRows: maximumCases)
         guard let header = parsed.first else { throw EvaluationCaseImportError.emptyFile }
         let columns = try validatedColumns(header.fields)
         try validate(mapping: mapping, columns: columns)
@@ -107,9 +134,10 @@ enum EvaluationCaseImporter {
     private static func jsonLinesPreview(
         data: Data,
         mapping: EvaluationCaseImportMapping,
-        limit: Int
+        limit: Int,
+        maximumCases: Int
     ) throws -> EvaluationCaseImportPreview {
-        let records = try jsonLineRecords(data)
+        let records = try jsonLineRecords(data, maximumRecords: maximumCases)
         let columns = records.reduce(into: Set<String>()) { $0.formUnion($1.object.keys) }.sorted()
         try validate(mapping: mapping, columns: columns)
         var rows: [EvaluationCaseImportRow] = []
@@ -190,10 +218,18 @@ enum EvaluationCaseImporter {
     private struct CSVRow {
         var line: Int
         var fields: [String]
+
+        var isBlank: Bool {
+            fields.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
     }
 
-    private static func csvRows(_ data: Data) throws -> [CSVRow] {
-        guard let text = String(data: data, encoding: .utf8) else { throw EvaluationCaseImportError.notUTF8 }
+    private static func csvRows(
+        _ data: Data,
+        maximumDataRows: Int? = nil,
+        stopAfterRows: Int? = nil
+    ) throws -> [CSVRow] {
+        let text = try utf8Text(data)
         var rows: [CSVRow] = []
         var fields: [String] = []
         var field = ""
@@ -225,7 +261,11 @@ enum EvaluationCaseImporter {
                     field = ""
                 case "\n":
                     fields.append(field.trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
-                    rows.append(CSVRow(line: rowStart, fields: fields))
+                    let row = CSVRow(line: rowStart, fields: fields)
+                    if try appendCSVRow(
+                        row, to: &rows,
+                        maximumDataRows: maximumDataRows, stopAfterRows: stopAfterRows
+                    ) { return rows }
                     fields = []
                     field = ""
                     line += 1
@@ -239,9 +279,26 @@ enum EvaluationCaseImporter {
         guard !quoted else { throw EvaluationCaseImportError.unterminatedQuote(line: rowStart) }
         if !field.isEmpty || !fields.isEmpty {
             fields.append(field.trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
-            rows.append(CSVRow(line: rowStart, fields: fields))
+            _ = try appendCSVRow(
+                CSVRow(line: rowStart, fields: fields), to: &rows,
+                maximumDataRows: maximumDataRows, stopAfterRows: stopAfterRows
+            )
         }
         return rows
+    }
+
+    private static func appendCSVRow(
+        _ row: CSVRow,
+        to rows: inout [CSVRow],
+        maximumDataRows: Int?,
+        stopAfterRows: Int?
+    ) throws -> Bool {
+        if !rows.isEmpty, row.isBlank { return false }
+        rows.append(row)
+        if let maximumDataRows, rows.count > maximumDataRows + 1 {
+            throw EvaluationCaseImportError.tooManyRows(maximum: maximumDataRows)
+        }
+        return stopAfterRows.map { rows.count >= $0 } ?? false
     }
 
     private struct JSONLineRecord {
@@ -249,17 +306,40 @@ enum EvaluationCaseImporter {
         var object: [String: Any]
     }
 
-    private static func jsonLineRecords(_ data: Data) throws -> [JSONLineRecord] {
-        guard let text = String(data: data, encoding: .utf8) else { throw EvaluationCaseImportError.notUTF8 }
-        return try text.split(separator: "\n", omittingEmptySubsequences: false).enumerated().compactMap { offset, raw in
-            let line = String(raw).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { return nil }
-            guard let lineData = line.data(using: .utf8),
-                  let object = try JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-                throw EvaluationCaseImportError.invalidJSONLine(line: offset + 1)
+    private static func jsonLineRecords(_ data: Data, maximumRecords: Int) throws -> [JSONLineRecord] {
+        let text = try utf8Text(data)
+        var records: [JSONLineRecord] = []
+        var lineNumber = 1
+        var start = text.startIndex
+        while start < text.endIndex {
+            let newline = text[start...].firstIndex(of: "\n")
+            let end = newline ?? text.endIndex
+            let line = String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !line.isEmpty {
+                guard records.count < maximumRecords else {
+                    throw EvaluationCaseImportError.tooManyRows(maximum: maximumRecords)
+                }
+                guard let lineData = line.data(using: .utf8),
+                      let object = try JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                    throw EvaluationCaseImportError.invalidJSONLine(line: lineNumber)
+                }
+                records.append(JSONLineRecord(line: lineNumber, object: object))
             }
-            return JSONLineRecord(line: offset + 1, object: object)
+            guard let newline else { break }
+            start = text.index(after: newline)
+            lineNumber += 1
         }
+        return records
+    }
+
+    private static func utf8Text(_ data: Data) throws -> String {
+        guard var text = String(data: data, encoding: .utf8) else {
+            throw EvaluationCaseImportError.notUTF8
+        }
+        if text.first == "\u{FEFF}" {
+            text.removeFirst()
+        }
+        return text
     }
 }
 
