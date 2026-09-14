@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.3.0](https://github.com/coryparrry/Foundation-Eval-Labs/compare/v1.2.0...v1.3.0) (2026-09-14)
+
+
+### Features
+
+* **cases:** add starter packs and structured case import ([161d1fb](https://github.com/coryparrry/Foundation-Eval-Labs/commit/161d1fb0f543e004270c615a468a90116be26a7a))
+* **evidence:** preserve run provenance and explicit human approvals ([161d1fb](https://github.com/coryparrry/Foundation-Eval-Labs/commit/161d1fb0f543e004270c615a468a90116be26a7a))
+* **experiments:** compare controlled instruction variants ([161d1fb](https://github.com/coryparrry/Foundation-Eval-Labs/commit/161d1fb0f543e004270c615a468a90116be26a7a))
+* **integration:** run repository and application checks through MCP and CLI ([161d1fb](https://github.com/coryparrry/Foundation-Eval-Labs/commit/161d1fb0f543e004270c615a468a90116be26a7a))
+* **judging:** configure independent judges and reassess saved responses ([161d1fb](https://github.com/coryparrry/Foundation-Eval-Labs/commit/161d1fb0f543e004270c615a468a90116be26a7a))
+* **releases:** fail closed on stale or incomplete project evidence ([161d1fb](https://github.com/coryparrry/Foundation-Eval-Labs/commit/161d1fb0f543e004270c615a468a90116be26a7a))
+* **workspace:** organize evaluations into projects and saved suites ([161d1fb](https://github.com/coryparrry/Foundation-Eval-Labs/commit/161d1fb0f543e004270c615a468a90116be26a7a))
+
+
+### Bug Fixes
+
+* **evaluation:** stop cancelled or unavailable judge work without duplicate requests ([a106300](https://github.com/coryparrry/Foundation-Eval-Labs/commit/a1063002fd25bdd1bd85e7e548ba98d3a9d14171))
+* **judging:** restore compatible JSON requests and actionable endpoint errors ([a106300](https://github.com/coryparrry/Foundation-Eval-Labs/commit/a1063002fd25bdd1bd85e7e548ba98d3a9d14171))
+* **models:** reload Core AI resources when model files change ([a106300](https://github.com/coryparrry/Foundation-Eval-Labs/commit/a1063002fd25bdd1bd85e7e548ba98d3a9d14171))
+* **release:** reject ambiguous or semantically inconsistent release overrides ([f10abc3](https://github.com/coryparrry/Foundation-Eval-Labs/commit/f10abc3343697e7145936c16394893d1594a5c47))
+* **release:** require curated notes for squash-merged features and fixes ([f10abc3](https://github.com/coryparrry/Foundation-Eval-Labs/commit/f10abc3343697e7145936c16394893d1594a5c47))
+* **workspace:** reject unsafe attachments and preserve unreadable evaluation state ([a106300](https://github.com/coryparrry/Foundation-Eval-Labs/commit/a1063002fd25bdd1bd85e7e548ba98d3a9d14171))
+
 ## [1.2.0](https://github.com/coryparrry/Foundation-Eval-Labs/compare/v1.1.1...v1.2.0) (2026-09-08)
 
 
