@@ -20,9 +20,9 @@ struct JudgeConfigurationSection: View {
 
                 if store.draftSuite.judgeConfiguration.usesExternalConnection {
                     Picker("Connection", selection: $store.draftSuite.judgeConfiguration.connectionID) {
-                        Text("Choose a connection").tag(UUID?.none)
+                        Text("Choose a connection").tag(Optional<UUID>.none)
                         ForEach(store.judgeConnections) { connection in
-                            Text(connection.name).tag(Optional(connection.id))
+                            Text(connection.name).tag(Optional<UUID>.some(connection.id))
                         }
                     }
 

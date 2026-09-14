@@ -234,6 +234,9 @@ struct ModelConfigurationTests {
         #expect(SuiteCasePickerSelection.resolved(nil, in: cases) == nil)
         #expect(SuiteCasePickerSelection.resolved(UUID(), in: cases) == nil)
         #expect(SuiteCasePickerSelection.resolved(cases[0].id, in: cases) == cases[0].id)
+        #expect(SuiteCasePickerSelection.resolvedOrFirst(nil, in: cases) == cases[0].id)
+        #expect(SuiteCasePickerSelection.resolvedOrFirst(UUID(), in: cases) == cases[0].id)
+        #expect(SuiteCasePickerSelection.resolvedOrFirst(nil, in: []) == nil)
     }
 
     @Test func automaticControlsPreserveFrameworkDefaultsAndDisableTools() {

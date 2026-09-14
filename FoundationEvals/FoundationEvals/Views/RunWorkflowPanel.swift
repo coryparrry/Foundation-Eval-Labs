@@ -21,16 +21,15 @@ struct RunWorkflowPanel: View {
             VStack(alignment: .leading, spacing: 12) {
                 if let assessments = run.assessments, !assessments.isEmpty {
                     Picker("Selected assessment", selection: Binding(
-                        get: { run.selectedAssessmentID ?? assessments.last?.id },
+                        get: { run.selectedAssessmentID ?? assessments[assessments.count - 1].id },
                         set: { id in
-                            guard let id else { return }
                             do { try store.selectAssessment(runID: run.id, assessmentID: id) }
                             catch { store.notice = error.localizedDescription }
                         }
                     )) {
                         ForEach(assessments) { assessment in
                             Text("\(assessment.judge.displayName) · \(assessment.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                .tag(Optional(assessment.id))
+                                .tag(assessment.id)
                         }
                     }
 
