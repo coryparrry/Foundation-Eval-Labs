@@ -133,6 +133,11 @@ extension EvaluationRunner {
                     durationMilliseconds: Self.milliseconds(since: started),
                     errorCategory: Self.externalJudgeErrorCategory(error),
                     errorMessage: error.localizedDescription,
+                    trace: Self.externalJudgeFailureTrace(
+                        error,
+                        completedChecks: objectiveChecks,
+                        judgedCriterionIndexes: semanticIndexes.map { $0 + 1 }
+                    ),
                     identity: EvaluationJudgeIdentity(
                         mode: .connection,
                         connectionID: externalJudge.connection.id,
@@ -316,7 +321,7 @@ extension EvaluationRunner {
             switch compatible {
             case .disclosureNotApproved: return "judgeDisclosureRequired"
             case .capabilityMismatch: return "incompatibleJudge"
-            case .exhausted, .missingAssessment: return "invalidJudgeOutput"
+            case .exhausted(_, _), .missingAssessment: return "invalidJudgeOutput"
             case .http(let status, _):
                 if status == 429 { return "rateLimited" }
                 if status == 408 { return "timeout" }
@@ -330,6 +335,25 @@ extension EvaluationRunner {
         }
         if error is EvaluationJudgeValidationError { return "invalidJudgeOutput" }
         return "judgeFailure"
+    }
+
+    nonisolated static func externalJudgeFailureTrace(
+        _ error: Error,
+        completedChecks: [EvaluationJudgeCriterionTrace],
+        judgedCriterionIndexes: [Int]
+    ) -> EvaluationJudgeTrace? {
+        guard let compatible = error as? EvaluationCompatibleJudgeError,
+              case .exhausted(_, let attempts) = compatible,
+              let lastAttempt = attempts.last else { return nil }
+        return EvaluationJudgeTrace(
+            instructions: judgeInstructions,
+            prompt: lastAttempt.prompt,
+            rawResponse: lastAttempt.rawResponse,
+            checks: completedChecks,
+            validationError: lastAttempt.validationError ?? error.localizedDescription,
+            attempts: attempts,
+            judgedCriterionIndexes: judgedCriterionIndexes
+        )
     }
 
     static func judgePrompt(

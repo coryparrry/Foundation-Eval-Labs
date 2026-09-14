@@ -1354,6 +1354,91 @@ struct EvaluationDevelopmentWorkflowTests {
         let sampleDuration = assessment.samples[0].durationMilliseconds
         #expect(sampleDuration != nil)
         #expect(assessment.durationMilliseconds == sampleDuration)
+        #expect(assessment.samples[0].errorCategory == "serviceUnavailable")
+    }
+
+    @Test func fatalReassessmentFailureStopsBeforeLaterSavedSamples() async throws {
+        var suite = EvaluationSuite()
+        suite.criteria = "The answer is supported by the evidence."
+        suite.cases.append(EvaluationCase(name: "Later case", prompt: "Later", expected: "Later"))
+        var run = makeRun(cases: suite.cases, statuses: [[.passed], [.passed]])
+        for index in run.results.indices { run.results[index].response = "A complete response." }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Unavailable fixture", kind: .localCompatible,
+            baseURL: "http://127.0.0.1:1/v1", modelID: "unavailable"
+        )
+        suite.judgeConfiguration = .init(
+            mode: .connection, connectionID: connection.id,
+            externalEvidenceApprovedAt: Date(), includeReferenceAttachments: false,
+            approvedConnectionID: connection.id, approvedIncludeReferenceAttachments: false,
+            approvedConnectionDigest: connection.disclosureDigest
+        )
+
+        let assessment = try await EvaluationReassessmentService().reassess(
+            run: run, suite: suite, images: [],
+            resolved: .init(connection: connection, apiKey: nil)
+        )
+
+        #expect(assessment.samples.count == 1)
+        #expect(assessment.samples[0].sampleID == run.results[0].id)
+        #expect(assessment.samples[0].errorCategory == "serviceUnavailable")
+        #expect(assessment.errorCount == 1)
+    }
+
+    @MainActor
+    @Test func incompleteSubjectResponseCannotBecomeKnownGoodJudgeCheck() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        var run = makeRun(cases: store.suite.cases, statuses: [[.unscored]])
+        run.suiteID = store.suite.id
+        run.results[0].response = "   "
+        run.results[0].errorCategory = "modelUnavailable"
+        let assessment = try makeAssessment(
+            run: run, suite: store.suite, status: .unscored, judge: fixtureJudge()
+        )
+        run.assessments = [assessment]
+        run.selectedAssessmentID = assessment.id
+        store.runs = [run]
+
+        #expect(throws: EvaluationStoreError.self) {
+            try store.markJudgmentIncorrect(
+                runID: run.id, assessmentID: assessment.id, sampleID: run.results[0].id,
+                correctedStatus: .failed, correctedScore: 1, reason: "Generation failed.",
+                collectAsJudgeCheck: true
+            )
+        }
+        #expect(store.suiteLocalState.humanCorrections.isEmpty)
+        #expect(store.suiteLocalState.reviewedJudgeExamples.isEmpty)
+
+        try store.markJudgmentIncorrect(
+            runID: run.id, assessmentID: assessment.id, sampleID: run.results[0].id,
+            correctedStatus: .failed, correctedScore: 1, reason: "Record the correction only.",
+            collectAsJudgeCheck: false
+        )
+        #expect(store.suiteLocalState.humanCorrections.count == 1)
+        #expect(store.suiteLocalState.reviewedJudgeExamples.isEmpty)
+
+        let example = EvaluationReviewedJudgeExample(
+            id: UUID(), sourceRunID: run.id, sourceAssessmentID: assessment.id,
+            sampleID: run.results[0].id, expectedStatus: .failed,
+            reason: "Known failure", createdAt: Date()
+        )
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Must not be called", kind: .localCompatible,
+            baseURL: "http://127.0.0.1:1/v1", modelID: "unused"
+        )
+        let report = try await EvaluationReassessmentService().checkJudge(
+            sources: [.init(
+                example: example, run: run, assessment: assessment,
+                suite: store.suite, images: [], errorMessage: nil
+            )],
+            resolved: .init(connection: connection, apiKey: nil)
+        )
+        #expect(report.results.count == 1)
+        #expect(report.results[0].actualStatus == .unscored)
+        #expect(!report.results[0].passed)
+        #expect(report.results[0].errorMessage?.contains("no complete subject response") == true)
     }
 
     @Test func cancelledReassessmentStopsInsteadOfRecordingJudgeFailure() async {

@@ -21,16 +21,15 @@ struct RunWorkflowPanel: View {
             VStack(alignment: .leading, spacing: 12) {
                 if let assessments = run.assessments, !assessments.isEmpty {
                     Picker("Selected assessment", selection: Binding(
-                        get: { run.selectedAssessmentID ?? assessments.last?.id },
+                        get: { run.selectedAssessmentID ?? assessments[assessments.count - 1].id },
                         set: { id in
-                            guard let id else { return }
                             do { try store.selectAssessment(runID: run.id, assessmentID: id) }
                             catch { store.notice = error.localizedDescription }
                         }
                     )) {
                         ForEach(assessments) { assessment in
                             Text("\(assessment.judge.displayName) · \(assessment.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                .tag(Optional(assessment.id))
+                                .tag(assessment.id)
                         }
                     }
 
@@ -122,6 +121,16 @@ private struct JudgmentCorrectionView: View {
     @State private var collectAsCheck = true
     @State private var errorMessage: String?
 
+    private var canCollectAsCheck: Bool {
+        guard run.results.first(where: { $0.id == sample.sampleID })?
+                .hasCompleteSubjectEvidenceForJudging == true,
+              correctedStatus == .passed || correctedStatus == .failed,
+              assessment?.promptVersion == EvaluationRunner.judgePromptVersion else {
+            return false
+        }
+        return true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Correct judgment").font(.title2.bold())
@@ -144,6 +153,10 @@ private struct JudgmentCorrectionView: View {
                 .overlay { RoundedRectangle(cornerRadius: 7).stroke(.separator) }
                 .accessibilityLabel("Correction reason")
             Toggle("Keep as a known-good judge check", isOn: $collectAsCheck)
+                .disabled(!canCollectAsCheck)
+                .help(canCollectAsCheck
+                    ? "Replay this complete saved response when checking a judge connection."
+                    : "Only complete subject responses, passed or failed corrections, and the current judge prompt can be used as known-good judge checks.")
             if let errorMessage { Text(errorMessage).font(.callout).foregroundStyle(.red) }
             HStack {
                 Button("Cancel", role: .cancel) { dismiss() }
@@ -173,6 +186,10 @@ private struct JudgmentCorrectionView: View {
         .onAppear {
             correctedStatus = sample.status == .passed ? .failed : .passed
             correctedScore = correctedStatus == .passed ? 4 : 2
+            if !canCollectAsCheck { collectAsCheck = false }
+        }
+        .onChange(of: correctedStatus) { _, _ in
+            if !canCollectAsCheck { collectAsCheck = false }
         }
     }
 }

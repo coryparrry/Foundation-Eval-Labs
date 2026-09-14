@@ -6,7 +6,36 @@ struct EvaluationExperimentRunResult: Sendable {
 }
 
 actor EvaluationExperimentRunner {
-    private let runner = EvaluationRunner()
+    typealias PartRunner = @Sendable (
+        UUID,
+        String,
+        Date,
+        EvaluationSuite,
+        [ImageEvaluationInput],
+        EvaluationResolvedJudgeConnection?,
+        @Sendable (EvaluationSampleResult, Int, Int) async -> Void
+    ) async -> EvaluationRun
+
+    private let runPart: PartRunner
+
+    init() {
+        let runner = EvaluationRunner()
+        runPart = { id, suiteRevision, startedAt, suite, images, externalJudge, progress in
+            await runner.run(
+                id: id,
+                suiteRevision: suiteRevision,
+                startedAt: startedAt,
+                suite: suite,
+                images: images,
+                externalJudge: externalJudge,
+                progress: progress
+            )
+        }
+    }
+
+    init(runPart: @escaping PartRunner) {
+        self.runPart = runPart
+    }
 
     func run(
         suite: EvaluationSuite,
@@ -32,13 +61,13 @@ actor EvaluationExperimentRunner {
             one.instructions = variant.instructions
             one.cases = [suite.cases[caseIndex]]
             one.repetitions = 1
-            var part = await runner.run(
-                id: variantID == experiment.current.id ? currentRunID : candidateRunID,
-                suiteRevision: variant.suiteRevision ?? experiment.suiteRevision,
-                startedAt: startedAt,
-                suite: one,
-                images: images,
-                externalJudge: externalJudge
+            var part = await runPart(
+                variantID == experiment.current.id ? currentRunID : candidateRunID,
+                variant.suiteRevision ?? experiment.suiteRevision,
+                startedAt,
+                one,
+                images,
+                externalJudge
             ) { result, _, _ in
                 var adjusted = result
                 adjusted.repetition = repetition
@@ -52,20 +81,27 @@ actor EvaluationExperimentRunner {
             }
             if variantID == experiment.current.id { currentParts.append(part) }
             else { candidateParts.append(part) }
+
+            if EvaluationRunner.stopsBatch(for: part.terminationReason) {
+                break
+            }
         }
 
+        let fallbackPart = currentParts.first ?? candidateParts.first
         return .init(
             current: try combined(
                 parts: currentParts, id: currentRunID, suite: suite,
                 instructions: experiment.current.instructions,
                 suiteRevision: experiment.current.suiteRevision ?? experiment.suiteRevision,
-                startedAt: startedAt
+                startedAt: startedAt,
+                fallback: fallbackPart
             ),
             candidate: try combined(
                 parts: candidateParts, id: candidateRunID, suite: suite,
                 instructions: experiment.candidate.instructions,
                 suiteRevision: experiment.candidate.suiteRevision ?? experiment.suiteRevision,
-                startedAt: startedAt
+                startedAt: startedAt,
+                fallback: fallbackPart
             )
         )
     }
@@ -76,11 +112,13 @@ actor EvaluationExperimentRunner {
         suite: EvaluationSuite,
         instructions: String,
         suiteRevision: String,
-        startedAt: Date
+        startedAt: Date,
+        fallback: EvaluationRun?
     ) throws -> EvaluationRun {
-        guard var run = parts.first else {
+        guard var run = parts.first ?? fallback else {
             throw EvaluationStoreError.resourceConflict("The experiment produced no samples.")
         }
+        let fallbackTerminationReason = run.terminationReason
         run.id = id
         run.suiteID = suite.id
         run.suiteName = suite.name
@@ -94,7 +132,11 @@ actor EvaluationExperimentRunner {
         run.completedAt = Date()
         run.results = parts.flatMap(\.results)
         run.cancelled = false
-        run.terminationReason = parts.compactMap(\.terminationReason).first
+        run.terminationReason = parts.isEmpty
+            ? fallbackTerminationReason
+            : parts.compactMap(\.terminationReason).first
+        run.assessments = nil
+        run.selectedAssessmentID = nil
         var variantSuite = suite
         variantSuite.instructions = instructions
         run.suiteDefinition = EvaluationSuiteDefinition(suite: variantSuite)

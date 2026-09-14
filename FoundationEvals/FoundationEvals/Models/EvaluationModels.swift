@@ -312,6 +312,40 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
     var refusal: EvaluationRefusalTrace? = nil
     var imageInputTokenCountAvailable: Bool? = nil
     var workflowTrace: EvaluationWorkflowTrace? = nil
+
+    var hasCompleteSubjectEvidenceForJudging: Bool {
+        errorCategory == nil
+            && errorMessage == nil
+            && !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func scorerSummary(scoringMode: ScoringMode) -> String {
+        if let identity = judgeIdentity {
+            if identity.requestedModelID == "none" {
+                return identity.connectionName
+            }
+            var text = identity.displayName
+            if let reported = identity.reportedModelID,
+               !identity.requestedModelID.isEmpty,
+               reported != identity.requestedModelID {
+                text = "\(identity.connectionName) · \(reported) (requested \(identity.requestedModelID))"
+            }
+            if let provider = identity.provider, !provider.isEmpty, provider != "local" {
+                text += " · \(provider)"
+            }
+            return text
+        }
+        switch scoringMode {
+        case .exactMatch: return "Exact text (local)"
+        case .containsExpected: return "Contains text (local)"
+        case .review:
+            if let assertions = fieldAssertionResults, !assertions.isEmpty {
+                return "JSON field assertions (local)"
+            }
+            return "Collect only (unscored)"
+        case .modelJudge: return "AI rubric"
+        }
+    }
 }
 
 struct EvaluationToolCallTrace: Codable, Sendable {

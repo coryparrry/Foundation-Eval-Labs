@@ -98,7 +98,10 @@ struct CaseImportView: View {
                 guard let url = try result.get().first else { return }
                 let granted = url.startAccessingSecurityScopedResource()
                 defer { if granted { url.stopAccessingSecurityScopedResource() } }
-                data = try Data(contentsOf: url)
+                data = try EvaluationAttachmentStorage.readCaseImportFile(
+                    at: url,
+                    maximumBytes: EvaluationStore.maximumTextFileBytes
+                )
                 filename = url.lastPathComponent
                 format = url.pathExtension.lowercased() == "csv" ? .csv : .jsonLines
                 prepareColumns()

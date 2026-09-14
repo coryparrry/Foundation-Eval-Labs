@@ -164,6 +164,9 @@ struct EvaluationJudgeCapabilities: Codable, Equatable, Sendable {
 }
 
 struct EvaluationJudgeConnection: Identifiable, Codable, Equatable, Sendable {
+    static let minimumRequestTimeoutSeconds = 1.0
+    static let maximumRequestTimeoutSeconds = 900.0
+
     var id: UUID
     var name: String
     var kind: EvaluationJudgeConnectionKind
@@ -219,8 +222,8 @@ struct EvaluationJudgeConnection: Identifiable, Codable, Equatable, Sendable {
         case .customCompatible:
             guard scheme == "https" else { return "Custom compatible connections must use HTTPS." }
         }
-        guard (1...300).contains(requestTimeoutSeconds) else {
-            return "Judge timeout must be between 1 and 300 seconds."
+        guard (Self.minimumRequestTimeoutSeconds...Self.maximumRequestTimeoutSeconds).contains(requestTimeoutSeconds) else {
+            return "Judge timeout must be between \(Int(Self.minimumRequestTimeoutSeconds)) and \(Int(Self.maximumRequestTimeoutSeconds)) seconds."
         }
         if kind == .openRouter, providerOrder.isEmpty {
             return "Choose at least one explicit OpenRouter provider so judge routing cannot silently fall back."

@@ -104,9 +104,23 @@ private struct CustomToolsEditor: View {
     @Binding var maximumToolCalls: Int
     @State private var selectedToolID: UUID?
 
+    private var resolvedToolID: UUID? {
+        if let selectedToolID, tools.contains(where: { $0.id == selectedToolID }) {
+            return selectedToolID
+        }
+        return tools.first?.id
+    }
+
     private var selectedToolIndex: Int? {
-        guard let selectedToolID else { return nil }
-        return tools.firstIndex { $0.id == selectedToolID }
+        guard let resolvedToolID else { return nil }
+        return tools.firstIndex { $0.id == resolvedToolID }
+    }
+
+    private var toolSelection: Binding<UUID> {
+        Binding(
+            get: { resolvedToolID ?? UUID() },
+            set: { selectedToolID = $0 }
+        )
     }
 
     var body: some View {
@@ -138,21 +152,19 @@ private struct CustomToolsEditor: View {
                     .foregroundStyle(.secondary)
 
                 if !tools.isEmpty {
-                    Picker("Editing tool", selection: $selectedToolID) {
+                    Picker("Editing tool", selection: toolSelection) {
                         ForEach(tools) { tool in
                             Text(tool.name.isEmpty ? "Untitled tool" : tool.name)
-                                .tag(Optional(tool.id))
+                                .tag(tool.id)
                         }
                     }
                     .accessibilitySelectionActions(
-                        tools.map { Optional($0.id) },
-                        selection: $selectedToolID,
+                        tools.map(\.id),
+                        selection: toolSelection,
                         title: { toolID in
-                            guard let toolID,
-                                  let tool = tools.first(where: { $0.id == toolID }) else {
-                                return "Untitled tool"
-                            }
-                            return tool.name.isEmpty ? "Untitled tool" : tool.name
+                            let tool = tools.first(where: { $0.id == toolID })
+                            let name = tool?.name ?? ""
+                            return name.isEmpty ? "Untitled tool" : name
                         }
                     )
                     .labelsHidden()
