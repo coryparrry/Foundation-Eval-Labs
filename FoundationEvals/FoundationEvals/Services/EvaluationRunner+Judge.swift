@@ -17,7 +17,10 @@ extension EvaluationRunner {
         var cost: EvaluationCost? = nil
     }
 
-    static let judgePromptVersion = "rubric-v7-required-assessments"
+    // This contract intentionally invalidates v7 model-judge baselines: compatible
+    // completions now require successful protocol evidence and persist their real
+    // request policy. Historical runs remain readable with their original version.
+    static let judgePromptVersion = "rubric-v8-audited-compatible-completion"
 
     static let judgeInstructions = """
         Evaluate the candidate response against each numbered rubric requirement.
@@ -169,7 +172,8 @@ extension EvaluationRunner {
             suite: semanticSuite, toolEvidence: toolEvidence
         )
         var judgeTrace = EvaluationJudgeTrace(instructions: Self.judgeInstructions, prompt: basePrompt,
-                                             checks: objectiveChecks, judgedCriterionIndexes: semanticIndexes.map { $0 + 1 })
+            checks: objectiveChecks, judgedCriterionIndexes: semanticIndexes.map { $0 + 1 },
+            policyVersion: Self.judgePromptVersion)
         var attempts: [EvaluationJudgeAttemptTrace] = []
         var totalUsage = EvaluationUsage()
         var activeJudge: LanguageModelSession?
@@ -187,7 +191,8 @@ extension EvaluationRunner {
                 let attemptPrompt = correction.map { basePrompt + "\n\n" + $0 } ?? basePrompt
                 judgeTrace.prompt = attemptPrompt
                 judgeTrace.rawResponse = nil
-                attempts.append(EvaluationJudgeAttemptTrace(prompt: attemptPrompt))
+                attempts.append(EvaluationJudgeAttemptTrace(prompt: attemptPrompt,
+                    instructions: Self.judgeInstructions, policyVersion: Self.judgePromptVersion))
                 judgeTrace.attempts = attempts
                 let judgePrompt = Self.prompt(text: attemptPrompt, images: images)
                 let inputTokens = try await EvaluationInputTokenCounter.promptEstimate(
@@ -308,6 +313,12 @@ extension EvaluationRunner {
 
     nonisolated static func externalJudgeErrorCategory(_ error: Error) -> String {
         if error is CancellationError { return "cancelled" }
+        if let failure = error as? EvaluationJudgeWireFailure {
+            switch failure.kind {
+            case .providerError: return "serviceUnavailable"
+            case .incompleteCompletion: return "invalidJudgeOutput"
+            }
+        }
         if let urlError = error as? URLError {
             switch urlError.code {
             case .cancelled: return "cancelled"
@@ -343,17 +354,27 @@ extension EvaluationRunner {
         completedChecks: [EvaluationJudgeCriterionTrace],
         judgedCriterionIndexes: [Int]
     ) -> EvaluationJudgeTrace? {
-        guard let compatible = error as? EvaluationCompatibleJudgeError,
-              case .exhausted(_, let attempts) = compatible,
-              let lastAttempt = attempts.last else { return nil }
+        let attempts: [EvaluationJudgeAttemptTrace]
+        if let failure = error as? EvaluationJudgeWireFailure {
+            attempts = failure.attempts
+        } else if let compatible = error as? EvaluationCompatibleJudgeError,
+                  case .exhausted(_, let recorded) = compatible {
+            attempts = recorded
+        } else {
+            return nil
+        }
+        guard let lastAttempt = attempts.last else { return nil }
         return EvaluationJudgeTrace(
-            instructions: judgeInstructions,
+            // Legacy attempts without instructions remain explicitly unknown;
+            // substituting today's native prompt would fabricate audit evidence.
+            instructions: lastAttempt.instructions ?? "",
             prompt: lastAttempt.prompt,
             rawResponse: lastAttempt.rawResponse,
             checks: completedChecks,
             validationError: lastAttempt.validationError ?? error.localizedDescription,
             attempts: attempts,
-            judgedCriterionIndexes: judgedCriterionIndexes
+            judgedCriterionIndexes: judgedCriterionIndexes,
+            policyVersion: lastAttempt.policyVersion
         )
     }
 
