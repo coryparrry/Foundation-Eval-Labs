@@ -1,0 +1,35 @@
+name: PR32 build diagnostics
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pr32-diagnostic.yml'
+permissions:
+  actions: read
+  contents: read
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract compiler failures from the failed build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/coryparrry/Foundation-Eval-Labs/actions/jobs/105007497645/logs \
+            -o failed-build.log
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('failed-build.log').read_text(errors='replace').splitlines()
+          matches = [i for i, line in enumerate(lines) if any(term in line.lower() for term in ('error:', 'error generated', '** build failed', 'recorded an issue', 'expectation failed'))]
+          print(f'Diagnostic matches: {len(matches)}')
+          emitted = set()
+          for i in matches[:30]:
+              for j in range(max(0, i-1), min(len(lines), i+3)):
+                  if j not in emitted:
+                      print(lines[j][:1200])
+                      emitted.add(j)
+          if not matches:
+              print('\n'.join(line[:1200] for line in lines[-35:]))
+          PY
