@@ -1949,10 +1949,28 @@ final class EvaluationStore {
         data: Data,
         expectedRevision: String
     ) async throws -> EvaluationAttachmentImportResult {
-        if let existing = suite.attachments.first(where: { $0.id == id }) {
+        // Duplicate fast-path: re-preparing and comparing performs no mutation,
+        // so it intentionally skips requireIdle/requireRevision and stays usable
+        // with a stale revision or while a run is in progress. This keeps
+        // at-least-once callers (notably MCP upload retries) idempotent: a retry
+        // of an already-imported attachment reports "duplicate" with the current
+        // revision instead of stale_revision (see
+        // attachmentToolsAreBoundedAndNaturallyIdempotent). The selection guard
+        // and post-prepare re-read still apply: if the suite changes mid-prepare
+        // we report a conflict, and if the attachment disappears we report
+        // not_found (surfaced to MCP as not_found).
+        if suite.attachments.contains(where: { $0.id == id }) {
+            let projectID = selectedProjectID
+            let suiteID = selectedSuiteID
             let prepared = try await Task.detached(priority: .userInitiated) {
                 try Self.prepareAttachment(id: id, name: name, mediaType: mediaType, data: data)
             }.value
+            guard selectedProjectID == projectID, selectedSuiteID == suiteID else {
+                throw EvaluationStoreError.resourceConflict("The selected workspace changed during attachment import.")
+            }
+            guard let existing = suite.attachments.first(where: { $0.id == id }) else {
+                throw EvaluationStoreError.resourceNotFound("Attachment")
+            }
             guard existing == prepared.attachment else {
                 throw EvaluationStoreError.resourceConflict("Attachment ID already exists with different content.")
             }

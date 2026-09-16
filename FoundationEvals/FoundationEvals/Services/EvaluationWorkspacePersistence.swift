@@ -15,7 +15,7 @@ enum EvaluationWorkspacePersistence {
     ) throws -> EvaluationWorkspaceBootstrap {
         let catalogURL = supportDirectory.appending(path: catalogFilename)
         if FileManager.default.fileExists(atPath: catalogURL.path) {
-            var catalog = try CanonicalJSON.decode(
+            let catalog = try CanonicalJSON.decode(
                 EvaluationWorkspaceCatalog.self,
                 from: Data(contentsOf: catalogURL)
             )
@@ -39,23 +39,32 @@ enum EvaluationWorkspacePersistence {
                 projectID: matchingProject.id,
                 suiteID: matchingSuite.id
             )
-            try createSuiteDirectories(at: target)
             // A catalog means the original workspace migration already ran. Repair
             // only the local-state omission; recopying stale suite, attachment, or
             // run files into an established workspace would broaden the recovery.
-            let migrated = try copyLegacyStateIfMissing(from: supportDirectory, to: target)
-            guard migrated else {
-                return EvaluationWorkspaceBootstrap(catalog: catalog)
-            }
+            do {
+                try createSuiteDirectories(at: target)
+                let migrated = try copyLegacyStateIfMissing(from: supportDirectory, to: target)
+                guard migrated else {
+                    return EvaluationWorkspaceBootstrap(catalog: catalog)
+                }
 
-            catalog.migratedLegacyStorageAt = Date(
-                timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down)
-            )
-            try save(catalog, in: supportDirectory)
-            return EvaluationWorkspaceBootstrap(
-                catalog: catalog,
-                notice: legacyMigrationNotice
-            )
+                var repairedCatalog = catalog
+                repairedCatalog.migratedLegacyStorageAt = Date(
+                    timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down)
+                )
+                try save(repairedCatalog, in: supportDirectory)
+                return EvaluationWorkspaceBootstrap(
+                    catalog: repairedCatalog,
+                    notice: legacyMigrationNotice
+                )
+            } catch {
+                removeUnreadablePartialStateIfRetryable(supportDirectory: supportDirectory, target: target)
+                return EvaluationWorkspaceBootstrap(
+                    catalog: catalog,
+                    notice: "Legacy state could not be repaired: \(error.localizedDescription)"
+                )
+            }
         }
 
         let now = Date()
@@ -201,10 +210,71 @@ enum EvaluationWorkspacePersistence {
     private static func copyLegacyStateIfMissing(from source: URL, to target: URL) throws -> Bool {
         let legacy = source.appending(path: "state.json")
         let destination = target.appending(path: "state.json")
-        guard FileManager.default.fileExists(atPath: legacy.path),
-              !FileManager.default.fileExists(atPath: destination.path) else { return false }
-        try FileManager.default.copyItem(at: legacy, to: destination)
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return false }
+        if !FileManager.default.fileExists(atPath: destination.path) {
+            do {
+                try FileManager.default.copyItem(at: legacy, to: destination)
+            } catch {
+                // Remove a partial copy so the next launch retries. The legacy
+                // source is left unchanged for recovery.
+                try? FileManager.default.removeItem(at: destination)
+                throw error
+            }
+            return true
+        }
+        // The destination exists. A decodable destination always wins, even over
+        // a newer legacy file. But an undecodable destination (for example a
+        // partial copy left by an earlier failed repair) would otherwise block
+        // every later launch on the existence check above, so it is replaced
+        // from legacy when legacy itself decodes. When both sides are
+        // undecodable there is nothing to recover from, and the destination is
+        // left for loadSuiteLocalState to preserve and report.
+        let destinationData = try? Data(contentsOf: destination)
+        let destinationDecodes = destinationData.map {
+            (try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: $0)) != nil
+        } ?? false
+        guard !destinationDecodes,
+              let legacyData = try? Data(contentsOf: legacy),
+              (try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: legacyData)) != nil else {
+            return false
+        }
+        if let destinationData {
+            preserveUnreadableState(at: destination, data: destinationData)
+        }
+        do {
+            try FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: legacy, to: destination)
+        } catch {
+            // Remove a partial replacement so the next launch retries. The
+            // legacy source is left unchanged for recovery.
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
         return true
+    }
+
+    /// Best-effort backup beside an unreadable state file, mirroring the
+    /// preservation that loadSuiteLocalState performs on decode failure.
+    private static func preserveUnreadableState(at url: URL, data: Data) {
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let backup = url.deletingLastPathComponent()
+            .appending(path: "state-unreadable-\(digest).json", directoryHint: .notDirectory)
+        guard !FileManager.default.fileExists(atPath: backup.path) else { return }
+        try? data.write(to: backup, options: .atomic)
+    }
+
+    /// Removes a repair leftover so a later launch retries the copy. Only an
+    /// unreadable destination is removed, and only when the legacy source
+    /// still exists. A valid pre-existing destination is always preserved, and
+    /// loadSuiteLocalState tolerates decode failure, so removal stays recoverable.
+    static func removeUnreadablePartialStateIfRetryable(supportDirectory: URL, target: URL) {
+        let legacyURL = supportDirectory.appending(path: "state.json")
+        let destinationURL = target.appending(path: "state.json")
+        guard FileManager.default.fileExists(atPath: legacyURL.path),
+              FileManager.default.fileExists(atPath: destinationURL.path),
+              let data = try? Data(contentsOf: destinationURL),
+              (try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: data)) == nil else { return }
+        try? FileManager.default.removeItem(at: destinationURL)
     }
 }
 

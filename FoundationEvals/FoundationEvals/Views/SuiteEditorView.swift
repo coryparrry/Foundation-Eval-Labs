@@ -96,6 +96,11 @@ struct SuiteEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 18) {
                     SuiteOverviewHeader(store: store)
+                    if let migrationNotice = store.migrationNotice {
+                        Label(migrationNotice, systemImage: "tray.and.arrow.down")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     if selectedPage == .cases {
                         SuiteDashboardCards(store: store)
                         RunReadinessPanel(store: store)
@@ -788,6 +793,8 @@ private struct EvaluationCaseEditor: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.secondary.opacity(0.2))
                     }
+                PromptQuickActionsSection(prompt: $prompt, isDisabled: isDisabled)
+                    .id(evaluationCase.id)
             }
 
             ConversationConfigurationEditor(

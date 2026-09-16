@@ -76,7 +76,7 @@ enum EvaluationJudgeCredentialStore {
 }
 
 actor EvaluationCompatibleJudgeClient {
-    static let maximumResponseBytes = 1_048_576
+    static let maximumResponseBytes = 8 * 1_024 * 1_024
     static let portableJudgeMaxTokens = EvaluationModelConfiguration.judgeResponseTokenReserve
     static let thinkingJudgeMaxTokens = 65_536
     static let thinkingJudgeMinimumTimeoutSeconds = 300.0
@@ -353,7 +353,7 @@ actor EvaluationCompatibleJudgeClient {
         defer { session.invalidateAndCancel() }
         let (bytes, response) = try await session.bytes(for: request)
         var data = Data()
-        data.reserveCapacity(Self.maximumResponseBytes)
+        data.reserveCapacity(32 * 1_024)
         for try await byte in bytes {
             try Task.checkCancellation()
             guard data.count < Self.maximumResponseBytes else {
@@ -830,7 +830,7 @@ enum EvaluationCompatibleJudgeError: LocalizedError, Sendable {
         case .http(let status, let detail):
             if let detail { "The judge endpoint returned HTTP \(status): \(detail)" }
             else { "The judge endpoint returned HTTP \(status)." }
-        case .responseTooLarge: "The judge response exceeded the 1 MB safety limit."
+        case .responseTooLarge: "The judge response exceeded the 8 MB safety limit."
         case .missingAssessment: "The judge response did not contain exactly one assessment."
         case .exhausted(let message, _): "The judge did not produce a valid verdict after one bounded retry: \(message)"
         }
