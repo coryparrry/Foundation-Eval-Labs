@@ -7,6 +7,15 @@ struct PromptQuickActionsSection: View {
     let isDisabled: Bool
     @State private var model = QuickActionsPillViewModel()
 
+    /// The host binding is checked and committed synchronously on the main actor.
+    /// Keeping this boundary shared with tests prevents stale preview writes.
+    @MainActor
+    static func keepRevision(_ model: QuickActionsPillViewModel, into prompt: Binding<String>) {
+        if let kept = model.keep(source: prompt.wrappedValue) {
+            prompt.wrappedValue = kept
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             QuickActionsPill(
@@ -16,11 +25,9 @@ struct PromptQuickActionsSection: View {
                 phase: model.phase,
                 onAction: { model.select($0, source: prompt) },
                 onSubmit: { model.submit(source: prompt) },
-                onKeep: {
-                    if let kept = model.keep() { prompt = kept }
-                },
+                onKeep: { Self.keepRevision(model, into: $prompt) },
                 onDiscard: { model.dismiss() },
-                onRetry: { model.retry() }
+                onRetry: { model.retry(source: prompt) }
             )
             .disabled(isDisabled)
             .accessibilityIdentifier("Prompt quick actions")
@@ -51,5 +58,6 @@ struct PromptQuickActionsSection: View {
                     .foregroundStyle(.red)
             }
         }
+        .onDisappear { model.dismiss() }
     }
 }
