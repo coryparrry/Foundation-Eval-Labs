@@ -8,6 +8,10 @@ struct EvaluationInputTokenEstimate: Sendable {
 
 protocol EvaluationPromptInputTokenCounting: Sendable {
     func tokenCount(for prompt: Prompt) async throws -> Int
+    func tokenCount(for instructions: Instructions) async throws -> Int
+    func tokenCount(for schema: GenerationSchema) async throws -> Int
+    func tokenCount(for history: [Transcript.Entry]) async throws -> Int
+    func tokenCount(for tools: [any Tool]) async throws -> Int
     func tokenCount(forText text: String) async throws -> Int
 }
 
@@ -16,9 +20,80 @@ struct EvaluationSystemPromptInputTokenCounter: EvaluationPromptInputTokenCounti
         try await SystemLanguageModel.default.tokenCount(for: prompt)
     }
 
+    func tokenCount(for instructions: Instructions) async throws -> Int {
+        try await SystemLanguageModel.default.tokenCount(for: instructions)
+    }
+
+    func tokenCount(for schema: GenerationSchema) async throws -> Int {
+        try await SystemLanguageModel.default.tokenCount(for: schema)
+    }
+
+    func tokenCount(for history: [Transcript.Entry]) async throws -> Int {
+        try await SystemLanguageModel.default.tokenCount(for: history)
+    }
+
+    func tokenCount(for tools: [any Tool]) async throws -> Int {
+        try await SystemLanguageModel.default.tokenCount(for: tools)
+    }
+
     func tokenCount(forText text: String) async throws -> Int {
         try await SystemLanguageModel.default.tokenCount(for: Prompt(text))
     }
+}
+
+/// Custom HTTP providers declare their context size but do not expose the
+/// Foundation Models tokenizer. Keep admission checks portable and conservative
+/// instead of requiring Apple Intelligence just to estimate a request.
+struct EvaluationPortablePromptInputTokenCounter: EvaluationPromptInputTokenCounting,
+    EvaluationToolOutputTokenCounting,
+    EvaluationCustomToolTokenCounting {
+    func tokenCount<Output: PromptRepresentable>(for output: Output) async throws -> Int {
+        Self.estimate(String(describing: output))
+    }
+
+    func tokenCount(for prompt: Prompt) async throws -> Int {
+        Self.estimate(String(describing: prompt))
+    }
+
+    func tokenCount(for instructions: Instructions) async throws -> Int {
+        Self.estimate(String(describing: instructions))
+    }
+
+    func tokenCount(for schema: GenerationSchema) async throws -> Int {
+        Self.estimate(String(describing: schema))
+    }
+
+    func tokenCount(for history: [Transcript.Entry]) async throws -> Int {
+        Self.estimate(String(describing: history))
+    }
+
+    func tokenCount(for tools: [any Tool]) async throws -> Int {
+        Self.estimate(String(describing: tools))
+    }
+
+    func tokenCount(forText text: String) async throws -> Int {
+        Self.estimate(text)
+    }
+
+    func tokenCount(for text: String) async throws -> Int {
+        Self.estimate(text)
+    }
+
+    private static func estimate(_ text: String) -> Int {
+        // Byte-derived tokenizers cannot emit more than one token per input byte.
+        max(1, text.utf8.count)
+    }
+}
+
+/// Exact prompt admission is performed by a configured custom-provider tokenizer
+/// endpoint after Foundation Models has assembled the complete generation request.
+struct EvaluationDeferredPromptInputTokenCounter: EvaluationPromptInputTokenCounting {
+    func tokenCount(for prompt: Prompt) async throws -> Int { 0 }
+    func tokenCount(for instructions: Instructions) async throws -> Int { 0 }
+    func tokenCount(for schema: GenerationSchema) async throws -> Int { 0 }
+    func tokenCount(for history: [Transcript.Entry]) async throws -> Int { 0 }
+    func tokenCount(for tools: [any Tool]) async throws -> Int { 0 }
+    func tokenCount(forText text: String) async throws -> Int { 0 }
 }
 
 enum EvaluationInputTokenCounter {
@@ -56,7 +131,13 @@ enum EvaluationInputTokenCounter {
     static func historyEstimate(
         _ history: [Transcript.Entry]
     ) async throws -> EvaluationInputTokenEstimate {
-        let tokenCounter = SystemLanguageModel.default
+        try await historyEstimate(history, using: EvaluationSystemPromptInputTokenCounter())
+    }
+
+    static func historyEstimate<Counter: EvaluationPromptInputTokenCounting>(
+        _ history: [Transcript.Entry],
+        using tokenCounter: Counter
+    ) async throws -> EvaluationInputTokenEstimate {
         guard historyContainsImage(history) else {
             return EvaluationInputTokenEstimate(
                 count: try await tokenCounter.tokenCount(for: history),
@@ -134,14 +215,14 @@ extension EvaluationRunner {
         contextSize: Int,
         tools: [any Tool],
         historyTokenCount: Int = 0,
-        historyImageTokenCountAvailable: Bool = true
+        historyImageTokenCountAvailable: Bool = true,
+        tokenCounter: any EvaluationPromptInputTokenCounting = EvaluationSystemPromptInputTokenCounter()
     ) async throws -> (
         prompt: Prompt,
         text: String,
         tokenCount: Int,
         imageInputTokenCountAvailable: Bool
     ) {
-        let tokenCounter = SystemLanguageModel.default
         let instructionTokens = suite.instructions.isEmpty
             ? 0
             : try await tokenCounter.tokenCount(for: Instructions(suite.instructions))
@@ -180,7 +261,8 @@ extension EvaluationRunner {
         var promptEstimate = try await EvaluationInputTokenCounter.promptEstimate(
             text: effectiveText,
             prompt: prompt,
-            hasImages: !images.isEmpty
+            hasImages: !images.isEmpty,
+            using: tokenCounter
         )
 
         for _ in 0..<8 where promptEstimate.count > promptBudget
@@ -199,7 +281,8 @@ extension EvaluationRunner {
             promptEstimate = try await EvaluationInputTokenCounter.promptEstimate(
                 text: effectiveText,
                 prompt: prompt,
-                hasImages: !images.isEmpty
+                hasImages: !images.isEmpty,
+                using: tokenCounter
             )
         }
 
@@ -231,7 +314,8 @@ extension EvaluationRunner {
             let judgePromptTokens = try await EvaluationInputTokenCounter.promptEstimate(
                 text: minimumJudgeText,
                 prompt: minimumJudgePrompt,
-                hasImages: !images.isEmpty
+                hasImages: !images.isEmpty,
+                using: tokenCounter
             ).count
             let judgeSchema = try EvaluationJudge.schema(criterionCount: judgeAdmissionSuite.rubricCriteria.count)
             let judgeSchemaTokens = try await tokenCounter.tokenCount(for: judgeSchema)

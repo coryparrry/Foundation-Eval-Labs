@@ -32,17 +32,11 @@ struct ReferenceLookupToolBoundaryTests {
             }
         }
 
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
-        var handledCallCount = 0
-        while ContinuousClock.now < deadline {
-            handledCallCount = await recorder.attemptedCallTotal()
-            if handledCallCount == attemptCount { break }
-            await Task.yield()
-        }
+        await recorder.waitUntilAttempted(attemptCount)
         await limiter.releaseAll()
 
         let successfulReservations = await reservations.value
-        #expect(handledCallCount == attemptCount)
+        #expect(await recorder.attemptedCallTotal() == attemptCount)
         #expect(successfulReservations == 1)
     }
 

@@ -15,7 +15,12 @@ final class ModelContextSizeCache {
         var guardrails: EvaluationGuardrails
     }
 
-    private var values: [Key: Int] = [:]
+    private struct CachedValue {
+        var size: Int
+        var usedFallback: Bool
+    }
+
+    private var values: [Key: CachedValue] = [:]
     private let read: (EvaluationModelConfiguration) -> Int
 
     init(read: @escaping (EvaluationModelConfiguration) -> Int = { $0.systemModel.contextSize }) {
@@ -23,12 +28,24 @@ final class ModelContextSizeCache {
     }
 
     func value(for configuration: EvaluationModelConfiguration) -> Int {
+        cachedValue(for: configuration).size
+    }
+
+    func usedFallback(for configuration: EvaluationModelConfiguration) -> Bool {
+        cachedValue(for: configuration).usedFallback
+    }
+
+    private func cachedValue(for configuration: EvaluationModelConfiguration) -> CachedValue {
         let key = Key(
             useCase: configuration.customizationSettings.useCase,
             guardrails: configuration.customizationSettings.guardrails
         )
         if let value = values[key] { return value }
-        let value = Self.resolvedOnDeviceContextSize(read(configuration))
+        let reportedValue = read(configuration)
+        let value = CachedValue(
+            size: Self.resolvedOnDeviceContextSize(reportedValue),
+            usedFallback: reportedValue <= 0
+        )
         values[key] = value
         return value
     }

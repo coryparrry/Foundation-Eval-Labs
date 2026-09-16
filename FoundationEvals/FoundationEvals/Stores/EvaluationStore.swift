@@ -2431,11 +2431,7 @@ final class EvaluationStore {
     ) -> String? {
         let configuration = candidate.modelConfiguration
         let capabilities = selectedModelCapabilities(for: candidate)
-        let validateCapabilities = includeModelReadiness || configuration.provider != .coreAI
-            || coreAIModel(for: candidate) != nil
-        if includeModelReadiness, !modelStatus(for: candidate).isAvailable {
-            return modelStatus(for: candidate).detail
-        }
+        let validateCapabilities = configuration.provider != .coreAI || coreAIModel(for: candidate) != nil
         if let issue = configuration.customizationSettings.validationIssue { return issue }
         if configuration.reasoningLevel == .custom,
            configuration.customizationSettings.reasoningName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2630,7 +2626,9 @@ final class EvaluationStore {
             includesModelJudge: candidate.needsModelJudge,
             sharedToolOutputReserve: candidate.sharedToolOutputReserve
         )
-        if modelContextSize > 0, allocation.effectiveInputLimit < 512 {
+        let contextSizeIsAuthoritative = candidate.modelConfiguration.provider != .onDevice
+            || !onDeviceContextSizes.usedFallback(for: configuration)
+        if contextSizeIsAuthoritative, modelContextSize > 0, allocation.effectiveInputLimit < 512 {
             return "Reduce the response limit or reference-tool call limit so at least 512 input tokens remain."
         }
         if candidate.attachments.count > Self.maximumAttachments {

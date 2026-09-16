@@ -29,12 +29,15 @@ struct EvaluationVisionToolConfiguration: Codable, Equatable, Sendable {
         return tools
     }
 
-    func boundary(limiter: EvaluationToolCallLimiter) -> EvaluationBuiltinToolBoundary? {
+    func boundary(
+        limiter: EvaluationToolCallLimiter,
+        tokenCounter: any EvaluationToolOutputTokenCounting = EvaluationSystemPromptTokenCounter()
+    ) -> EvaluationBuiltinToolBoundary? {
         guard !isEmpty else { return nil }
         return EvaluationBuiltinToolBoundary(
             toolNames: Set(enabledToolNames),
             limiter: limiter,
-            tokenCounter: EvaluationSystemPromptTokenCounter()
+            tokenCounter: tokenCounter
         )
     }
 

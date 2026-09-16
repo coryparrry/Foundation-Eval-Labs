@@ -172,6 +172,14 @@ actor EvaluationRunner {
         var results: [EvaluationSampleResult] = []
         var cancelled = false
         var terminationReason: String?
+        let promptTokenCounter: any EvaluationPromptInputTokenCounting = switch suite.modelConfiguration.provider {
+        case .customHTTP where suite.modelConfiguration.customProviderSettings.validatedTokenizerEndpoint != nil:
+            EvaluationDeferredPromptInputTokenCounter()
+        case .customHTTP:
+            EvaluationPortablePromptInputTokenCounter()
+        default:
+            EvaluationSystemPromptInputTokenCounter()
+        }
 
         let environment = EvaluationEnvironment(
             operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
@@ -207,6 +215,7 @@ actor EvaluationRunner {
                         contextSize: contextSize,
                         modelName: modelName,
                         externalJudge: externalJudge,
+                        promptTokenCounter: promptTokenCounter,
                         liveResponse: liveResponse
                     )
                 }
@@ -278,7 +287,11 @@ actor EvaluationRunner {
                 reservedJudgeOverheadTokens: allocation.judgeOverheadReserve,
                 inputTokenCountingMethod: suite.modelConfiguration.provider == .onDevice
                     ? "System model tokenizer"
-                    : "System model tokenizer estimate",
+                    : suite.modelConfiguration.provider == .customHTTP
+                        ? suite.modelConfiguration.customProviderSettings.validatedTokenizerEndpoint != nil
+                            ? "Provider tokenizer endpoint"
+                            : "Portable conservative estimate"
+                        : "System model tokenizer estimate",
                 imageInputTokenCountAvailable: images.isEmpty && results.allSatisfy {
                     $0.imageInputTokenCountAvailable != false
                 },
@@ -303,9 +316,18 @@ actor EvaluationRunner {
         contextSize: Int,
         modelName: String,
         externalJudge: EvaluationResolvedJudgeConnection?,
+        promptTokenCounter: any EvaluationPromptInputTokenCounting,
         liveResponse: @Sendable (EvaluationLiveResponse) async -> Void
     ) async -> EvaluationSampleResult {
         let started = ContinuousClock.now
+        let outputTokenCounter: any EvaluationToolOutputTokenCounting =
+            suite.modelConfiguration.provider == .customHTTP
+                ? EvaluationPortablePromptInputTokenCounter()
+                : EvaluationSystemPromptTokenCounter()
+        let customToolTokenCounter: any EvaluationCustomToolTokenCounting =
+            suite.modelConfiguration.provider == .customHTTP
+                ? EvaluationPortablePromptInputTokenCounter()
+                : EvaluationSystemModelTokenCounter()
         let workflow = EvaluationWorkflowRecorder(origin: started)
         let rootSpanID = workflow.begin(kind: .sample, title: evaluationCase.name, metadata: [
             "caseID": evaluationCase.id.uuidString, "repetition": String(repetition),
@@ -363,13 +385,21 @@ actor EvaluationRunner {
                 metadata: ["operation": "sessionSetup"])
             var tools: [any Tool] = suite.modelConfiguration.referenceMode == .lookupTool
                 ? [ReferenceLookupTool(index: ReferenceSearchIndex(attachments: suite.attachments), recorder: recorder)] : []
-            tools += try EvaluationCustomTool.makeTools(definitions: suite.features.tools, recorder: customRecorder)
+            tools += try EvaluationCustomTool.makeTools(
+                definitions: suite.features.tools,
+                recorder: customRecorder,
+                tokenCounter: customToolTokenCounter
+            )
             let visionConfiguration = suite.modelConfiguration.customizationSettings.visionSettings
             tools += visionConfiguration.makeTools()
-            let visionToolBoundary = visionConfiguration.boundary(limiter: toolCallLimiter)
+            let visionToolBoundary = visionConfiguration.boundary(
+                limiter: toolCallLimiter,
+                tokenCounter: outputTokenCounter
+            )
             spotlightRuntime = try EvaluationSpotlightSearchRuntime.make(
                 from: suite.features.spotlightSearch,
-                limiter: toolCallLimiter
+                limiter: toolCallLimiter,
+                tokenCounter: outputTokenCounter
             )
             if let spotlightRuntime {
                 tools.append(spotlightRuntime.tool)
@@ -430,7 +460,8 @@ actor EvaluationRunner {
                         projection: evaluationCase.conversation.modelHistoryProjection
                     )
                     let historyEstimate = try await EvaluationInputTokenCounter.historyEstimate(
-                        modelFacingHistory
+                        modelFacingHistory,
+                        using: promptTokenCounter
                     )
                     imageInputTokenCountAvailable = imageInputTokenCountAvailable
                         && historyEstimate.imageTokenCountAvailable
@@ -447,7 +478,8 @@ actor EvaluationRunner {
                         contextSize: contextSize,
                         tools: tools,
                         historyTokenCount: historyEstimate.count,
-                        historyImageTokenCountAvailable: historyEstimate.imageTokenCountAvailable
+                        historyImageTokenCountAvailable: historyEstimate.imageTokenCountAvailable,
+                        tokenCounter: promptTokenCounter
                     )
                     setupEffectivePrompt = setupPrepared.text
                     workflow.finish(setupPreparationSpanID, metadata: ["estimatedInputTokens": String(setupPrepared.tokenCount)])
@@ -556,7 +588,8 @@ actor EvaluationRunner {
             )
             conversationTrace.modelFacingHistoryEntryCountBeforeFinal = modelFacingHistory.count
             let historyEstimate = try await EvaluationInputTokenCounter.historyEstimate(
-                modelFacingHistory
+                modelFacingHistory,
+                using: promptTokenCounter
             )
             imageInputTokenCountAvailable = imageInputTokenCountAvailable
                 && historyEstimate.imageTokenCountAvailable
@@ -568,7 +601,8 @@ actor EvaluationRunner {
                 contextSize: contextSize,
                 tools: tools,
                 historyTokenCount: historyEstimate.count,
-                historyImageTokenCountAvailable: historyEstimate.imageTokenCountAvailable
+                historyImageTokenCountAvailable: historyEstimate.imageTokenCountAvailable,
+                tokenCounter: promptTokenCounter
             )
             imageInputTokenCountAvailable = imageInputTokenCountAvailable
                 && prepared.imageInputTokenCountAvailable
@@ -679,6 +713,7 @@ actor EvaluationRunner {
                 modelName: modelName,
                 externalJudge: externalJudge,
                 toolEvidence: toolEvidence,
+                tokenCounter: promptTokenCounter,
                 workflowRecorder: workflow
             )
             timing.scoringMilliseconds = Self.milliseconds(since: scoringStarted)

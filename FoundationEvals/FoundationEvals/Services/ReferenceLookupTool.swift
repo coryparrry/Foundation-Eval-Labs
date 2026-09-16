@@ -163,6 +163,7 @@ actor ReferenceToolRecorder {
     private var attemptedCallCount = 0
     private var reservedCallCount = 0
     private var recordedRejectionCount = 0
+    private var attemptWaiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var pendingWorkflowCallIndices: Set<Int> = []
     private var traces: [EvaluationToolCallTrace] = []
     private var ephemeralOutputs: [(callIndex: Int, text: String)] = []
@@ -195,6 +196,7 @@ actor ReferenceToolRecorder {
         beginWorkflowSpan: Bool
     ) async throws -> ReferenceToolReservation {
         attemptedCallCount = attemptedCallCount == .max ? .max : attemptedCallCount + 1
+        resumeReadyAttemptWaiters()
         let callIndex = attemptedCallCount
         guard reservedCallCount < maximumCalls else {
             let spanID = beginWorkflowSpan
@@ -242,6 +244,26 @@ actor ReferenceToolRecorder {
 
     func attemptedCallTotal() -> Int {
         attemptedCallCount
+    }
+
+    func waitUntilAttempted(_ target: Int) async {
+        guard attemptedCallCount < target else { return }
+        await withCheckedContinuation { continuation in
+            attemptWaiters.append((target: target, continuation: continuation))
+            resumeReadyAttemptWaiters()
+        }
+    }
+
+    private func resumeReadyAttemptWaiters() {
+        var ready: [CheckedContinuation<Void, Never>] = []
+        attemptWaiters.removeAll { waiter in
+            guard attemptedCallCount >= waiter.target else { return false }
+            ready.append(waiter.continuation)
+            return true
+        }
+        for continuation in ready {
+            continuation.resume()
+        }
     }
 
     func record(

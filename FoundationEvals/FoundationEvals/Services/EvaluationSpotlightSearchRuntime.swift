@@ -60,7 +60,8 @@ struct EvaluationSpotlightSearchRuntime: Sendable {
 
     static func make(
         from configuration: EvaluationSpotlightSearchConfiguration,
-        limiter: EvaluationToolCallLimiter
+        limiter: EvaluationToolCallLimiter,
+        tokenCounter: any EvaluationToolOutputTokenCounting = EvaluationSystemPromptTokenCounter()
     ) throws -> Self? {
         guard configuration.enabled else { return nil }
         if let issue = configuration.validationIssue {
@@ -111,7 +112,7 @@ struct EvaluationSpotlightSearchRuntime: Sendable {
         let tool = EvaluationBoundedTool(
             tool: nativeTool,
             limiter: limiter,
-            tokenCounter: EvaluationSystemPromptTokenCounter()
+            tokenCounter: tokenCounter
         )
         let recorder = EvaluationSpotlightSearchRecorder(
             initialTrace: EvaluationSpotlightSearchTrace(configuration: configuration)

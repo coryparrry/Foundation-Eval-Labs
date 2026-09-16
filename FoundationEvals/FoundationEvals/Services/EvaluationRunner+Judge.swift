@@ -50,6 +50,7 @@ extension EvaluationRunner {
         modelName: String,
         externalJudge: EvaluationResolvedJudgeConnection?,
         toolEvidence: String?,
+        tokenCounter: any EvaluationPromptInputTokenCounting,
         workflowRecorder: EvaluationWorkflowRecorder? = nil
     ) async -> JudgeOutcome {
         guard suite.scoringMode == .modelJudge else {
@@ -175,7 +176,6 @@ extension EvaluationRunner {
         var correction: String?
         var reasoning: [String] = []
         do {
-            let tokenCounter = SystemLanguageModel.default
             let instructionTokens = try await tokenCounter.tokenCount(for: Instructions(Self.judgeInstructions))
             let schema = try EvaluationJudge.schema(criterionCount: semanticCriteria.count)
             let schemaTokens = try await tokenCounter.tokenCount(for: schema)
@@ -193,7 +193,8 @@ extension EvaluationRunner {
                 let inputTokens = try await EvaluationInputTokenCounter.promptEstimate(
                     text: attemptPrompt,
                     prompt: judgePrompt,
-                    hasImages: !images.isEmpty
+                    hasImages: !images.isEmpty,
+                    using: tokenCounter
                 ).count
                 guard instructionTokens + inputTokens + schemaTokens <= contextSize - outputReserve else {
                     throw EvaluationRunnerError.judgeInputTooLarge
