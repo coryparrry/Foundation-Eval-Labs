@@ -52,7 +52,9 @@ struct SelectedAssessmentCoverageTests {
             #expect(comparison.suggestedDecision == .collectMoreEvidence)
             let report = EvaluationReleaseCheckEvaluator.report(projectID: UUID(), suite: suite,
                 currentSuiteRevision: "current", run: candidate, baseline: nil, approvedBaseline: nil)
-            #expect(report.outcome == .incompleteOrIncompatibleEvidence)
+            // A failed HTTP attempt takes precedence over incomplete coverage.
+            // Preserve the release gate's existing execution-error classification.
+            #expect(report.outcome == .executionError)
             #expect(report.failures.contains { $0.contains("selected judge assessment") })
         }
         #expect(original.passedCount == 3)
