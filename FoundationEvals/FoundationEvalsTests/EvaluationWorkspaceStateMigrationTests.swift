@@ -85,7 +85,6 @@ struct EvaluationWorkspaceStateMigrationTests {
             #expect(try Data(contentsOf: directory.appending(path: "state.json")) == legacyData)
         }
         #expect(EvaluationWorkspacePersistence.hasCompletedLegacyStateMigration(in: target))
-        // Adopting a valid old workspace must also close future import.
         try FileManager.default.removeItem(at: target.appending(path: "state.json"))
         _ = try EvaluationWorkspacePersistence.bootstrap(in: directory, legacySuite: suite)
         #expect(!FileManager.default.fileExists(atPath: target.appending(path: "state.json").path))
@@ -154,8 +153,6 @@ struct EvaluationWorkspaceStateMigrationTests {
         if !missing {
             #expect(try Data(contentsOf: stateURL) == Data("{ damaged current state".utf8))
         }
-        // A complete, otherwise compatible local-scored run cannot replace the
-        // required approval. No model service or incomplete-run shortcut is used.
         let run = passingRun(suite: suite, runID: state.baselineApprovals[0].runID)
         let before = EvaluationReleaseCheckEvaluator.report(
             projectID: bootstrap.catalog.selectedProjectID, suite: suite, currentSuiteRevision: "fixture",
@@ -179,10 +176,10 @@ struct EvaluationWorkspaceStateMigrationTests {
         return EvaluationRun(id: runID, suiteID: suite.id, suiteName: suite.name, suiteVersion: suite.version,
             instructions: suite.instructions, criteria: suite.criteria, scoringMode: suite.scoringMode, repetitions: 1,
             judgePromptVersion: nil, judgePassingScore: nil, plannedSampleCount: results.count,
-            suiteRevision: "fixture", plannedCases: suite.cases, startedAt: Date(), completedAt: Date(),
+            suiteRevision: "fixture", startedAt: Date(), completedAt: Date(),
             cancelled: false, terminationReason: nil,
             environment: .init(operatingSystem: "fixture", locale: "en", model: "fixture", modelContextSize: 4096),
-            attachments: [], results: results)
+            attachments: [], results: results, plannedCases: suite.cases)
     }
 
     private func existingCatalog(legacySuite: EvaluationSuite) -> EvaluationWorkspaceCatalog {
@@ -225,8 +222,8 @@ struct EvaluationWorkspaceStateMigrationTests {
             scoringContract: contract, subjectEvidenceDigest: "fixture")]
         state.experiments = [.init(id: UUID(), name: "Historical experiment", createdAt: date,
             suiteRevision: "fixture", casesDigest: "cases", scoringDigest: "scoring", judgeDigest: "judge",
-            current: .init(id: UUID(), name: "Current", instructions: "Current"),
-            candidate: .init(id: UUID(), name: "Candidate", instructions: "Candidate"),
+            current: .init(id: UUID(), name: "Current", instructions: "Current", suiteRevision: nil),
+            candidate: .init(id: UUID(), name: "Candidate", instructions: "Candidate", suiteRevision: nil),
             executionOrder: [suite.cases[0].id], runIDs: [runID], decision: .adoptCandidate)]
         return state
     }
