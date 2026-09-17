@@ -25,7 +25,6 @@ struct EvaluationCompatibleJudgeResult: Sendable {
 
 enum EvaluationJudgeCredentialStore {
     private static let service = "com.coryparry.FoundationEvals.judge-connections"
-
     static func load(connectionID: UUID) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -43,7 +42,6 @@ enum EvaluationJudgeCredentialStore {
         }
         return value
     }
-
     static func save(_ secret: String?, connectionID: UUID) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -58,14 +56,9 @@ enum EvaluationJudgeCredentialStore {
             return
         }
         let valueData = Data(secret.utf8)
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary,
-            [kSecValueData as String: valueData] as CFDictionary
-        )
+        let updateStatus = SecItemUpdate(query as CFDictionary, [kSecValueData as String: valueData] as CFDictionary)
         if updateStatus == errSecSuccess { return }
-        guard updateStatus == errSecItemNotFound else {
-            throw EvaluationCompatibleJudgeError.keychain(updateStatus)
-        }
+        guard updateStatus == errSecItemNotFound else { throw EvaluationCompatibleJudgeError.keychain(updateStatus) }
         let attributes: [String: Any] = query.merging([
             kSecValueData as String: valueData,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -81,6 +74,12 @@ actor EvaluationCompatibleJudgeClient {
     static let thinkingJudgeMaxTokens = 65_536
     static let thinkingJudgeMinimumTimeoutSeconds = 300.0
 
+    /// Tests can inspect real encoded requests without a socket or a model.
+    /// Production continues to use the bounded, no-redirect URLSession path.
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    private let transport: Transport?
+    init(transport: Transport? = nil) { self.transport = transport }
+
     func checkConnection(_ resolved: EvaluationResolvedJudgeConnection) async throws -> EvaluationJudgeConnectionCheck {
         let connection = resolved.connection
         if let issue = connection.validationIssue { throw EvaluationCompatibleJudgeError.invalidConfiguration(issue) }
@@ -88,27 +87,19 @@ actor EvaluationCompatibleJudgeClient {
         var request = URLRequest(url: url)
         request.timeoutInterval = connection.requestTimeoutSeconds
         applyHeaders(to: &request, resolved: resolved)
-        let (data, response) = try await data(
-            for: request, timeout: connection.requestTimeoutSeconds
-        )
-        guard data.count <= Self.maximumResponseBytes else { throw EvaluationCompatibleJudgeError.responseTooLarge }
+        let (data, response) = try await data(for: request, timeout: connection.requestTimeoutSeconds)
         try validate(response: response, data: data)
         let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
         guard let model = decoded.data.first(where: { $0.id == connection.modelID }) else {
             let available = decoded.data.map(\.id).sorted().prefix(8).joined(separator: ", ")
-            let detail = available.isEmpty
-                ? "The endpoint did not return any model IDs."
-                : "Available model IDs: \(available)."
-            return .init(
-                checkedAt: Date(), modelFound: false,
+            let detail = available.isEmpty ? "The endpoint did not return any model IDs." : "Available model IDs: \(available)."
+            return .init(checkedAt: Date(), modelFound: false,
                 structuredOutputsVerified: nil, multimodalVerified: nil,
-                message: "The endpoint responded, but did not list model '\(connection.modelID)'. \(detail)"
-            )
+                message: "The endpoint responded, but did not list model '\(connection.modelID)'. \(detail)")
         }
         let supported = Set(model.supportedParameters ?? [])
         let architecture = Set(model.architecture?.inputModalities ?? [])
-        let structured: Bool? = supported.isEmpty ? nil : supported.contains("response_format")
-            || supported.contains("structured_outputs")
+        let structured: Bool? = supported.isEmpty ? nil : supported.contains("response_format") || supported.contains("structured_outputs")
         let multimodal: Bool? = architecture.isEmpty ? nil : architecture.contains("image")
         if connection.capabilities.structuredOutputs, structured == false {
             throw EvaluationCompatibleJudgeError.capabilityMismatch("The selected endpoint does not advertise structured outputs.")
@@ -116,11 +107,9 @@ actor EvaluationCompatibleJudgeClient {
         if connection.capabilities.multimodal, multimodal == false {
             throw EvaluationCompatibleJudgeError.capabilityMismatch("The selected endpoint does not advertise image input.")
         }
-        return .init(
-            checkedAt: Date(), modelFound: true,
+        return .init(checkedAt: Date(), modelFound: true,
             structuredOutputsVerified: structured, multimodalVerified: multimodal,
-            message: "Connection succeeded for \(connection.modelID). Capabilities without endpoint metadata remain declared, not verified."
-        )
+            message: "Connection succeeded for \(connection.modelID). Capabilities without endpoint metadata remain declared, not verified.")
     }
 
     func judge(
@@ -139,26 +128,20 @@ actor EvaluationCompatibleJudgeClient {
         }
         guard images.isEmpty || connection.capabilities.multimodal else {
             throw EvaluationCompatibleJudgeError.capabilityMismatch(
-                "This evaluation includes image evidence, but the judge connection is not configured and verified for multimodal input."
-            )
+                "This evaluation includes image evidence, but the judge connection is not configured and verified for multimodal input.")
         }
         guard suite.judgeConfiguration.hasCurrentExternalEvidenceApproval(for: connection) else {
             throw EvaluationCompatibleJudgeError.disclosureNotApproved
         }
-
         let criteria = suite.rubricCriteria
         guard (1...4).contains(criteria.count) else { throw EvaluationJudgeValidationError.invalidCriteria }
+        let configuration = Self.requestConfiguration(for: connection, criteriaCount: criteria.count)
         let started = ContinuousClock.now
-        let prompt = EvaluationRunner.judgePrompt(
-            response: response,
-            evaluationCase: evaluationCase,
-            effectivePrompt: effectivePrompt,
-            suite: suite,
-            toolEvidence: toolEvidence
-        )
+        let prompt = EvaluationRunner.judgePrompt(response: response, evaluationCase: evaluationCase,
+            effectivePrompt: effectivePrompt, suite: suite, toolEvidence: toolEvidence)
         var attempts: [EvaluationJudgeAttemptTrace] = []
         var lastError: Error?
-        // One bounded repair request is permitted. Every response is validated locally.
+        // Only rejected model-authored verdicts get one bounded repair.
         for attempt in 1...2 {
             try Task.checkCancellation()
             let repair = attempt == 1 ? nil : """
@@ -166,50 +149,35 @@ actor EvaluationCompatibleJudgeClient {
                 Return a complete JSON verdict for every numbered requirement. Do not add fields or prose.
                 """
             let attemptPrompt = [prompt, repair].compactMap { $0 }.joined(separator: "\n\n")
-            attempts.append(.init(prompt: attemptPrompt))
+            attempts.append(.init(prompt: attemptPrompt, requestConfiguration: configuration))
             do {
-                let responseEnvelope = try await requestVerdict(
-                    prompt: attemptPrompt,
-                    criteriaCount: criteria.count,
-                    images: suite.judgeConfiguration.includeReferenceAttachments ? images : [],
-                    resolved: resolved
-                )
-                attempts[attempt - 1].rawResponse = responseEnvelope.rawContent
-                let verdict = EvaluationJudgeVerdict(checks: responseEnvelope.content.requirements.map {
-                    EvaluationJudgeCriterionVerdict(
-                        criterionIndex: $0.criterionIndex,
-                        score: $0.score,
-                        rationale: $0.rationale,
-                        exactComparisons: []
-                    )
+                let envelope = try await requestVerdict(prompt: attemptPrompt, configuration: configuration,
+                    images: suite.judgeConfiguration.includeReferenceAttachments ? images : [], resolved: resolved)
+                // Capture before parsing: malformed JSON is evidence, not a
+                // reason to discard the provider's actual answer.
+                attempts[attempt - 1].rawResponse = envelope.rawContent
+                let payload = Self.jsonPayload(from: envelope.rawContent)
+                let decoded = try JSONDecoder().decode(CompatibleVerdict.self, from: Data(payload.utf8))
+                let verdict = EvaluationJudgeVerdict(checks: decoded.requirements.map {
+                    EvaluationJudgeCriterionVerdict(criterionIndex: $0.criterionIndex, score: $0.score,
+                        rationale: $0.rationale, exactComparisons: [])
                 })
-                let judgment = try EvaluationJudge.validate(
-                    verdict: verdict,
-                    criteria: criteria,
-                    response: response,
-                    verifiedReference: evaluationCase.expected
-                )
-                let trace = EvaluationJudgeTrace(
-                    instructions: EvaluationRunner.judgeInstructions,
-                    prompt: attemptPrompt,
-                    rawResponse: responseEnvelope.rawContent,
-                    checks: judgment.checks,
-                    validationError: nil,
-                    attempts: attempts,
-                    judgedCriterionIndexes: Array(1...criteria.count)
-                )
-                return EvaluationCompatibleJudgeResult(
-                    judgment: judgment,
-                    trace: trace,
-                    identity: identity(connection: connection, response: responseEnvelope),
-                    usage: responseEnvelope.usage,
-                    durationMilliseconds: milliseconds(since: started),
-                    cost: cost(connection: connection, response: responseEnvelope)
-                )
+                let judgment = try EvaluationJudge.validate(verdict: verdict, criteria: criteria,
+                    response: response, verifiedReference: evaluationCase.expected)
+                let trace = EvaluationJudgeTrace(instructions: configuration.instructions,
+                    prompt: attemptPrompt, rawResponse: envelope.rawContent, checks: judgment.checks,
+                    validationError: nil, attempts: attempts, judgedCriterionIndexes: Array(1...criteria.count))
+                return EvaluationCompatibleJudgeResult(judgment: judgment, trace: trace,
+                    identity: identity(connection: connection, response: envelope), usage: envelope.usage,
+                    durationMilliseconds: milliseconds(since: started), cost: cost(connection: connection, response: envelope))
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as URLError where error.code == .cancelled {
                 throw CancellationError()
+            } catch let failure as EvaluationCompatibleJudgeResponseFailure {
+                attempts[attempt - 1].rawResponse = failure.rawContent
+                attempts[attempt - 1].validationError = failure.localizedDescription
+                throw EvaluationCompatibleJudgeAttemptFailure(failure: failure, attempts: attempts)
             } catch {
                 lastError = error
                 attempts[attempt - 1].validationError = error.localizedDescription
@@ -218,69 +186,63 @@ actor EvaluationCompatibleJudgeClient {
             }
         }
         throw EvaluationCompatibleJudgeError.exhausted(
-            message: lastError?.localizedDescription ?? "The judge did not return a valid verdict.",
-            attempts: attempts
-        )
+            message: lastError?.localizedDescription ?? "The judge did not return a valid verdict.", attempts: attempts)
+    }
+
+    nonisolated static func requestConfiguration(
+        for connection: EvaluationJudgeConnection, criteriaCount: Int
+    ) -> EvaluationJudgeRequestConfiguration {
+        let thinking = usesThinkingGeneration(connection)
+        return .init(promptVersion: EvaluationRunner.judgePromptVersion,
+            instructions: compatibleJudgeInstructions(criteriaCount: criteriaCount),
+            modelID: connection.modelID, criteriaCount: criteriaCount,
+            responseFormat: connection.kind == .openRouter ? "json_schema" : "json_object",
+            maximumResponseTokens: thinking ? thinkingJudgeMaxTokens : portableJudgeMaxTokens,
+            timeoutSeconds: requestTimeoutSeconds(for: connection),
+            stream: connection.generationPolicy != .portable, thinking: thinking)
     }
 
     private func requestVerdict(
         prompt: String,
-        criteriaCount: Int,
+        configuration: EvaluationJudgeRequestConfiguration,
         images: [ImageEvaluationInput],
         resolved: EvaluationResolvedJudgeConnection
     ) async throws -> CompletionEnvelope {
         let connection = resolved.connection
         let url = try endpointURL(baseURL: connection.baseURL, component: "chat/completions")
-        let timeout = Self.requestTimeoutSeconds(for: connection)
-        let thinking = Self.usesThinkingGeneration(connection)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = timeout
+        request.timeoutInterval = configuration.timeoutSeconds
         applyHeaders(to: &request, resolved: resolved)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if thinking {
-            request.setValue("text/event-stream, application/json", forHTTPHeaderField: "Accept")
-        }
+        if configuration.stream { request.setValue("text/event-stream, application/json", forHTTPHeaderField: "Accept") }
         let body = CompletionRequest(
-            model: connection.modelID,
-            messages: [
-                .init(role: "system", content: .text(Self.compatibleJudgeInstructions(criteriaCount: criteriaCount))),
-                .init(role: "user", content: try messageContent(prompt: prompt, images: images))
-            ],
-            responseFormat: connection.kind == .openRouter
-                ? .verdict(criteriaCount: criteriaCount)
-                : .jsonObject,
-            temperature: 0,
-            stream: thinking,
-            maxTokens: thinking ? Self.thinkingJudgeMaxTokens : Self.portableJudgeMaxTokens,
-            thinking: thinking ? .init(type: "enabled") : nil,
-            streamOptions: thinking ? .init(includeUsage: true) : nil,
+            model: configuration.modelID,
+            messages: [.init(role: "system", content: .text(configuration.instructions)),
+                       .init(role: "user", content: try messageContent(prompt: prompt, images: images))],
+            responseFormat: configuration.responseFormat == "json_schema" ? .verdict(criteriaCount: configuration.criteriaCount) : .jsonObject,
+            temperature: 0, stream: configuration.stream, maxTokens: configuration.maximumResponseTokens,
+            thinking: configuration.thinking ? .init(type: "enabled") : nil,
+            streamOptions: configuration.stream ? .init(includeUsage: true) : nil,
             provider: connection.kind == .openRouter
-                ? .init(order: connection.providerOrder, allowFallbacks: false, requireParameters: true, dataCollection: "deny")
-                : nil
-        )
+                ? .init(order: connection.providerOrder, allowFallbacks: false, requireParameters: true, dataCollection: "deny") : nil)
         request.httpBody = try JSONEncoder().encode(body)
-        let (data, response) = try await data(for: request, timeout: timeout)
-        guard data.count <= Self.maximumResponseBytes else { throw EvaluationCompatibleJudgeError.responseTooLarge }
+        let (data, response) = try await data(for: request, timeout: configuration.timeoutSeconds)
         try validate(response: response, data: data)
-        let raw = try Self.decodeCompletion(from: data)
+        let raw = try EvaluationCompatibleJudgeResponseDecoder.decode(data)
         guard raw.choices.count == 1, let content = raw.choices.first?.message.content else {
             throw EvaluationCompatibleJudgeError.missingAssessment
         }
-        let payload = Self.jsonPayload(from: content)
-        guard let contentData = payload.data(using: .utf8) else {
-            throw EvaluationCompatibleJudgeError.missingAssessment
+        var usage: EvaluationUsage?
+        if let metadata = raw.usage, metadata.hasValidTokenCounts,
+           let input = metadata.promptTokens, let output = metadata.completionTokens {
+            var counts = EvaluationUsage()
+            counts.inputTokens = input
+            counts.outputTokens = output
+            usage = counts
         }
-        let verdict = try JSONDecoder().decode(CompatibleVerdict.self, from: contentData)
-        let usage = raw.usage?.evaluationUsage
-        return CompletionEnvelope(
-            content: verdict,
-            rawContent: content,
-            model: raw.model,
-            provider: raw.provider,
-            usage: usage,
-            reportedCost: raw.usage?.reportedCost
-        )
+        return CompletionEnvelope(rawContent: content, model: raw.model, provider: raw.provider,
+            usage: usage, reportedCost: raw.usage?.reportedCost)
     }
 
     private func messageContent(prompt: String, images: [ImageEvaluationInput]) throws -> MessageContent {
@@ -303,32 +265,22 @@ actor EvaluationCompatibleJudgeClient {
         }
         let suffix = "/\(component)"
         if !components.path.hasSuffix(suffix) {
-            components.path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             components.path = "/" + [components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")), component]
                 .filter { !$0.isEmpty }.joined(separator: "/")
         }
-        guard let url = components.url else {
-            throw EvaluationCompatibleJudgeError.invalidConfiguration("The endpoint URL is invalid.")
-        }
+        guard let url = components.url else { throw EvaluationCompatibleJudgeError.invalidConfiguration("The endpoint URL is invalid.") }
         return url
     }
 
     private func applyHeaders(to request: inout URLRequest, resolved: EvaluationResolvedJudgeConnection) {
-        if let apiKey = resolved.apiKey, !apiKey.isEmpty {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-        if resolved.connection.kind == .openRouter {
-            request.setValue("Foundation Evals", forHTTPHeaderField: "X-OpenRouter-Title")
-        }
+        if let apiKey = resolved.apiKey, !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        if resolved.connection.kind == .openRouter { request.setValue("Foundation Evals", forHTTPHeaderField: "X-OpenRouter-Title") }
     }
 
     private func validate(response: URLResponse, data: Data) throws {
         guard let response = response as? HTTPURLResponse else { throw EvaluationCompatibleJudgeError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
-            throw EvaluationCompatibleJudgeError.http(
-                status: response.statusCode,
-                detail: Self.providerErrorDetail(from: data)
-            )
+            throw EvaluationCompatibleJudgeError.http(status: response.statusCode, detail: Self.providerErrorDetail(from: data))
         }
     }
 
@@ -337,28 +289,27 @@ actor EvaluationCompatibleJudgeClient {
         let nested = (object["error"] as? [String: Any])?["message"] as? String
         let raw = nested ?? object["message"] as? String ?? object["detail"] as? String
         guard let raw else { return nil }
-        let normalized = raw.components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        guard !normalized.isEmpty else { return nil }
-        return String(normalized.prefix(512))
+        let normalized = raw.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+        return normalized.isEmpty ? nil : String(normalized.prefix(512))
     }
 
     private func data(for request: URLRequest, timeout: Double) async throws -> (Data, URLResponse) {
-        let session = URLSession(
-            configuration: Self.sessionConfiguration(timeout: timeout),
-            delegate: EvaluationNoRedirectDelegate(),
-            delegateQueue: nil
-        )
+        if let transport {
+            try Task.checkCancellation()
+            let result = try await transport(request)
+            try Task.checkCancellation()
+            guard result.0.count <= Self.maximumResponseBytes else { throw EvaluationCompatibleJudgeError.responseTooLarge }
+            return result
+        }
+        let session = URLSession(configuration: Self.sessionConfiguration(timeout: timeout),
+            delegate: EvaluationNoRedirectDelegate(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         let (bytes, response) = try await session.bytes(for: request)
         var data = Data()
         data.reserveCapacity(32 * 1_024)
         for try await byte in bytes {
             try Task.checkCancellation()
-            guard data.count < Self.maximumResponseBytes else {
-                throw EvaluationCompatibleJudgeError.responseTooLarge
-            }
+            guard data.count < Self.maximumResponseBytes else { throw EvaluationCompatibleJudgeError.responseTooLarge }
             data.append(byte)
         }
         return (data, response)
@@ -385,67 +336,13 @@ actor EvaluationCompatibleJudgeClient {
     }
 
     nonisolated static func usesThinkingGeneration(_ connection: EvaluationJudgeConnection) -> Bool {
-        let model = connection.modelID.lowercased()
-        if model.contains("deepseek") { return true }
-        let host = URLComponents(string: connection.baseURL)?.host?.lowercased() ?? ""
-        return host.contains("deepseek")
+        connection.generationPolicy == .deepSeekThinking
     }
 
     nonisolated static func requestTimeoutSeconds(for connection: EvaluationJudgeConnection) -> Double {
-        let configured = connection.requestTimeoutSeconds
-        guard usesThinkingGeneration(connection) else { return configured }
-        return min(
-            EvaluationJudgeConnection.maximumRequestTimeoutSeconds,
-            max(configured, thinkingJudgeMinimumTimeoutSeconds)
-        )
-    }
-
-    private nonisolated static func decodeCompletion(from data: Data) throws -> CompletionResponse {
-        let trimmed = data.drop { $0 == 0x20 || $0 == 0x09 || $0 == 0x0A || $0 == 0x0D }
-        if trimmed.first == 0x7B {
-            return try JSONDecoder().decode(CompletionResponse.self, from: data)
-        }
-        return try decodeStream(data)
-    }
-
-    private nonisolated static func decodeStream(_ data: Data) throws -> CompletionResponse {
-        var content = ""
-        var model: String?
-        var provider: String?
-        var usage: CompletionResponse.Usage?
-        var sawEvent = false
-        var line = Data()
-        func consume(_ rawLine: Data) throws {
-            var rawLine = rawLine
-            if rawLine.last == 0x0D { rawLine.removeLast() }
-            guard let text = String(data: rawLine, encoding: .utf8) else { return }
-            let trimmed = text.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("data:") else { return }
-            let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
-            guard !payload.isEmpty, payload != "[DONE]" else { return }
-            sawEvent = true
-            let chunk = try JSONDecoder().decode(CompletionStreamChunk.self, from: Data(payload.utf8))
-            if let piece = chunk.choices.first?.delta?.content { content += piece }
-            model = chunk.model ?? model
-            provider = chunk.provider ?? provider
-            usage = chunk.usage ?? usage
-        }
-        for byte in data {
-            if byte == 0x0A {
-                try consume(line)
-                line.removeAll(keepingCapacity: true)
-            } else {
-                line.append(byte)
-            }
-        }
-        if !line.isEmpty { try consume(line) }
-        guard sawEvent else { throw EvaluationCompatibleJudgeError.invalidResponse }
-        return CompletionResponse(
-            choices: [.init(message: .init(content: content.isEmpty ? nil : content))],
-            model: model,
-            provider: provider,
-            usage: usage
-        )
+        guard usesThinkingGeneration(connection) else { return connection.requestTimeoutSeconds }
+        return min(EvaluationJudgeConnection.maximumRequestTimeoutSeconds,
+            max(connection.requestTimeoutSeconds, thinkingJudgeMinimumTimeoutSeconds))
     }
 
     nonisolated static func compatibleJudgeInstructions(criteriaCount: Int) -> String {
@@ -480,40 +377,25 @@ actor EvaluationCompatibleJudgeClient {
     nonisolated static func jsonPayload(from rawContent: String) -> String {
         var text = rawContent.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("```") {
-            if let firstNewline = text.firstIndex(of: "\n") {
-                text = String(text[text.index(after: firstNewline)...])
-            }
-            if let fence = text.range(of: "```") {
-                text = String(text[..<fence.lowerBound])
-            }
+            if let firstNewline = text.firstIndex(of: "\n") { text = String(text[text.index(after: firstNewline)...]) }
+            if let fence = text.range(of: "```") { text = String(text[..<fence.lowerBound]) }
             text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return text
     }
 
     private func identity(connection: EvaluationJudgeConnection, response: CompletionEnvelope) -> EvaluationJudgeIdentity {
-        EvaluationJudgeIdentity(
-            mode: .connection,
-            connectionID: connection.id,
-            connectionName: connection.name,
-            endpointKind: connection.kind,
-            baseURL: connection.baseURL,
-            requestedModelID: connection.modelID,
-            reportedModelID: response.model,
-            provider: response.provider,
-            providerOrder: connection.providerOrder
-        )
+        EvaluationJudgeIdentity(mode: .connection, connectionID: connection.id, connectionName: connection.name,
+            endpointKind: connection.kind, baseURL: connection.baseURL, requestedModelID: connection.modelID,
+            reportedModelID: response.model, provider: response.provider, providerOrder: connection.providerOrder)
     }
 
     private func cost(connection: EvaluationJudgeConnection, response: CompletionEnvelope) -> EvaluationCost {
         if let cost = response.reportedCost {
             return EvaluationCost(availability: .known, usd: cost, explanation: "Reported by the compatible endpoint.")
         }
-        if let usage = response.usage,
-           let input = connection.inputUSDPerMillionTokens,
-           let output = connection.outputUSDPerMillionTokens {
-            let estimate = Double(usage.inputTokens) * input / 1_000_000
-                + Double(usage.outputTokens) * output / 1_000_000
+        if let usage = response.usage, let input = connection.inputUSDPerMillionTokens, let output = connection.outputUSDPerMillionTokens {
+            let estimate = Double(usage.inputTokens) * input / 1_000_000 + Double(usage.outputTokens) * output / 1_000_000
             return EvaluationCost(availability: .estimated, usd: estimate, explanation: "Estimated from configured token prices.")
         }
         return EvaluationCost(availability: .unavailable, usd: nil, explanation: "The endpoint did not report cost and no token prices are configured.")
@@ -521,22 +403,16 @@ actor EvaluationCompatibleJudgeClient {
 
     private func milliseconds(since instant: ContinuousClock.Instant) -> Double {
         let duration = ContinuousClock.now - instant
-        return Double(duration.components.seconds) * 1_000
-            + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+        return Double(duration.components.seconds) * 1_000 + Double(duration.components.attoseconds) / 1_000_000_000_000_000
     }
 }
 
 private struct CompatibleVerdict: Codable {
-    struct Requirement: Codable {
-        var criterionIndex: Int
-        var score: Int
-        var rationale: String
-    }
+    struct Requirement: Codable { var criterionIndex: Int; var score: Int; var rationale: String }
     var requirements: [Requirement]
 }
 
 private struct CompletionEnvelope {
-    var content: CompatibleVerdict
     var rawContent: String
     var model: String?
     var provider: String?
@@ -545,16 +421,12 @@ private struct CompletionEnvelope {
 }
 
 private struct CompletionRequest: Encodable {
-    struct Message: Encodable {
-        var role: String
-        var content: MessageContent
-    }
+    struct Message: Encodable { var role: String; var content: MessageContent }
     struct Provider: Encodable {
         var order: [String]
         var allowFallbacks: Bool
         var requireParameters: Bool
         var dataCollection: String
-
         enum CodingKeys: String, CodingKey {
             case order
             case allowFallbacks = "allow_fallbacks"
@@ -562,9 +434,7 @@ private struct CompletionRequest: Encodable {
             case dataCollection = "data_collection"
         }
     }
-    struct Thinking: Encodable {
-        var type: String
-    }
+    struct Thinking: Encodable { var type: String }
     struct StreamOptions: Encodable {
         var includeUsage: Bool
         enum CodingKeys: String, CodingKey { case includeUsage = "include_usage" }
@@ -578,7 +448,6 @@ private struct CompletionRequest: Encodable {
     var thinking: Thinking?
     var streamOptions: StreamOptions?
     var provider: Provider?
-
     enum CodingKeys: String, CodingKey {
         case model, messages, temperature, stream, provider, thinking
         case responseFormat = "response_format"
@@ -590,7 +459,6 @@ private struct CompletionRequest: Encodable {
 private enum MessageContent: Encodable {
     case text(String)
     case parts([ContentPart])
-
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
@@ -604,24 +472,14 @@ private struct ContentPart: Encodable {
     var type: String
     var text: String?
     var imageURL: ImageURL?
-
     struct ImageURL: Encodable { var url: String }
-
     static func text(_ text: String) -> Self { .init(type: "text", text: text, imageURL: nil) }
     static func image(_ url: String) -> Self { .init(type: "image_url", text: nil, imageURL: .init(url: url)) }
-
-    enum CodingKeys: String, CodingKey {
-        case type, text
-        case imageURL = "image_url"
-    }
+    enum CodingKeys: String, CodingKey { case type, text; case imageURL = "image_url" }
 }
 
 private struct ResponseFormat: Encodable {
-    struct JSONSchema: Encodable {
-        var name: String
-        var strict: Bool
-        var schema: Schema
-    }
+    struct JSONSchema: Encodable { var name: String; var strict: Bool; var schema: Schema }
     struct Schema: Encodable {
         var type = "object"
         var properties: [String: Property]
@@ -633,12 +491,10 @@ private struct ResponseFormat: Encodable {
         case integer(minimum: Int, maximum: Int)
         case array(items: Property, minimum: Int, maximum: Int)
         case object(properties: [String: Property], required: [String])
-
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: Keys.self)
             switch self {
-            case .string:
-                try container.encode("string", forKey: .type)
+            case .string: try container.encode("string", forKey: .type)
             case .integer(let minimum, let maximum):
                 try container.encode("integer", forKey: .type)
                 try container.encode(minimum, forKey: .minimum)
@@ -655,141 +511,23 @@ private struct ResponseFormat: Encodable {
                 try container.encode(false, forKey: .additionalProperties)
             }
         }
-
         enum Keys: String, CodingKey {
             case type, properties, required, items, minimum, maximum, additionalProperties, minItems, maxItems
         }
     }
     var type: String
     var jsonSchema: JSONSchema?
-
-    static var jsonObject: Self {
-        Self(type: "json_object", jsonSchema: nil)
-    }
-
+    static var jsonObject: Self { Self(type: "json_object", jsonSchema: nil) }
     static func verdict(criteriaCount: Int) -> Self {
-        let requirement = Property.object(
-            properties: [
-                "criterionIndex": .integer(minimum: 1, maximum: criteriaCount),
-                "score": .integer(minimum: 1, maximum: 4),
-                "rationale": .string
-            ],
-            required: ["criterionIndex", "score", "rationale"]
-        )
-        return Self(type: "json_schema", jsonSchema: JSONSchema(
-            name: "foundation_evals_verdict",
-            strict: true,
-            schema: Schema(
-                properties: ["requirements": .array(items: requirement, minimum: criteriaCount, maximum: criteriaCount)],
-                required: ["requirements"]
-            )
-        ))
+        let requirement = Property.object(properties: [
+            "criterionIndex": .integer(minimum: 1, maximum: criteriaCount),
+            "score": .integer(minimum: 1, maximum: 4), "rationale": .string
+        ], required: ["criterionIndex", "score", "rationale"])
+        return Self(type: "json_schema", jsonSchema: JSONSchema(name: "foundation_evals_verdict", strict: true,
+            schema: Schema(properties: ["requirements": .array(items: requirement, minimum: criteriaCount, maximum: criteriaCount)],
+                           required: ["requirements"])))
     }
-
-    enum CodingKeys: String, CodingKey {
-        case type
-        case jsonSchema = "json_schema"
-    }
-}
-
-private struct CompletionStreamChunk: Decodable {
-    struct Choice: Decodable {
-        struct Delta: Decodable { var content: String? }
-        var delta: Delta?
-    }
-    var choices: [Choice]
-    var model: String?
-    var provider: String?
-    var usage: CompletionResponse.Usage?
-}
-
-private struct CompletionResponse: Decodable {
-    struct Choice: Decodable {
-        struct Message: Decodable {
-            var content: String?
-
-            init(content: String?) {
-                self.content = content
-            }
-
-            init(from decoder: Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                if let text = try? container.decode(String.self, forKey: .content) {
-                    content = text
-                    return
-                }
-                if let parts = try? container.decode([TextPart].self, forKey: .content) {
-                    let combined = parts.compactMap(\.text).joined()
-                    content = combined.isEmpty ? nil : combined
-                    return
-                }
-                content = nil
-            }
-
-            private struct TextPart: Decodable { var text: String? }
-            private enum CodingKeys: String, CodingKey { case content }
-        }
-        var message: Message
-    }
-    struct Usage: Decodable {
-        var promptTokens: Int?
-        var completionTokens: Int?
-        var cost: Double?
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            // Treat malformed or unrepresentable fields as unavailable metadata. The
-            // verdict itself remains usable when a provider emits bad usage values.
-            promptTokens = try? container.decode(Int.self, forKey: .promptTokens)
-            completionTokens = try? container.decode(Int.self, forKey: .completionTokens)
-            cost = try? container.decode(Double.self, forKey: .cost)
-        }
-
-        var evaluationUsage: EvaluationUsage? {
-            guard let promptTokens, promptTokens >= 0,
-                  let completionTokens, completionTokens >= 0 else { return nil }
-            return EvaluationUsage(
-                inputTokens: promptTokens,
-                cachedInputTokens: 0,
-                outputTokens: completionTokens,
-                reasoningTokens: 0
-            )
-        }
-
-        var reportedCost: Double? {
-            guard evaluationUsage != nil, let cost, cost.isFinite, cost >= 0 else { return nil }
-            return cost
-        }
-
-        enum CodingKeys: String, CodingKey {
-            case promptTokens = "prompt_tokens"
-            case completionTokens = "completion_tokens"
-            case cost
-        }
-    }
-    var choices: [Choice]
-    var model: String?
-    var provider: String?
-    var usage: Usage?
-
-    init(choices: [Choice], model: String?, provider: String?, usage: Usage?) {
-        self.choices = choices
-        self.model = model
-        self.provider = provider
-        self.usage = usage
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        choices = try container.decode([Choice].self, forKey: .choices)
-        model = try container.decodeIfPresent(String.self, forKey: .model)
-        provider = try container.decodeIfPresent(String.self, forKey: .provider)
-        usage = try? container.decodeIfPresent(Usage.self, forKey: .usage)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case choices, model, provider, usage
-    }
+    enum CodingKeys: String, CodingKey { case type; case jsonSchema = "json_schema" }
 }
 
 private struct ModelsResponse: Decodable {
@@ -801,10 +539,7 @@ private struct ModelsResponse: Decodable {
         var id: String
         var supportedParameters: [String]?
         var architecture: Architecture?
-        enum CodingKeys: String, CodingKey {
-            case id, architecture
-            case supportedParameters = "supported_parameters"
-        }
+        enum CodingKeys: String, CodingKey { case id, architecture; case supportedParameters = "supported_parameters" }
     }
     var data: [Model]
 }
@@ -819,7 +554,6 @@ enum EvaluationCompatibleJudgeError: LocalizedError, Sendable {
     case responseTooLarge
     case missingAssessment
     case exhausted(message: String, attempts: [EvaluationJudgeAttemptTrace])
-
     var errorDescription: String? {
         switch self {
         case .invalidConfiguration(let message): message
@@ -831,7 +565,7 @@ enum EvaluationCompatibleJudgeError: LocalizedError, Sendable {
             if let detail { "The judge endpoint returned HTTP \(status): \(detail)" }
             else { "The judge endpoint returned HTTP \(status)." }
         case .responseTooLarge: "The judge response exceeded the 8 MB safety limit."
-        case .missingAssessment: "The judge response did not contain exactly one assessment."
+        case .missingAssessment: "The judge response did not contain a complete assessment."
         case .exhausted(let message, _): "The judge did not produce a valid verdict after one bounded retry: \(message)"
         }
     }
