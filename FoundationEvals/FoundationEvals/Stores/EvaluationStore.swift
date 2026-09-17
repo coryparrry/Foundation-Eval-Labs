@@ -1728,9 +1728,6 @@ final class EvaluationStore {
             EvidenceImportService.discard(stagingRoot: preview.stagingRoot)
             throw EvidenceImportError.destinationMissing
         }
-        if preview.destinationProjectID != selectedProjectID || preview.destinationSuiteID != selectedSuiteID {
-            // Keep the captured destination rather than writing to the live selection.
-        }
         switch preview.outcome {
         case .alreadyImported(let id):
             EvidenceImportService.discard(stagingRoot: preview.stagingRoot)
@@ -1760,7 +1757,6 @@ final class EvaluationStore {
         try FileManager.default.copyItem(at: preview.stagingRoot, to: evidenceDirectory.appending(path: preview.filename))
         EvidenceImportService.discard(stagingRoot: preview.stagingRoot)
 
-        let previousDirectory = runsDirectory
         let destinationRuns = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: supportDirectory,
             projectID: preview.destinationProjectID,
@@ -1784,7 +1780,7 @@ final class EvaluationStore {
         )
         try CanonicalJSON.data(for: index).write(to: importedEvidenceIndexURL(projectID: preview.destinationProjectID), options: .atomic)
 
-        if preview.destinationProjectID == selectedProjectID, preview.destinationSuiteID == selectedSuiteID, destinationRuns == previousDirectory {
+        if preview.destinationProjectID == selectedProjectID, preview.destinationSuiteID == selectedSuiteID {
             runs.removeAll { $0.id == run.id }
             runs.insert(run, at: 0)
             selection = .run(run.id)
@@ -1837,13 +1833,11 @@ final class EvaluationStore {
                 input: input
             )
         }
-        let cases: [CaptureLaunchCase]
-        if parentInputs.isEmpty {
+        guard !parentInputs.isEmpty else {
             notice = ConnectedFeatureLauncherError.incompatibleEvidence.localizedDescription
             return
-        } else {
-            cases = parentInputs
         }
+        let cases = parentInputs
         launcherState = .launching
         let jobID = UUID()
         let runID = UUID()

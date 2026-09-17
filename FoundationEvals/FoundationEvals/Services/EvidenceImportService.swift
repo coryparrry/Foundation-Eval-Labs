@@ -52,14 +52,14 @@ enum EvidenceImportService {
         )
         let name = url.lastPathComponent.isEmpty ? "source.json" : url.lastPathComponent
         try CaptureFileIO.writeAtomically(data, to: stagingRoot.appending(path: name))
-        return StagedImport(filename: name, files: [name: data], isDirectory: false)
+        return StagedImport(filename: name, files: [name: data])
     }
 
     private nonisolated static func stageDirectory(_ root: URL, into stagingRoot: URL) throws -> StagedImport {
         var files: [String: Data] = [:]
         var total = 0
         try walk(root: root, relative: "", stagingRoot: stagingRoot, files: &files, total: &total)
-        return StagedImport(filename: root.lastPathComponent, files: files, isDirectory: true)
+        return StagedImport(filename: root.lastPathComponent, files: files)
     }
 
     private nonisolated static func walk(
@@ -227,5 +227,4 @@ enum EvidenceImportService {
 private struct StagedImport: Sendable {
     var filename: String
     var files: [String: Data]
-    var isDirectory: Bool
 }

@@ -77,11 +77,7 @@ struct EvidenceImportView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(preview == nil || isLoading || {
-                    if case .conflict = preview?.outcome { return true }
-                    if case .rejected = preview?.outcome { return true }
-                    return false
-                }())
+                .disabled(!canImport)
             }
         }
         .padding(24)
@@ -92,6 +88,14 @@ struct EvidenceImportView: View {
             allowsMultipleSelection: false
         ) { result in
             Task { await load(result) }
+        }
+    }
+
+    private var canImport: Bool {
+        guard let preview, !isLoading else { return false }
+        switch preview.outcome {
+        case .readyToImport, .alreadyImported: return true
+        case .conflict, .rejected: return false
         }
     }
 

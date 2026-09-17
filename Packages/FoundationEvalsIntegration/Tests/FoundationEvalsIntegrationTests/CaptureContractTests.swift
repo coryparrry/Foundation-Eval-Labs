@@ -163,11 +163,7 @@ struct CaptureContractTests {
         )
         #expect(observation.execution == .returned)
         #expect(observation.transcriptError != nil)
-        if case .returned = observation.output {
-            // Feature output remains after transcript capture failure.
-        } else {
-            Issue.record("Transcript failure erased the returned output.")
-        }
+        #expect(observation.output != .absent)
     }
 
     @Test func cancelBeforeNextCaseLeavesItUnattempted() async throws {

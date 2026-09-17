@@ -23,10 +23,7 @@ enum ConnectedFeatureLauncherState: Equatable, Sendable {
 
 actor ConnectedFeatureLauncher {
     private var process: Process?
-    private var stopRequested = false
     private var unresolved = false
-
-    var cannotStart: Bool { unresolved || process?.isRunning == true }
 
     func run(authorization: ConnectedFeatureLaunchAuthorization, request: CaptureLaunchRequest) async throws -> URL {
         if unresolved {
@@ -35,16 +32,12 @@ actor ConnectedFeatureLauncher {
         if process?.isRunning == true {
             throw ConnectedFeatureLauncherError.busy
         }
-        stopRequested = false
         let projectRoot = URL(filePath: authorization.projectRootPath, directoryHint: .isDirectory)
         let job = try request.validatedJobDirectory(projectRoot: projectRoot)
         try FileManager.default.createDirectory(at: job, withIntermediateDirectories: true)
         let handoff = projectRoot.appending(path: ".foundation-evals", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: handoff, withIntermediateDirectories: true)
         let requestURL = handoff.appending(path: "request.json")
-        if FileManager.default.fileExists(atPath: requestURL.path), process?.isRunning == true {
-            throw ConnectedFeatureLauncherError.busy
-        }
         try CaptureFileIO.writeAtomically(try CaptureJSONCoding.encoder(prettyPrinted: true).encode(request), to: requestURL)
 
         let xcodebuild = URL(filePath: authorization.developerDir).appending(path: "usr/bin/xcodebuild")
@@ -74,10 +67,6 @@ actor ConnectedFeatureLauncher {
         child.waitUntilExit()
         process = nil
         let status = child.terminationStatus
-        if stopRequested, child.isRunning {
-            unresolved = true
-            throw ConnectedFeatureLauncherError.unresolvedStop
-        }
         let published = try FileManager.default.contentsOfDirectory(
             at: job,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -87,13 +76,12 @@ actor ConnectedFeatureLauncher {
             if status == 0 {
                 throw ConnectedFeatureLauncherError.missingCapture
             }
-            throw ConnectedFeatureLauncherError.processFailed(status: status, log: logs.suffix)
+            throw ConnectedFeatureLauncherError.processFailed(status: status, log: logs)
         }
         return published
     }
 
     func requestStop() -> ConnectedFeatureLauncherState {
-        stopRequested = true
         process?.terminate()
         return .stopping
     }
@@ -103,7 +91,7 @@ actor ConnectedFeatureLauncher {
         while ContinuousClock.now < deadline {
             if process?.isRunning != true {
                 process = nil
-                return stopRequested ? .idle : .idle
+                return .idle
             }
             try? await Task.sleep(for: .milliseconds(200))
         }
@@ -115,23 +103,17 @@ actor ConnectedFeatureLauncher {
         return .idle
     }
 
-    private func drain(output: Pipe, error: Pipe, limit: Int) async -> (suffix: String, truncated: Bool) {
+    private func drain(output: Pipe, error: Pipe, limit: Int) async -> String {
         await withTaskGroup(of: Data.self) { group in
             group.addTask { readLimited(from: output.fileHandleForReading, limit: limit) }
             group.addTask { readLimited(from: error.fileHandleForReading, limit: limit) }
             var combined = Data()
-            var truncated = false
             for await chunk in group {
-                if combined.count >= limit {
-                    truncated = true
-                    continue
-                }
+                if combined.count >= limit { continue }
                 let allowed = min(limit - combined.count, chunk.count)
                 combined.append(chunk.prefix(allowed))
-                if allowed < chunk.count { truncated = true }
             }
-            let text = String(decoding: combined.suffix(8_192), as: UTF8.self)
-            return (text, truncated)
+            return String(decoding: combined.suffix(8_192), as: UTF8.self)
         }
     }
 }

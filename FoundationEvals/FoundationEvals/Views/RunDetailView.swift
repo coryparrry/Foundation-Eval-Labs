@@ -110,7 +110,7 @@ struct RunDetailView: View {
             LazyVStack(alignment: .leading, spacing: 20) {
                 RunOverviewHeader(run: run)
                 if let evidence = run.importedEvidence {
-                    ImportedEvidenceSection(run: run, evidence: evidence, store: store)
+                    ImportedEvidenceSection(evidence: evidence, store: store)
                 }
                 RunSummaryDashboard(run: run)
                 RunWorkflowPanel(store: store, run: run)
@@ -131,7 +131,6 @@ struct RunDetailView: View {
 }
 
 private struct ImportedEvidenceSection: View {
-    let run: EvaluationRun
     let evidence: EvaluationImportedEvidence
     @Bindable var store: EvaluationStore
     @State private var isChoosingProject = false
@@ -142,13 +141,7 @@ private struct ImportedEvidenceSection: View {
                 .font(.headline)
             LabeledContent("Source", value: sourceTitle)
             LabeledContent("Coverage", value: evidence.coverageLabel)
-            LabeledContent(
-                "Producer",
-                value: {
-                    let claim = [evidence.producerAppID, evidence.producerFeatureID].compactMap { $0 }.joined(separator: " · ")
-                    return claim.isEmpty ? "Unknown" : claim
-                }()
-            )
+            LabeledContent("Producer", value: producerClaim)
             LabeledContent("Producer environment", value: evidence.environmentClaims["operatingSystem"] ?? "Unknown")
             LabeledContent("Importer Mac", value: evidence.importerHost["operatingSystem"] ?? "")
             LabeledContent("Imported", value: evidence.importedAt.formatted(date: .abbreviated, time: .standard))
@@ -183,6 +176,11 @@ private struct ImportedEvidenceSection: View {
                 store.notice = error.localizedDescription
             }
         }
+    }
+
+    private var producerClaim: String {
+        let claim = [evidence.producerAppID, evidence.producerFeatureID].compactMap { $0 }.joined(separator: " · ")
+        return claim.isEmpty ? "Unknown" : claim
     }
 
     private var sourceTitle: String {

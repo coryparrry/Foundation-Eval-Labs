@@ -162,7 +162,7 @@ public struct CaptureEnvironment: Sendable, Equatable, Codable {
             workingTreeDirty: nil,
             featureConfigurationID: featureConfigurationID,
             model: model,
-            unknowns: ["sourceRevision", "workingTreeDirty", "device"].filter { _ in true }
+            unknowns: ["sourceRevision", "workingTreeDirty", "device"]
         )
     }
 }

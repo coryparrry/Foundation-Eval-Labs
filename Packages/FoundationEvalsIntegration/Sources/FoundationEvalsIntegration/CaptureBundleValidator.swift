@@ -55,9 +55,6 @@ public enum CaptureBundleValidator {
         let observations = try loadObservations(root: root, limits: limits, stagedBytes: stagedBytes)
         try validateIdentities(plan: manifest.plan, observations: observations)
         let coverage = CaptureCoverage.reconcile(plan: manifest.plan, observations: observations)
-        if manifest.run.state == .finished, !coverage.isComplete {
-            warnings.append("Incomplete capture · Some planned cases were not recorded")
-        }
         if !coverage.extraCoordinates.isEmpty {
             throw CaptureBundleError.extraObservation(coverage.extraCoordinates[0].identity)
         }
@@ -71,10 +68,6 @@ public enum CaptureBundleValidator {
         }
 
         try validateFileEntries(manifest.files, root: root, limits: limits, stagedBytes: stagedBytes)
-        let digest = CaptureDigest.sha256Hex(manifestData)
-        let eligibility: CaptureImportEligibility = coverage.isComplete && coverage.extraCoordinates.isEmpty
-            ? .inspectionOnly
-            : .inspectionOnly
         if !coverage.isComplete {
             warnings.append("Incomplete capture · Some planned cases were not recorded")
         }
@@ -84,9 +77,9 @@ public enum CaptureBundleValidator {
             observations: observations,
             expectations: expectations,
             coverage: coverage,
-            eligibility: eligibility,
+            eligibility: .inspectionOnly,
             warnings: Array(Set(warnings)).sorted(),
-            manifestDigest: digest
+            manifestDigest: CaptureDigest.sha256Hex(manifestData)
         )
     }
 

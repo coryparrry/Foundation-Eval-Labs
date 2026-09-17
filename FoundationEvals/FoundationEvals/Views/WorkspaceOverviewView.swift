@@ -70,7 +70,7 @@ struct WorkspaceOverviewView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .navigationTitle(store.selectedProject.name)
-            .toolbar {
+        .toolbar {
                 Button("Refresh project", systemImage: "arrow.clockwise") { refresh += 1 }
                 Button("Import Evidence…", systemImage: "tray.and.arrow.down") { isImportingEvidence = true }
                     .disabled(isBusy)

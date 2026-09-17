@@ -21,7 +21,7 @@ struct ContentView: View {
             .keyboardShortcut(.return, modifiers: [.command])
             if let output {
                 LabeledContent("Shop", value: output.shopName)
-                LabeledContent("Date", value: output.date ?? "Transcript not captured")
+                LabeledContent("Date", value: output.date ?? "Missing")
                 LabeledContent("Total pence", value: String(output.totalPence))
             }
             if let errorMessage {
