@@ -1,5 +1,8 @@
 import Foundation
 import Testing
+#if canImport(SwiftUI)
+import SwiftUI
+#endif
 @testable import FoundationEvals
 
 private enum QuickActionsStubError: Error {
@@ -10,9 +13,7 @@ private final class Locked<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Value
 
-    init(_ value: Value) {
-        self.value = value
-    }
+    init(_ value: Value) { self.value = value }
 
     func withLock<T>(_ body: (inout Value) throws -> T) rethrows -> T {
         lock.lock()
@@ -37,7 +38,7 @@ struct QuickActionsPillViewModelTests {
         }
     }
 
-    @Test func disabledActionDoesNotStartARequest() async {
+    @Test func disabledActionDoesNotStartARequest() {
         let model = QuickActionsPillViewModel(generate: stub())
         let action = QuickActionsPillAction(
             id: "explain", title: "Explain", systemImage: "questionmark.bubble",
@@ -48,7 +49,7 @@ struct QuickActionsPillViewModelTests {
         #expect(model.request == nil)
     }
 
-    @Test func emptySourceExplainsInsteadOfGenerating() async {
+    @Test func emptySourceExplainsInsteadOfGenerating() {
         let model = QuickActionsPillViewModel(generate: stub())
         #expect(model.select(QuickActionsPromptCatalog.primary[0], source: "   ") == nil)
         #expect(model.phase == .idle)
@@ -61,8 +62,7 @@ struct QuickActionsPillViewModelTests {
         await task.value
         #expect(model.phase == .result)
         #expect(model.previewText == "revised prompt")
-
-        let kept = model.keep()
+        let kept = model.keep(source: "Original prompt")
         #expect(kept == "revised prompt")
         #expect(model.phase == .idle)
         #expect(model.previewText == nil)
@@ -83,10 +83,7 @@ struct QuickActionsPillViewModelTests {
     @Test func retryRegeneratesAfterResult() async throws {
         let calls = Locked(0)
         let model = QuickActionsPillViewModel(generate: { _, _ in
-            let attempt = calls.withLock { value in
-                value += 1
-                return value
-            }
+            let attempt = calls.withLock { value in value += 1; return value }
             return AsyncThrowingStream { continuation in
                 continuation.yield("attempt \(attempt)")
                 continuation.finish()
@@ -94,8 +91,7 @@ struct QuickActionsPillViewModelTests {
         })
         let first = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt"))
         await first.value
-        #expect(model.phase == .result)
-        let second = try #require(model.retry())
+        let second = try #require(model.retry(source: "Original prompt"))
         await second.value
         #expect(model.phase == .result)
         #expect(model.previewText == "attempt 2")
@@ -105,11 +101,9 @@ struct QuickActionsPillViewModelTests {
     @Test func submitUsesCustomPromptRequest() async throws {
         let seenID = Locked<String?>(nil)
         let seenPrompt = Locked<String?>(nil)
-        let didCall = Locked(false)
         let model = QuickActionsPillViewModel(generate: { request, _ in
             seenID.withLock { $0 = request.id }
             seenPrompt.withLock { $0 = request.prompt }
-            didCall.withLock { $0 = true }
             return AsyncThrowingStream { continuation in
                 continuation.yield("custom revision")
                 continuation.finish()
@@ -119,7 +113,6 @@ struct QuickActionsPillViewModelTests {
         let task = try #require(model.submit(source: "Original prompt"))
         await task.value
         #expect(model.phase == .result)
-        #expect(didCall.withLock { $0 })
         #expect(seenID.withLock { $0 } == "prompt")
         #expect(seenPrompt.withLock { $0 } == "Make it shorter")
     }
@@ -132,6 +125,45 @@ struct QuickActionsPillViewModelTests {
         #expect(model.phase == .idle)
         #expect(model.previewText == nil)
     }
+
+    @Test func editedSourceIsNotOverwrittenAndRetryUsesCurrentSource() async throws {
+        let model = QuickActionsPillViewModel(generate: { _, source in
+            AsyncThrowingStream { continuation in
+                continuation.yield("Revised: \(source)")
+                continuation.finish()
+            }
+        })
+        let first = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "A"))
+        await first.value
+        #expect(model.keep(source: "B") == nil)
+        #expect(model.errorMessage != nil)
+        #expect(model.phase == .result)
+        #expect(model.previewText == "Revised: A")
+        let retry = try #require(model.retry(source: "B"))
+        await retry.value
+        #expect(model.originalSnapshot == "B")
+        #expect(model.keep(source: "B") == "Revised: B")
+    }
+
+    #if canImport(SwiftUI)
+    @Test func hostBindingPreservesEditsMadeBeforeKeep() async throws {
+        var source = "A"
+        let binding = Binding(get: { source }, set: { source = $0 })
+        let pair = AsyncThrowingStream<String, Error>.makeStream()
+        let model = QuickActionsPillViewModel(generate: { _, _ in pair.stream })
+        let task = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: binding.wrappedValue))
+        binding.wrappedValue = "B: important new constraint"
+        pair.continuation.yield("Revision based on A")
+        pair.continuation.finish()
+        await task.value
+        PromptQuickActionsSection.keepRevision(model, into: binding)
+        #expect(source == "B: important new constraint")
+        #expect(model.phase == .result)
+        #expect(model.errorMessage != nil)
+        model.dismiss()
+        #expect(source == "B: important new constraint")
+    }
+    #endif
 
     @Test func dismissedSessionCannotPublishIntoANewSession() async throws {
         let pair = AsyncThrowingStream<String, Error>.makeStream()
@@ -150,7 +182,7 @@ struct QuickActionsPillViewModelTests {
         await first.value
         await second.value
         #expect(model.previewText == "B revision")
-        #expect(model.keep() == "B revision")
+        #expect(model.keep(source: "B") == "B revision")
     }
 
     @Test func cancellingCompletionHandleDoesNotLeaveBusyState() async throws {

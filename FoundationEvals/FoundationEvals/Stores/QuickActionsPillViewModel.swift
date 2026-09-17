@@ -55,22 +55,25 @@ final class QuickActionsPillViewModel {
     }
 
     @discardableResult
-    func retry() -> Task<Void, Never>? {
+    func retry(source: String) -> Task<Void, Never>? {
         guard phase == .result, let request else { return nil }
-        return begin(request, source: originalSnapshot)
+        return begin(request, source: source)
     }
 
-    /// Returns the revision for the host to commit, then ends the session.
-    func keep() -> String? {
+    /// Compare and return on the main actor, with no suspension between checking
+    /// the host's current source and returning the value for its synchronous commit.
+    func keep(source: String) -> String? {
         guard phase == .result, let previewText else { return nil }
+        guard source == originalSnapshot else {
+            errorMessage = "The prompt changed after this revision started. Your edits were kept. Retry using the current prompt, or discard this preview."
+            return nil
+        }
         let kept = previewText
         dismiss()
         return kept
     }
 
-    /// Discard shares the same rollback boundary as ending the session.
-    /// The host keeps owning the committed text, so dismissal only clears
-    /// the preview, request, and prompt field.
+    /// The host owns the committed text; dismissal only clears session state.
     func dismiss() {
         playback?.cancel()
         playback = nil
