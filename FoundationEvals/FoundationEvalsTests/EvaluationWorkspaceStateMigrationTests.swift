@@ -184,7 +184,10 @@ struct EvaluationWorkspaceStateMigrationTests {
     }
 
     private func existingCatalog(legacySuite: EvaluationSuite) -> EvaluationWorkspaceCatalog {
-        let now = Date()
+        // CanonicalJSON stores ISO-8601 dates at whole-second precision. Use an
+        // exactly representable fixture date so equality still checks every field
+        // without mistaking discarded fractional seconds for a migration mutation.
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
         func project(suite: EvaluationSuite) -> EvaluationProject {
             .init(id: UUID(), name: "Project", createdAt: now, updatedAt: now, archivedAt: nil,
                 repository: nil, selectedSuiteID: suite.id,
