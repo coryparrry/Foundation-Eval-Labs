@@ -20,7 +20,13 @@ enum EvaluationWorkspaceStatePersistence {
         preserveUnreadable: Bool = true
     ) -> (state: EvaluationSuiteLocalState, notice: String?) {
         guard FileManager.default.fileExists(atPath: url.path) else {
-            return (EvaluationSuiteLocalState(), nil)
+            let migrated = EvaluationWorkspacePersistence.hasCompletedLegacyStateMigration(
+                in: url.deletingLastPathComponent()
+            )
+            return (
+                EvaluationSuiteLocalState(),
+                migrated ? "The saved suite state is missing after migration. Legacy approvals were not restored; review the suite state before release." : nil
+            )
         }
         do {
             let data = try Data(contentsOf: url)
