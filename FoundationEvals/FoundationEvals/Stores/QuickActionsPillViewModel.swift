@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 typealias QuickActionsRewriteStreamProvider = @Sendable (
     QuickActionsPillRequest,
@@ -38,20 +39,25 @@ final class QuickActionsPillViewModel {
         }
     }
 
-    func select(_ action: QuickActionsPillAction, source: String) {
-        guard action.isEnabled, phase == .idle else { return }
-        begin(.init(id: action.id, prompt: nil, busyLabel: action.busyLabel), source: source)
+    /// The returned handle completes after the session has published its terminal state.
+    /// Callers may await it without polling UI state or assuming a scheduling deadline.
+    @discardableResult
+    func select(_ action: QuickActionsPillAction, source: String) -> Task<Void, Never>? {
+        guard action.isEnabled, phase == .idle else { return nil }
+        return begin(.init(id: action.id, prompt: nil, busyLabel: action.busyLabel), source: source)
     }
 
-    func submit(source: String) {
+    @discardableResult
+    func submit(source: String) -> Task<Void, Never>? {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, phase == .idle else { return }
-        begin(.init(id: "prompt", prompt: trimmed, busyLabel: "Editing"), source: source)
+        guard !trimmed.isEmpty, phase == .idle else { return nil }
+        return begin(.init(id: "prompt", prompt: trimmed, busyLabel: "Editing"), source: source)
     }
 
-    func retry() {
-        guard phase == .result, let request else { return }
-        begin(request, source: originalSnapshot)
+    @discardableResult
+    func retry() -> Task<Void, Never>? {
+        guard phase == .result, let request else { return nil }
+        return begin(request, source: originalSnapshot)
     }
 
     /// Returns the revision for the host to commit, then ends the session.
@@ -76,11 +82,11 @@ final class QuickActionsPillViewModel {
         phase = .idle
     }
 
-    private func begin(_ request: QuickActionsPillRequest, source: String) {
+    private func begin(_ request: QuickActionsPillRequest, source: String) -> Task<Void, Never>? {
         let trimmedSource = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSource.isEmpty else {
             errorMessage = "Enter a prompt before using quick actions."
-            return
+            return nil
         }
         originalSnapshot = source
         errorMessage = nil
@@ -91,7 +97,7 @@ final class QuickActionsPillViewModel {
         previewText = nil
         phase = .thinking(request.busyLabel)
 
-        playback = Task { [weak self] in
+        let task = Task { [weak self] in
             do {
                 var didStream = false
                 let emptyStream = AsyncThrowingStream<String, Error> { $0.finish() }
@@ -111,7 +117,13 @@ final class QuickActionsPillViewModel {
                 self?.phase = .result
                 self?.playback = nil
             } catch is CancellationError {
-                // Dismissal or a new request owns the next state.
+                // A newer session owns its state; cancelling this handle must not
+                // leave the current session permanently stuck in its busy phase.
+                guard self?.generation == token else { return }
+                self?.previewText = nil
+                self?.request = nil
+                self?.phase = .idle
+                self?.playback = nil
             } catch {
                 guard self?.generation == token else { return }
                 self?.previewText = nil
@@ -121,6 +133,8 @@ final class QuickActionsPillViewModel {
                 self?.playback = nil
             }
         }
+        playback = task
+        return task
     }
 }
 
