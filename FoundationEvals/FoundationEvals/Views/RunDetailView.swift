@@ -75,6 +75,20 @@ struct RunDetailView: View {
                     exportError = error.localizedDescription
                 }
             }
+            if run.importedEvidence?.sourceKind == .captureBundle {
+                if store.launcherState == .stopping {
+                    Text("Stopping…")
+                } else if store.launcherState == .running || store.launcherState == .launching {
+                    Button("Stop rerun", systemImage: "stop.circle") {
+                        store.requestConnectedFeatureStop()
+                    }
+                } else {
+                    Button("Rerun connected feature", systemImage: "arrow.clockwise") {
+                        store.rerunConnectedFeature(from: run)
+                    }
+                    .disabled(store.connectedFeatureAuthorization == nil || store.launcherState == .unresolvedStop)
+                }
+            }
         }
         .fileExporter(
             isPresented: $isExporting,
@@ -95,6 +109,9 @@ struct RunDetailView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
                 RunOverviewHeader(run: run)
+                if let evidence = run.importedEvidence {
+                    ImportedEvidenceSection(run: run, evidence: evidence, store: store)
+                }
                 RunSummaryDashboard(run: run)
                 RunWorkflowPanel(store: store, run: run)
                 ResultsSection(run: run)
@@ -110,6 +127,71 @@ struct RunDetailView: View {
 
     private func safeFilename(_ value: String) -> String {
         value.replacingOccurrences(of: "[^A-Za-z0-9_-]+", with: "-", options: .regularExpression)
+    }
+}
+
+private struct ImportedEvidenceSection: View {
+    let run: EvaluationRun
+    let evidence: EvaluationImportedEvidence
+    @Bindable var store: EvaluationStore
+    @State private var isChoosingProject = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Imported evidence")
+                .font(.headline)
+            LabeledContent("Source", value: sourceTitle)
+            LabeledContent("Coverage", value: evidence.coverageLabel)
+            LabeledContent(
+                "Producer",
+                value: {
+                    let claim = [evidence.producerAppID, evidence.producerFeatureID].compactMap { $0 }.joined(separator: " · ")
+                    return claim.isEmpty ? "Unknown" : claim
+                }()
+            )
+            LabeledContent("Producer environment", value: evidence.environmentClaims["operatingSystem"] ?? "Unknown")
+            LabeledContent("Importer Mac", value: evidence.importerHost["operatingSystem"] ?? "")
+            LabeledContent("Imported", value: evidence.importedAt.formatted(date: .abbreviated, time: .standard))
+            if evidence.transcriptAvailable {
+                Text("Transcript captured")
+            } else {
+                Text(EvaluationImportedLabels.transcriptMissing)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(evidence.warnings, id: \.self) { warning in
+                Text(warning).font(.callout).foregroundStyle(.secondary)
+            }
+            if evidence.sourceKind == .captureBundle, store.connectedFeatureAuthorization == nil {
+                Button("Authorize Connected Feature example…") { isChoosingProject = true }
+            }
+        }
+        .fileImporter(
+            isPresented: $isChoosingProject,
+            allowedContentTypes: [UTType(filenameExtension: "xcodeproj") ?? .folder, .folder],
+            allowsMultipleSelection: false
+        ) { result in
+            do {
+                guard let url = try result.get().first else { return }
+                let granted = url.startAccessingSecurityScopedResource()
+                defer { if granted { url.stopAccessingSecurityScopedResource() } }
+                let projectRoot = url.pathExtension == "xcodeproj" ? url.deletingLastPathComponent() : url
+                let xcodeproj = url.pathExtension == "xcodeproj"
+                    ? url
+                    : projectRoot.appending(path: "ConnectedFeature.xcodeproj")
+                try store.authorizeConnectedFeature(projectRoot: projectRoot, xcodeproj: xcodeproj)
+            } catch {
+                store.notice = error.localizedDescription
+            }
+        }
+    }
+
+    private var sourceTitle: String {
+        switch evidence.sourceKind {
+        case .captureBundle: "Foundation Evals capture folder"
+        case .appleEvaluationResult: "Apple evaluation result"
+        case .appleTranscript: "Apple transcript"
+        case .unsupportedJSON: "Unsupported JSON"
+        }
     }
 }
 
@@ -160,6 +242,7 @@ private struct RunStatusBadge: View {
     let run: EvaluationRun
 
     private var title: LocalizedStringResource {
+        if run.importedEvidence != nil { return "Inspection only" }
         if run.cancelled { return "Cancelled" }
         if run.stoppedEarly { return "Stopped early" }
         if run.errorCount > 0 { return "Completed with issues" }

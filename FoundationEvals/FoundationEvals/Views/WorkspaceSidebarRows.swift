@@ -52,6 +52,12 @@ struct RunSidebarRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                if run.importedEvidence != nil {
+                    Text(EvaluationImportedLabels.inspectionOnly)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
         }
         .accessibilityElement(children: .combine)

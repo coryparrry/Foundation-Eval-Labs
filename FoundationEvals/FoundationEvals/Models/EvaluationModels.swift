@@ -413,6 +413,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var assessments: [EvaluationAssessment]? = nil
     var selectedAssessmentID: UUID? = nil
     var subjectEvidence: EvaluationSubjectEvidenceSnapshot? = nil
+    var importedEvidence: EvaluationImportedEvidence? = nil
 
     var effectiveResults: [EvaluationSampleResult] {
         let assessment = selectedAssessment

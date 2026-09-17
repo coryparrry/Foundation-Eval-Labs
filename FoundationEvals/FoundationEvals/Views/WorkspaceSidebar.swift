@@ -11,10 +11,11 @@ struct WorkspaceSidebar: View {
     @State private var isManagingWorkspace = false
     @State private var isCreatingSuite = false
     @State private var isCreatingProject = false
+    @State private var isImportingEvidence = false
     @State private var runToDelete: EvaluationRun?
     @State private var runSearch = ""
 
-    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles }
+    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles || store.isImportingEvidence }
     private var filteredRuns: [EvaluationRun] {
         let query = runSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty ? store.runs : store.runs.filter {
@@ -72,6 +73,10 @@ struct WorkspaceSidebar: View {
             }
 
             Section("Run history · \(store.draftSuite.name)") {
+                Button("Import Evidence…", systemImage: "tray.and.arrow.down") {
+                    isImportingEvidence = true
+                }
+                .disabled(isBusy)
                 if filteredRuns.isEmpty {
                     EmptyRunHistoryRow(isSearching: !runSearch.isEmpty)
                 } else {
@@ -133,6 +138,7 @@ struct WorkspaceSidebar: View {
         .sheet(isPresented: $isCreatingSuite) { NewSuiteView(store: store) }
         .sheet(isPresented: $isCreatingProject) { WorkspaceCreationView(store: store, isProject: true) }
         .sheet(isPresented: $isManagingWorkspace) { WorkspaceManagerView(store: store) }
+        .sheet(isPresented: $isImportingEvidence) { EvidenceImportView(store: store) }
         .alert("Delete saved run?", isPresented: Binding(
             get: { runToDelete != nil }, set: { if !$0 { runToDelete = nil } }
         )) {

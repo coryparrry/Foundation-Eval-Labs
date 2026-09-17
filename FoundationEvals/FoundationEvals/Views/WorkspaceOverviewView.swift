@@ -6,9 +6,10 @@ struct WorkspaceOverviewView: View {
     @State private var loader = WorkspaceOverviewLoader()
     @State private var refresh = 0
     @State private var isCreatingSuite = false
+    @State private var isImportingEvidence = false
     @Environment(\.scenePhase) private var scenePhase
 
-    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles }
+    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles || store.isImportingEvidence }
 
     private func summary(for record: EvaluationSuiteRecord) -> SuiteOverviewSummary? {
         if record.id == store.selectedSuiteID {
@@ -69,9 +70,11 @@ struct WorkspaceOverviewView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .navigationTitle(store.selectedProject.name)
-        .toolbar {
-            Button("Refresh project", systemImage: "arrow.clockwise") { refresh += 1 }
-        }
+            .toolbar {
+                Button("Refresh project", systemImage: "arrow.clockwise") { refresh += 1 }
+                Button("Import Evidence…", systemImage: "tray.and.arrow.down") { isImportingEvidence = true }
+                    .disabled(isBusy)
+            }
         .task(id: "\(store.selectedProject.id)-\(store.selectedProject.updatedAt)-\(refresh)") {
             let values = await loader.load(project: store.selectedProject, directory: store.overviewStorageDirectory)
             guard !Task.isCancelled else { return }
@@ -79,6 +82,7 @@ struct WorkspaceOverviewView: View {
         }
         .onChange(of: scenePhase) { _, phase in if phase == .active { refresh += 1 } }
         .sheet(isPresented: $isCreatingSuite) { NewSuiteView(store: store) }
+        .sheet(isPresented: $isImportingEvidence) { EvidenceImportView(store: store) }
     }
 
     private var header: some View {

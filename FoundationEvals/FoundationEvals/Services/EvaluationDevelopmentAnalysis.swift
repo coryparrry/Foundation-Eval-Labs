@@ -165,6 +165,19 @@ enum EvaluationReleaseCheckEvaluator {
                 generatedAt: Date()
             )
         }
+        if run.importedEvidence != nil {
+            incomplete.append("Imported evidence is inspection-only and cannot pass a release check.")
+            return EvaluationReleaseCheckReport(
+                projectID: projectID,
+                suiteID: suite.id,
+                runID: run.id,
+                assessmentID: nil,
+                outcome: .incompleteOrIncompatibleEvidence,
+                summary: EvaluationImportedLabels.inspectionOnly,
+                failures: incomplete,
+                generatedAt: Date()
+            )
+        }
         if run.cancelled || run.stoppedEarly || run.results.count != run.plannedResultCount {
             incomplete.append("The run did not complete every planned sample.")
         }
