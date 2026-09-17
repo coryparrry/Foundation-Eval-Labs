@@ -112,6 +112,11 @@ struct EvaluationCompatibleJudgeClientTests {
             resolved: .init(connection: connection, apiKey: nil)
         )
         #expect(result.judgment.score == 4)
+        #expect(result.identity.reportedModelID == "judge-fixture-reported")
+        #expect(result.identity.provider == "fixture-provider")
+        #expect(result.usage?.inputTokens == 10)
+        #expect(result.usage?.outputTokens == 5)
+        #expect(fixture.completionRequestCount == 1)
 
         let request = try #require(fixture.lastCompletionRequest)
         let separator = try #require(request.range(of: "\r\n\r\n"))
@@ -809,11 +814,13 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
         let verdict = #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Supported by the saved evidence."}]}"#
         let prefix = String(verdict.prefix(20))
         let suffix = String(verdict.dropFirst(20))
+        // Each SSE event ends with a blank line. A single newline instead joins
+        // these data fields into one invalid JSON payload (including [DONE]).
         let events = [
             #"data: {"choices":[{"delta":{"content":\#(Self.jsonString(prefix))}}],"model":"judge-fixture-reported"}"#,
             #"data: {"choices":[{"delta":{"content":\#(Self.jsonString(suffix))}}],"provider":"fixture-provider","usage":{"prompt_tokens":10,"completion_tokens":5}}"#,
             "data: [DONE]",
-        ].joined(separator: "\n") + "\n"
+        ].joined(separator: "\n\n") + "\n\n"
         let body = Data(events.utf8)
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         connection.send(
