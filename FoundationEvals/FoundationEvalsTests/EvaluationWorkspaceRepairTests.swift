@@ -4,146 +4,128 @@ import Testing
 
 @MainActor
 struct EvaluationWorkspaceRepairTests {
-    @Test func unreadablePartialIsRemovedWhenLegacyExists() throws {
+    @Test(arguments: [false, true])
+    func completedMigrationNeverRestoresARevokedApproval(missing: Bool) throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let target = directory.appending(path: "target", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-
-        let validState = EvaluationSuiteLocalState()
-        let validData = try CanonicalJSON.data(for: validState)
-        try validData.write(to: directory.appending(path: "state.json"), options: .atomic)
-        try Data("{ not valid state".utf8).write(to: target.appending(path: "state.json"), options: .atomic)
-
-        EvaluationWorkspacePersistence.removeUnreadablePartialStateIfRetryable(
-            supportDirectory: directory,
-            target: target
-        )
-
-        #expect(!FileManager.default.fileExists(atPath: target.appending(path: "state.json").path))
-        #expect(try Data(contentsOf: directory.appending(path: "state.json")) == validData)
-    }
-
-    @Test func validDestinationIsPreserved() throws {
-        let directory = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let target = directory.appending(path: "target", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-
-        var state = EvaluationSuiteLocalState()
-        state.humanCorrections = []
-        let validData = try CanonicalJSON.data(for: state)
-        try validData.write(to: directory.appending(path: "state.json"), options: .atomic)
-        try validData.write(to: target.appending(path: "state.json"), options: .atomic)
-
-        EvaluationWorkspacePersistence.removeUnreadablePartialStateIfRetryable(
-            supportDirectory: directory,
-            target: target
-        )
-
-        #expect(try Data(contentsOf: target.appending(path: "state.json")) == validData)
-    }
-
-    @Test func corruptDestinationWithoutLegacyIsPreserved() throws {
-        let directory = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let target = directory.appending(path: "target", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-
-        let corrupt = Data("{ not valid state".utf8)
-        try corrupt.write(to: target.appending(path: "state.json"), options: .atomic)
-
-        EvaluationWorkspacePersistence.removeUnreadablePartialStateIfRetryable(
-            supportDirectory: directory,
-            target: target
-        )
-
-        #expect(try Data(contentsOf: target.appending(path: "state.json")) == corrupt)
-    }
-
-    @Test func corruptDestinationIsReplacedFromValidLegacyAndHeals() throws {
-        let directory = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        var suite = EvaluationSuite()
-        suite.id = UUID(uuidString: "00000000-0000-0000-0000-000000000401")!
-        let legacyData = try CanonicalJSON.data(for: EvaluationSuiteLocalState())
+        let suite = EvaluationSuite()
+        let legacy = try approvedState(for: suite)
+        let legacyData = try CanonicalJSON.data(for: legacy)
         try CanonicalJSON.data(for: suite).write(to: directory.appending(path: "suite.json"))
         try legacyData.write(to: directory.appending(path: "state.json"))
 
-        let fixture = existingCatalog(legacySuiteID: suite.id)
-        try EvaluationWorkspacePersistence.save(fixture.catalog, in: directory)
-        let target = EvaluationWorkspacePersistence.suiteDirectory(
-            supportDirectory: directory,
-            projectID: fixture.legacyProjectID,
-            suiteID: suite.id
-        )
-        try EvaluationWorkspacePersistence.createSuiteDirectories(at: target)
-        try CanonicalJSON.data(for: suite).write(to: target.appending(path: "suite.json"))
-        let corrupt = Data("{ not valid state".utf8)
-        try corrupt.write(to: target.appending(path: "state.json"))
+        let initial = EvaluationStore(supportDirectory: directory)
+        #expect(initial.activeBaselineApproval?.id == legacy.baselineApprovals[0].id)
+        let target = suiteDirectory(store: initial, support: directory)
+        #expect(EvaluationWorkspacePersistence.legacyStateWasMigrated(in: target))
+        let stateURL = target.appending(path: "state.json")
+        var revoked = legacy
+        revoked.baselineApprovals[0].revokedAt = Date()
+        try CanonicalJSON.data(for: revoked).write(to: stateURL, options: .atomic)
+        #expect(EvaluationStore(supportDirectory: directory).activeBaselineApproval == nil)
 
-        let bootstrap = try EvaluationWorkspacePersistence.bootstrap(
-            in: directory,
-            legacySuite: suite
-        )
+        let damaged = Data("{ newer state was damaged".utf8)
+        if missing { try FileManager.default.removeItem(at: stateURL) }
+        else { try damaged.write(to: stateURL, options: .atomic) }
 
-        #expect(bootstrap.notice != nil)
-        #expect(bootstrap.catalog.migratedLegacyStorageAt != nil)
-        #expect(try Data(contentsOf: target.appending(path: "state.json")) == legacyData)
-        // The undecodable bytes are preserved beside the repaired file.
-        let preserved = try FileManager.default.contentsOfDirectory(atPath: target.path)
-            .filter { $0.hasPrefix("state-unreadable-") }
-        #expect(preserved.count == 1)
-        #expect(try Data(contentsOf: target.appending(path: preserved[0])) == corrupt)
-        // The legacy source is left unchanged for recovery.
+        for _ in 0..<2 {
+            let reloaded = EvaluationStore(supportDirectory: directory)
+            #expect(reloaded.activeBaselineApproval == nil)
+            #expect(reloaded.suiteLocalState.humanCorrections.isEmpty)
+            #expect(reloaded.notice != nil)
+            #expect(reloaded.selectedSuiteID == initial.selectedSuiteID)
+            #expect(reloaded.selectedProjectID == initial.selectedProjectID)
+            if missing { #expect(!FileManager.default.fileExists(atPath: stateURL.path)) }
+            else { #expect(try Data(contentsOf: stateURL) == damaged) }
+        }
         #expect(try Data(contentsOf: directory.appending(path: "state.json")) == legacyData)
-
-        let repeatBootstrap = try EvaluationWorkspacePersistence.bootstrap(
-            in: directory,
-            legacySuite: suite
-        )
-        #expect(repeatBootstrap.notice == nil)
-        #expect(repeatBootstrap.catalog.migratedLegacyStorageAt == bootstrap.catalog.migratedLegacyStorageAt)
-        #expect(try Data(contentsOf: target.appending(path: "state.json")) == legacyData)
     }
 
-    @Test func corruptDestinationWithCorruptLegacyIsLeftForLoadNotice() throws {
+    @Test(arguments: [false, true])
+    func damagedExistingStateIsNeverReplacedEvenWithoutAMigrationMarker(corruptLegacy: Bool) throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-
-        var suite = EvaluationSuite()
-        suite.id = UUID(uuidString: "00000000-0000-0000-0000-000000000402")!
+        let suite = EvaluationSuite()
+        let legacy = corruptLegacy ? Data("{ legacy damaged".utf8)
+            : try CanonicalJSON.data(for: approvedState(for: suite))
         try CanonicalJSON.data(for: suite).write(to: directory.appending(path: "suite.json"))
-        try Data("{ legacy not valid".utf8).write(to: directory.appending(path: "state.json"))
-
-        let fixture = existingCatalog(legacySuiteID: suite.id)
-        try EvaluationWorkspacePersistence.save(fixture.catalog, in: directory)
+        try legacy.write(to: directory.appending(path: "state.json"))
+        let bootstrap = try EvaluationWorkspacePersistence.bootstrap(in: directory, legacySuite: suite)
         let target = EvaluationWorkspacePersistence.suiteDirectory(
-            supportDirectory: directory,
-            projectID: fixture.legacyProjectID,
-            suiteID: suite.id
+            supportDirectory: directory, projectID: bootstrap.catalog.selectedProjectID, suiteID: suite.id
         )
-        try EvaluationWorkspacePersistence.createSuiteDirectories(at: target)
-        try CanonicalJSON.data(for: suite).write(to: target.appending(path: "suite.json"))
-        let corruptDestination = Data("{ destination not valid".utf8)
-        try corruptDestination.write(to: target.appending(path: "state.json"))
+        try FileManager.default.removeItem(at: target.appending(path: EvaluationWorkspacePersistence.legacyStateMigrationFilename))
+        let damaged = Data("{ current state contains later decisions".utf8)
+        let stateURL = target.appending(path: "state.json")
+        try damaged.write(to: stateURL, options: .atomic)
 
-        let bootstrap = try EvaluationWorkspacePersistence.bootstrap(
-            in: directory,
-            legacySuite: suite
-        )
+        _ = try EvaluationWorkspacePersistence.bootstrap(in: directory, legacySuite: suite)
+        let loaded = EvaluationWorkspaceStatePersistence.loadSuiteLocalState(from: stateURL)
+        #expect(loaded.notice != nil)
+        #expect(loaded.state.baselineApprovals.isEmpty)
+        #expect(try Data(contentsOf: stateURL) == damaged)
+        #expect(try Data(contentsOf: directory.appending(path: "state.json")) == legacy)
+        let backups = try FileManager.default.contentsOfDirectory(atPath: target.path)
+            .filter { $0.hasPrefix("state-unreadable-") }
+        #expect(backups.count == 1)
+        #expect(try Data(contentsOf: target.appending(path: #require(backups.first))) == damaged)
+    }
 
-        // Nothing to recover from: the destination is preserved untouched and no
-        // repair notice is claimed. loadSuiteLocalState still preserves and
-        // reports the undecodable file on load.
-        #expect(bootstrap.notice == nil)
-        #expect(bootstrap.catalog.migratedLegacyStorageAt == nil)
-        #expect(try Data(contentsOf: target.appending(path: "state.json")) == corruptDestination)
-        #expect(
-            try FileManager.default.contentsOfDirectory(atPath: target.path)
-                .filter { $0.hasPrefix("state-unreadable-") }.isEmpty
+    @Test func omittedFirstMigrationRecoversBytesWithoutRestoringAuthority() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suite = EvaluationSuite()
+        let legacy = try approvedState(for: suite)
+        let legacyData = try CanonicalJSON.data(for: legacy)
+        try CanonicalJSON.data(for: suite).write(to: directory.appending(path: "suite.json"))
+        try legacyData.write(to: directory.appending(path: "state.json"))
+        let initial = EvaluationStore(supportDirectory: directory)
+        let target = suiteDirectory(store: initial, support: directory)
+        let stateURL = target.appending(path: "state.json")
+        // Simulate a workspace created by an older version that omitted state.json.
+        try FileManager.default.removeItem(at: stateURL)
+        try FileManager.default.removeItem(at: target.appending(path: EvaluationWorkspacePersistence.legacyStateMigrationFilename))
+
+        for _ in 0..<2 {
+            let reloaded = EvaluationStore(supportDirectory: directory)
+            #expect(reloaded.selectedSuiteID == initial.selectedSuiteID)
+            #expect(reloaded.activeBaselineApproval == nil)
+            #expect(reloaded.suiteLocalState.reviewedJudgeExamples.isEmpty)
+            #expect(reloaded.notice?.contains("quarantined") == true)
+            #expect(try Data(contentsOf: stateURL) == legacyData)
+        }
+        let recovery = EvaluationWorkspacePersistence.legacyStateRecoveryURL(for: legacyData, in: target)
+        #expect(try Data(contentsOf: recovery) == legacyData)
+
+        // Independently reviewed decisions are writable without promoting the old snapshot.
+        var reviewed = EvaluationSuiteLocalState()
+        var approval = legacy.baselineApprovals[0]
+        approval.id = UUID()
+        approval.approvedAt = Date()
+        approval.note = "Independently reviewed after recovery"
+        reviewed.baselineApprovals = [approval]
+        try CanonicalJSON.data(for: reviewed).write(to: stateURL, options: .atomic)
+        let loaded = EvaluationWorkspaceStatePersistence.loadSuiteLocalState(from: stateURL)
+        #expect(loaded.notice == nil)
+        #expect(loaded.state.baselineApprovals.first?.id == approval.id)
+        #expect(try Data(contentsOf: recovery) == legacyData)
+    }
+
+    @Test func readOnlyRecoveryInspectionDoesNotWriteFiles() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let data = try CanonicalJSON.data(for: approvedState(for: EvaluationSuite()))
+        let stateURL = directory.appending(path: "state.json")
+        try data.write(to: stateURL)
+        try data.write(to: EvaluationWorkspacePersistence.legacyStateRecoveryURL(for: data, in: directory))
+        let before = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+        let loaded = EvaluationWorkspaceStatePersistence.loadSuiteLocalState(
+            from: stateURL, preserveUnreadable: false
         )
+        #expect(loaded.notice != nil)
+        #expect(loaded.state.baselineApprovals.isEmpty)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == before)
+        #expect(try Data(contentsOf: stateURL) == data)
     }
 
     @Test func duplicateImportWithStaleRevisionStaysIdempotent() async throws {
@@ -153,31 +135,17 @@ struct EvaluationWorkspaceRepairTests {
         let id = UUID()
         let data = Data("duplicate reference".utf8)
         let first = try await store.importAttachment(
-            id: id,
-            name: "reference.txt",
-            mediaType: "text/plain",
-            data: data,
+            id: id, name: "reference.txt", mediaType: "text/plain", data: data,
             expectedRevision: store.suiteRevision
         )
         let staleRevision = first.revision
-        // Advance the suite revision with an unrelated attachment.
         _ = try await store.importAttachment(
-            id: UUID(),
-            name: "other.txt",
-            mediaType: "text/plain",
-            data: Data("other".utf8),
+            id: UUID(), name: "other.txt", mediaType: "text/plain", data: Data("other".utf8),
             expectedRevision: store.suiteRevision
         )
         #expect(store.suiteRevision != staleRevision)
-
-        // A retry of already-imported bytes stays idempotent even with a stale
-        // revision, reporting the current revision (MCP maps this to
-        // "duplicate"). See attachmentToolsAreBoundedAndNaturallyIdempotent.
         let duplicate = try await store.importAttachment(
-            id: id,
-            name: "reference.txt",
-            mediaType: "text/plain",
-            data: data,
+            id: id, name: "reference.txt", mediaType: "text/plain", data: data,
             expectedRevision: staleRevision
         )
         #expect(duplicate.duplicate)
@@ -186,59 +154,19 @@ struct EvaluationWorkspaceRepairTests {
         #expect(store.suite.attachments.count == 2)
     }
 
-    private func existingCatalog(
-        legacySuiteID: UUID
-    ) -> (
-        catalog: EvaluationWorkspaceCatalog,
-        legacyProjectID: UUID
-    ) {
-        let date = Date(timeIntervalSince1970: 1_700_000_000)
-        let selectedProjectID = UUID(uuidString: "00000000-0000-0000-0000-000000000411")!
-        let selectedSuiteID = UUID(uuidString: "00000000-0000-0000-0000-000000000412")!
-        let legacyProjectID = UUID(uuidString: "00000000-0000-0000-0000-000000000413")!
-        let selectedProject = EvaluationProject(
-            id: selectedProjectID,
-            name: "Selected project",
-            createdAt: date,
-            updatedAt: date,
-            archivedAt: nil,
-            repository: nil,
-            selectedSuiteID: selectedSuiteID,
-            suites: [EvaluationSuiteRecord(
-                id: selectedSuiteID,
-                name: "Selected suite",
-                createdAt: date,
-                updatedAt: date,
-                archivedAt: nil,
-                repositoryDefinitionPath: nil,
-                lastRepositoryRevision: nil
-            )]
-        )
-        let legacyProject = EvaluationProject(
-            id: legacyProjectID,
-            name: "Legacy project",
-            createdAt: date,
-            updatedAt: date,
-            archivedAt: nil,
-            repository: nil,
-            selectedSuiteID: legacySuiteID,
-            suites: [EvaluationSuiteRecord(
-                id: legacySuiteID,
-                name: "Legacy suite",
-                createdAt: date,
-                updatedAt: date,
-                archivedAt: nil,
-                repositoryDefinitionPath: nil,
-                lastRepositoryRevision: nil
-            )]
-        )
-        return (
-            EvaluationWorkspaceCatalog(
-                selectedProjectID: selectedProjectID,
-                projects: [selectedProject, legacyProject],
-                migratedLegacyStorageAt: nil
-            ),
-            legacyProjectID
+    private func approvedState(for suite: EvaluationSuite) throws -> EvaluationSuiteLocalState {
+        var state = EvaluationSuiteLocalState()
+        state.baselineApprovals = [.init(
+            id: UUID(), runID: UUID(), assessmentID: nil, suiteRevision: "legacy",
+            approvedAt: Date(timeIntervalSince1970: 1_700_000_000), note: "legacy approval",
+            revokedAt: nil, scoringContract: try EvaluationScoringContract(suite: suite)
+        )]
+        return state
+    }
+
+    private func suiteDirectory(store: EvaluationStore, support: URL) -> URL {
+        EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: support, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
         )
     }
 

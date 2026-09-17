@@ -8,6 +8,7 @@ struct EvaluationWorkspaceBootstrap {
 
 enum EvaluationWorkspacePersistence {
     static let catalogFilename = "workspace-v1.json"
+    static let legacyStateMigrationFilename = "legacy-state-migration-v1.complete"
 
     static func bootstrap(
         in supportDirectory: URL,
@@ -39,13 +40,13 @@ enum EvaluationWorkspacePersistence {
                 projectID: matchingProject.id,
                 suiteID: matchingSuite.id
             )
-            // A catalog means the original workspace migration already ran. Repair
-            // only the local-state omission; recopying stale suite, attachment, or
-            // run files into an established workspace would broaden the recovery.
+            // An older app may have omitted local state during the first migration.
+            // Recover that omission once, without granting historical decisions authority.
+            // Never replace a damaged established destination with a legacy snapshot.
             do {
                 try createSuiteDirectories(at: target)
-                let migrated = try copyLegacyStateIfMissing(from: supportDirectory, to: target)
-                guard migrated else {
+                let recovered = try copyLegacyStateIfMissing(from: supportDirectory, to: target)
+                guard recovered else {
                     return EvaluationWorkspaceBootstrap(catalog: catalog)
                 }
 
@@ -56,13 +57,14 @@ enum EvaluationWorkspacePersistence {
                 try save(repairedCatalog, in: supportDirectory)
                 return EvaluationWorkspaceBootstrap(
                     catalog: repairedCatalog,
-                    notice: legacyMigrationNotice
+                    notice: "An older local-state snapshot was recovered for inspection. Its approvals, corrections, reviewed examples and experiment decisions are not active; review the retained run evidence again before approving a baseline."
                 )
             } catch {
-                removeUnreadablePartialStateIfRetryable(supportDirectory: supportDirectory, target: target)
+                // Atomic writes have no application-owned partial destination to remove.
+                // In particular, a decode failure is not proof that we own the file.
                 return EvaluationWorkspaceBootstrap(
                     catalog: catalog,
-                    notice: "Legacy state could not be repaired: \(error.localizedDescription)"
+                    notice: "Legacy state could not be recovered: \(error.localizedDescription)"
                 )
             }
         }
@@ -103,6 +105,9 @@ enum EvaluationWorkspacePersistence {
         var migrated = false
         if legacySuite != nil {
             migrated = try copyLegacyStorage(from: supportDirectory, to: target)
+            if FileManager.default.fileExists(atPath: target.appending(path: "state.json").path) {
+                try markLegacyStateMigrated(in: target)
+            }
         }
         let suiteURL = target.appending(path: "suite.json")
         if !FileManager.default.fileExists(atPath: suiteURL.path) {
@@ -207,74 +212,43 @@ enum EvaluationWorkspacePersistence {
         return copied
     }
 
+    static func legacyStateWasMigrated(in directory: URL) -> Bool {
+        FileManager.default.fileExists(atPath: directory.appending(path: legacyStateMigrationFilename).path)
+    }
+
+    private static func markLegacyStateMigrated(in directory: URL) throws {
+        try Data("1\n".utf8).write(
+            to: directory.appending(path: legacyStateMigrationFilename), options: .atomic
+        )
+    }
+
+    /// The immutable recovery copy doubles as a content-addressed quarantine marker.
+    /// A subsequently saved, independently reviewed state has different bytes.
+    static func legacyStateRecoveryURL(for data: Data, in directory: URL) -> URL {
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return directory.appending(path: "state-legacy-recovered-\(digest).json")
+    }
+
     private static func copyLegacyStateIfMissing(from source: URL, to target: URL) throws -> Bool {
-        let legacy = source.appending(path: "state.json")
+        guard !legacyStateWasMigrated(in: target) else { return false }
         let destination = target.appending(path: "state.json")
-        guard FileManager.default.fileExists(atPath: legacy.path) else { return false }
-        if !FileManager.default.fileExists(atPath: destination.path) {
-            do {
-                try FileManager.default.copyItem(at: legacy, to: destination)
-            } catch {
-                // Remove a partial copy so the next launch retries. The legacy
-                // source is left unchanged for recovery.
-                try? FileManager.default.removeItem(at: destination)
-                throw error
-            }
-            return true
-        }
-        // The destination exists. A decodable destination always wins, even over
-        // a newer legacy file. But an undecodable destination (for example a
-        // partial copy left by an earlier failed repair) would otherwise block
-        // every later launch on the existence check above, so it is replaced
-        // from legacy when legacy itself decodes. When both sides are
-        // undecodable there is nothing to recover from, and the destination is
-        // left for loadSuiteLocalState to preserve and report.
-        let destinationData = try? Data(contentsOf: destination)
-        let destinationDecodes = destinationData.map {
-            (try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: $0)) != nil
-        } ?? false
-        guard !destinationDecodes,
-              let legacyData = try? Data(contentsOf: legacy),
-              (try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: legacyData)) != nil else {
+        if FileManager.default.fileExists(atPath: destination.path) {
+            // Even unreadable current bytes may contain newer revocations. Preserve them.
+            try markLegacyStateMigrated(in: target)
             return false
         }
-        if let destinationData {
-            preserveUnreadableState(at: destination, data: destinationData)
+        let legacy = source.appending(path: "state.json")
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return false }
+        let data = try Data(contentsOf: legacy)
+        let recovery = legacyStateRecoveryURL(for: data, in: target)
+        // Establish quarantine before making the historical bytes loadable. A failed
+        // backup leaves the canonical destination untouched; a failed copy is retryable.
+        if !FileManager.default.fileExists(atPath: recovery.path) {
+            try data.write(to: recovery, options: .atomic)
         }
-        do {
-            try FileManager.default.removeItem(at: destination)
-            try FileManager.default.copyItem(at: legacy, to: destination)
-        } catch {
-            // Remove a partial replacement so the next launch retries. The
-            // legacy source is left unchanged for recovery.
-            try? FileManager.default.removeItem(at: destination)
-            throw error
-        }
+        try data.write(to: destination, options: .atomic)
+        try markLegacyStateMigrated(in: target)
         return true
-    }
-
-    /// Best-effort backup beside an unreadable state file, mirroring the
-    /// preservation that loadSuiteLocalState performs on decode failure.
-    private static func preserveUnreadableState(at url: URL, data: Data) {
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let backup = url.deletingLastPathComponent()
-            .appending(path: "state-unreadable-\(digest).json", directoryHint: .notDirectory)
-        guard !FileManager.default.fileExists(atPath: backup.path) else { return }
-        try? data.write(to: backup, options: .atomic)
-    }
-
-    /// Removes a repair leftover so a later launch retries the copy. Only an
-    /// unreadable destination is removed, and only when the legacy source
-    /// still exists. A valid pre-existing destination is always preserved, and
-    /// loadSuiteLocalState tolerates decode failure, so removal stays recoverable.
-    static func removeUnreadablePartialStateIfRetryable(supportDirectory: URL, target: URL) {
-        let legacyURL = supportDirectory.appending(path: "state.json")
-        let destinationURL = target.appending(path: "state.json")
-        guard FileManager.default.fileExists(atPath: legacyURL.path),
-              FileManager.default.fileExists(atPath: destinationURL.path),
-              let data = try? Data(contentsOf: destinationURL),
-              (try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: data)) == nil else { return }
-        try? FileManager.default.removeItem(at: destinationURL)
     }
 }
 
@@ -293,60 +267,5 @@ enum EvaluationWorkspaceError: LocalizedError, Sendable {
         case .invalidRepositoryPath: "The repository suite path must be a safe relative path."
         case .repositoryConflict: "The repository suite changed outside Foundation Evals. Review or reload it before saving."
         }
-    }
-}
-
-enum EvaluationRepositoryInspector {
-    static func snapshot(rootPath: String) async -> EvaluationRepositorySnapshot {
-        await Task.detached(priority: .utility) {
-            let capturedAt = Date()
-            do {
-                let commit = try runGit(["rev-parse", "HEAD"], rootPath: rootPath)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let status = try runGit(["status", "--porcelain=v1", "--untracked-files=normal"], rootPath: rootPath)
-                return EvaluationRepositorySnapshot(
-                    rootPath: rootPath,
-                    commit: commit.isEmpty ? nil : commit,
-                    isDirty: !status.isEmpty,
-                    capturedAt: capturedAt,
-                    error: nil
-                )
-            } catch {
-                return EvaluationRepositorySnapshot(
-                    rootPath: rootPath,
-                    commit: nil,
-                    isDirty: nil,
-                    capturedAt: capturedAt,
-                    error: error.localizedDescription
-                )
-            }
-        }.value
-    }
-
-    private static func runGit(_ arguments: [String], rootPath: String) throws -> String {
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/git")
-        process.arguments = ["-C", rootPath] + arguments
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = output
-        try process.run()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            let message = String(decoding: data, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw EvaluationRepositoryInspectionError.git(message.isEmpty ? "Git inspection failed." : message)
-        }
-        return String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .newlines)
-    }
-}
-
-private enum EvaluationRepositoryInspectionError: LocalizedError {
-    case git(String)
-
-    var errorDescription: String? {
-        switch self { case .git(let message): message }
     }
 }

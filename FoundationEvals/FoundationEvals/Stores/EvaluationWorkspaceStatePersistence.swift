@@ -19,11 +19,22 @@ enum EvaluationWorkspaceStatePersistence {
         from url: URL,
         preserveUnreadable: Bool = true
     ) -> (state: EvaluationSuiteLocalState, notice: String?) {
+        let directory = url.deletingLastPathComponent()
         guard FileManager.default.fileExists(atPath: url.path) else {
-            return (EvaluationSuiteLocalState(), nil)
+            let notice = EvaluationWorkspacePersistence.legacyStateWasMigrated(in: directory)
+                ? "Previously migrated suite state is missing. Historical approvals were not restored; review the saved evidence again."
+                : nil
+            return (EvaluationSuiteLocalState(), notice)
         }
         do {
             let data = try Data(contentsOf: url)
+            let recovery = EvaluationWorkspacePersistence.legacyStateRecoveryURL(for: data, in: directory)
+            guard !FileManager.default.fileExists(atPath: recovery.path) else {
+                return (
+                    EvaluationSuiteLocalState(),
+                    "Older suite state is quarantined as \(recovery.lastPathComponent). Its approvals and review decisions are inactive. Review the retained evidence again before approving a baseline."
+                )
+            }
             return (try CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: data), nil)
         } catch {
             let preservation = preserveUnreadable
