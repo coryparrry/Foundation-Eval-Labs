@@ -321,9 +321,7 @@ struct EvaluationSampleResult: Identifiable, Codable, Sendable {
 
     func scorerSummary(scoringMode: ScoringMode) -> String {
         if let identity = judgeIdentity {
-            if identity.requestedModelID == "none" {
-                return identity.connectionName
-            }
+            if identity.requestedModelID == "none" { return identity.connectionName }
             var text = identity.displayName
             if let reported = identity.reportedModelID,
                !identity.requestedModelID.isEmpty,
@@ -417,13 +415,38 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var subjectEvidence: EvaluationSubjectEvidenceSnapshot? = nil
 
     var effectiveResults: [EvaluationSampleResult] {
-        guard let assessment = selectedAssessment else { return results }
-        let samples = assessment.samples.reduce(into: [UUID: EvaluationSampleAssessment]()) {
+        let assessment = selectedAssessment
+        guard assessment != nil || selectedAssessmentID != nil else { return results }
+        let samples = (assessment?.samples ?? []).reduce(into: [UUID: EvaluationSampleAssessment]()) {
             if $0[$1.sampleID] == nil { $0[$1.sampleID] = $1 }
         }
         return results.map { original in
-            guard let assessed = samples[original.id] else { return original }
             var result = original
+            // A selected assessment is a separate score set, never a patch over
+            // old scores. Retain original subject evidence, not old judge evidence.
+            result.judgeIdentity = assessment?.judge
+            result.judgeReasoningText = nil
+            result.judgeCost = nil
+            guard let assessed = samples[original.id] else {
+                result.status = .unscored
+                result.score = nil
+                let message = assessment == nil
+                    ? "The selected assessment is unavailable. Original results are preserved separately."
+                    : "This sample was not assessed by the selected assessment. Original results are preserved separately."
+                result.rationale = message
+                result.judgeTrace = nil
+                result.judgeErrorCategory = assessment == nil ? "assessmentUnavailable" : "assessmentNotAttempted"
+                result.judgeErrorMessage = message
+                result.judgeUsage = nil
+                result.judgeDurationMilliseconds = nil
+                return result
+            }
+            // Initial-run telemetry belongs to that same score set. A later
+            // reassessment has no per-sample cost/reasoning fields to substitute.
+            if assessment?.origin == .initialRun {
+                result.judgeReasoningText = original.judgeReasoningText
+                result.judgeCost = original.judgeCost
+            }
             result.status = assessed.status
             result.score = assessed.score
             result.rationale = assessed.rationale
@@ -432,7 +455,6 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
             result.judgeErrorMessage = assessed.errorMessage
             result.judgeUsage = assessed.usage
             result.judgeDurationMilliseconds = assessed.durationMilliseconds
-            result.judgeIdentity = assessment.judge
             return result
         }
     }
@@ -483,9 +505,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
         results.isEmpty ? 0 : results.map(\.durationMilliseconds).reduce(0, +) / Double(results.count)
     }
 
-    var totalDuration: Duration {
-        .seconds(completedAt.timeIntervalSince(startedAt))
-    }
+    var totalDuration: Duration { .seconds(completedAt.timeIntervalSince(startedAt)) }
 
     var totalTokens: Int {
         effectiveResults.reduce(0) { total, result in
