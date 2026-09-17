@@ -21,6 +21,7 @@ private final class Locked<Value>: @unchecked Sendable {
     }
 }
 
+@Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct QuickActionsPillViewModelTests {
     private func stub(
@@ -36,40 +37,29 @@ struct QuickActionsPillViewModelTests {
         }
     }
 
-    private func waitFor(
-        _ condition: () -> Bool,
-        timeout: Duration = .milliseconds(2_000)
-    ) async -> Bool {
-        let deadline = ContinuousClock.now + timeout
-        while !condition() {
-            guard ContinuousClock.now < deadline else { return false }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return true
-    }
-
     @Test func disabledActionDoesNotStartARequest() async {
         let model = QuickActionsPillViewModel(generate: stub())
         let action = QuickActionsPillAction(
             id: "explain", title: "Explain", systemImage: "questionmark.bubble",
             busyLabel: "Explaining", isEnabled: false
         )
-        model.select(action, source: "Some prompt")
+        #expect(model.select(action, source: "Some prompt") == nil)
         #expect(model.phase == .idle)
         #expect(model.request == nil)
     }
 
     @Test func emptySourceExplainsInsteadOfGenerating() async {
         let model = QuickActionsPillViewModel(generate: stub())
-        model.select(QuickActionsPromptCatalog.primary[0], source: "   ")
+        #expect(model.select(QuickActionsPromptCatalog.primary[0], source: "   ") == nil)
         #expect(model.phase == .idle)
         #expect(model.errorMessage != nil)
     }
 
-    @Test func selectStreamsPreviewThenKeepCommitsAndResets() async {
+    @Test func selectStreamsPreviewThenKeepCommitsAndResets() async throws {
         let model = QuickActionsPillViewModel(generate: stub(chunks: ["revised", "revised prompt"]))
-        model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt")
-        #expect(await waitFor({ model.phase == .result }))
+        let task = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt"))
+        await task.value
+        #expect(model.phase == .result)
         #expect(model.previewText == "revised prompt")
 
         let kept = model.keep()
@@ -79,17 +69,18 @@ struct QuickActionsPillViewModelTests {
         #expect(model.request == nil)
     }
 
-    @Test func dismissClearsPreviewWithoutCommitting() async {
+    @Test func dismissClearsPreviewWithoutCommitting() async throws {
         let model = QuickActionsPillViewModel(generate: stub())
-        model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt")
-        #expect(await waitFor({ model.phase == .result }))
+        let task = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt"))
+        await task.value
+        #expect(model.phase == .result)
         model.dismiss()
         #expect(model.phase == .idle)
         #expect(model.previewText == nil)
         #expect(model.prompt.isEmpty)
     }
 
-    @Test func retryRegeneratesAfterResult() async {
+    @Test func retryRegeneratesAfterResult() async throws {
         let calls = Locked(0)
         let model = QuickActionsPillViewModel(generate: { _, _ in
             let attempt = calls.withLock { value in
@@ -101,14 +92,17 @@ struct QuickActionsPillViewModelTests {
                 continuation.finish()
             }
         })
-        model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt")
-        #expect(await waitFor({ model.phase == .result }))
-        model.retry()
-        #expect(await waitFor({ model.previewText == "attempt 2" }))
+        let first = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt"))
+        await first.value
+        #expect(model.phase == .result)
+        let second = try #require(model.retry())
+        await second.value
+        #expect(model.phase == .result)
+        #expect(model.previewText == "attempt 2")
         #expect(calls.withLock { $0 } == 2)
     }
 
-    @Test func submitUsesCustomPromptRequest() async {
+    @Test func submitUsesCustomPromptRequest() async throws {
         let seenID = Locked<String?>(nil)
         let seenPrompt = Locked<String?>(nil)
         let didCall = Locked(false)
@@ -122,18 +116,52 @@ struct QuickActionsPillViewModelTests {
             }
         })
         model.prompt = "  Make it shorter  "
-        model.submit(source: "Original prompt")
-        #expect(await waitFor({ model.phase == .result }))
+        let task = try #require(model.submit(source: "Original prompt"))
+        await task.value
+        #expect(model.phase == .result)
         #expect(didCall.withLock { $0 })
         #expect(seenID.withLock { $0 } == "prompt")
         #expect(seenPrompt.withLock { $0 } == "Make it shorter")
     }
 
-    @Test func generationFailureReturnsToIdleWithMessage() async {
+    @Test func generationFailureReturnsToIdleWithMessage() async throws {
         let model = QuickActionsPillViewModel(generate: stub(chunks: [], error: QuickActionsStubError.generationFailed))
-        model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt")
-        #expect(await waitFor({ model.errorMessage != nil }))
+        let task = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "Original prompt"))
+        await task.value
+        #expect(model.errorMessage != nil)
         #expect(model.phase == .idle)
         #expect(model.previewText == nil)
+    }
+
+    @Test func dismissedSessionCannotPublishIntoANewSession() async throws {
+        let pair = AsyncThrowingStream<String, Error>.makeStream()
+        let model = QuickActionsPillViewModel(generate: { _, source in
+            if source == "A" { return pair.stream }
+            return AsyncThrowingStream { continuation in
+                continuation.yield("B revision")
+                continuation.finish()
+            }
+        })
+        let first = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "A"))
+        model.dismiss()
+        let second = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "B"))
+        pair.continuation.yield("obsolete A revision")
+        pair.continuation.finish()
+        await first.value
+        await second.value
+        #expect(model.previewText == "B revision")
+        #expect(model.keep() == "B revision")
+    }
+
+    @Test func cancellingCompletionHandleDoesNotLeaveBusyState() async throws {
+        let pair = AsyncThrowingStream<String, Error>.makeStream()
+        let model = QuickActionsPillViewModel(generate: { _, _ in pair.stream })
+        let task = try #require(model.select(QuickActionsPromptCatalog.primary[0], source: "A"))
+        task.cancel()
+        await task.value
+        #expect(model.phase == .idle)
+        #expect(!model.isBusy)
+        #expect(model.previewText == nil)
+        pair.continuation.finish()
     }
 }
