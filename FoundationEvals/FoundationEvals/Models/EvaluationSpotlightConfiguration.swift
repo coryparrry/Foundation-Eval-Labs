@@ -151,6 +151,30 @@ struct EvaluationSpotlightSearchConfiguration: Codable, Equatable, Sendable {
         if broadPaths.contains(path) { return true }
 
         let components = canonicalURL.pathComponents
+        let broadSystemPaths = broadPaths.subtracting([
+            "/",
+            "/Users",
+            "/Volumes",
+            FileManager.default.homeDirectoryForCurrentUser
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .path,
+            FileManager.default.temporaryDirectory
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .path
+        ])
+        for broadPath in broadSystemPaths {
+            let broadComponents = URL(fileURLWithPath: broadPath, isDirectory: true)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .pathComponents
+            guard components.count >= broadComponents.count else { continue }
+            if components.prefix(broadComponents.count).elementsEqual(broadComponents) {
+                return true
+            }
+        }
+
         guard components.count == 3 else { return false }
         return components[1] == "Users" || components[1] == "Volumes"
     }

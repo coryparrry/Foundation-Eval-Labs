@@ -26,6 +26,7 @@ CANCEL_DELAY_SECONDS = 20.0
 
 ROUTES = {
     "/generate",
+    "/tokenize",
     "/text",
     "/guided",
     "/guided/simple",
@@ -99,6 +100,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self.serve_tool_execution(request)
             return
 
+        if self.path == "/tokenize":
+            self.serve_tokenization(request)
+            return
+
         if self.path == "/redirect":
             self.send_response(307)
             self.send_header("Location", f"http://{HOST}:{PORT}/text")
@@ -149,6 +154,17 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 self.send_error(500, "Could not append fixture request log")
                 return None
         return request
+
+    def serve_tokenization(self, request: dict[str, Any]) -> None:
+        # The fixture returns a stable count so client tests can verify the
+        # tokenizer handshake without depending on a model vocabulary.
+        body = json.dumps({"inputTokens": 7}, separators=(",", ":")).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def serve_tool_execution(self, request: dict[str, Any]) -> None:
         if request.get("toolName") != "lookupOrder":

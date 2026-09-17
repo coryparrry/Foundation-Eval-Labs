@@ -524,8 +524,14 @@ final class EvaluationStore {
         guard let index = workspace.projects.firstIndex(where: { $0.id == id }) else {
             throw EvaluationWorkspaceError.missingProject
         }
+        let previousWorkspace = workspace
         mutation(&workspace.projects[index])
-        try persistWorkspace()
+        do {
+            try persistWorkspace()
+        } catch {
+            workspace = previousWorkspace
+            throw error
+        }
     }
 
     private func persistWorkspace() throws {
@@ -767,22 +773,52 @@ final class EvaluationStore {
               let sample = assessment.samples.first(where: { $0.sampleID == sampleID }) else {
             throw EvaluationStoreError.resourceNotFound("Judgment")
         }
+        if collectAsJudgeCheck {
+            guard let subjectSample = run.results.first(where: { $0.id == sampleID }) else {
+                throw EvaluationStoreError.invalidSuite(
+                    "Only a complete saved subject response can become a known-good judge check."
+                )
+            }
+            guard subjectSample.hasCompleteSubjectEvidenceForJudging else {
+                throw EvaluationStoreError.invalidSuite(
+                    "Only a complete saved subject response can become a known-good judge check."
+                )
+            }
+            guard correctedStatus == .passed || correctedStatus == .failed else {
+                throw EvaluationStoreError.invalidSuite(
+                    "A known-good judge check must use a passed or failed corrected status."
+                )
+            }
+            guard assessment.promptVersion == EvaluationRunner.judgePromptVersion else {
+                throw EvaluationStoreError.invalidSuite(
+                    "Only an assessment using the current judge prompt can become a known-good judge check."
+                )
+            }
+        }
         let correction = EvaluationHumanCorrection(
             id: UUID(), runID: runID, assessmentID: assessmentID, sampleID: sampleID,
             originalStatus: sample.status, originalScore: sample.score,
             correctedStatus: correctedStatus, correctedScore: correctedScore,
             reason: trimmed, reviewer: reviewer, createdAt: Date()
         )
-        suiteLocalState.humanCorrections.append(correction)
+        var candidateState = suiteLocalState
+        candidateState.humanCorrections.append(correction)
         if collectAsJudgeCheck {
-            suiteLocalState.reviewedJudgeExamples.append(.init(
+            candidateState.reviewedJudgeExamples.append(.init(
                 id: UUID(), sourceRunID: runID, sourceAssessmentID: assessmentID,
                 sampleID: sampleID, expectedStatus: correctedStatus, reason: trimmed, createdAt: Date(),
                 scoringContract: assessment.scoringContract,
                 subjectEvidenceDigest: assessment.subjectEvidenceDigest ?? run.subjectEvidence?.digest
             ))
         }
-        try persistSuiteLocalState()
+        let previousState = suiteLocalState
+        suiteLocalState = candidateState
+        do {
+            try persistSuiteLocalState()
+        } catch {
+            suiteLocalState = previousState
+            throw error
+        }
     }
 
     func runJudgeChecks(connectionID: UUID) {
@@ -1705,25 +1741,131 @@ final class EvaluationStore {
         blank.criteria = ""
         blank.scoringMode = .review
         blank.cases = [EvaluationCase(name: "Case 1", prompt: "", expected: "")]
-        try persistRepositoryDefinitionIfLinked(blank)
-        try CanonicalJSON.data(for: blank).write(
-            to: suiteDirectory.appending(path: "suite.json"), options: .atomic
+
+        let previousSuite = suite
+        let previousDraft = draftSuite
+        let previousWorkspace = workspace
+        let previousSelection = selection
+        let previousNotice = notice
+        let previousDraftSaveFailed = draftSaveFailed
+        let suiteURL = suiteDirectory.appending(path: "suite.json")
+        let catalogURL = supportDirectory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        let repositoryURL = EvaluationWorkspacePersistence.repositoryDefinitionURL(
+            project: selectedProject,
+            suite: selectedSuiteRecord
         )
+
+        // Read every file that may be changed before creating directories or writing
+        // the reset candidate. A failed snapshot is a no-op for the transaction.
+        let previousSuiteFile = try snapshotFile(at: suiteURL)
+        let previousCatalogFile = try snapshotFile(at: catalogURL)
+        let previousRepositoryFile = try repositoryURL.map { try snapshotFile(at: $0) }
+
+        let blankDefinition = EvaluationSuiteDefinition(suite: blank)
+        let blankDefinitionData = try CanonicalJSON.data(for: blankDefinition)
+        let blankDefinitionRevision = try EvaluationWorkspacePersistence.definitionRevision(blankDefinition)
+        var repositoryData: Data?
+        if repositoryURL != nil {
+            if let previousRepositoryFile, previousRepositoryFile.existed {
+                guard let previousData = previousRepositoryFile.data else {
+                    throw EvaluationStoreError.persistence("The linked repository definition could not be read.")
+                }
+                let existing = try CanonicalJSON.decode(EvaluationSuiteDefinition.self, from: previousData)
+                let existingRevision = try EvaluationWorkspacePersistence.definitionRevision(existing)
+                if existingRevision != selectedSuiteRecord.lastRepositoryRevision,
+                   existingRevision != blankDefinitionRevision {
+                    throw EvaluationWorkspaceError.repositoryConflict
+                }
+                if existingRevision != blankDefinitionRevision {
+                    repositoryData = blankDefinitionData
+                }
+            } else {
+                repositoryData = blankDefinitionData
+            }
+        }
+
+        let commitDate = Date()
+        var committedWorkspace = workspace
+        guard let projectIndex = committedWorkspace.projects.firstIndex(where: { $0.id == selectedProjectID }),
+              let suiteIndex = committedWorkspace.projects[projectIndex].suites.firstIndex(where: { $0.id == selectedSuiteID }) else {
+            throw EvaluationWorkspaceError.missingSuite
+        }
+        committedWorkspace.projects[projectIndex].suites[suiteIndex].name = blank.name
+        committedWorkspace.projects[projectIndex].suites[suiteIndex].updatedAt = commitDate
+        if repositoryURL != nil {
+            committedWorkspace.projects[projectIndex].suites[suiteIndex].lastRepositoryRevision = blankDefinitionRevision
+        }
+
+        let blankSuiteData = try CanonicalJSON.data(for: blank)
+        let committedCatalogData = try CanonicalJSON.data(for: committedWorkspace)
+        do {
+            try FileManager.default.createDirectory(at: suiteDirectory, withIntermediateDirectories: true)
+            if let repositoryURL, let repositoryData {
+                try FileManager.default.createDirectory(
+                    at: repositoryURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try repositoryData.write(to: repositoryURL, options: .atomic)
+            }
+            try blankSuiteData.write(to: suiteURL, options: .atomic)
+            try committedCatalogData.write(to: catalogURL, options: .atomic)
+
+            // Publish in-memory state only after all persistent pieces commit.
+            workspace = committedWorkspace
+            suite = blank
+            draftSuite = blank
+        } catch {
+            var rollbackErrors: [String] = []
+            do { try restoreFile(previousCatalogFile) }
+            catch { rollbackErrors.append("workspace catalog: \(error.localizedDescription)") }
+            do { try restoreFile(previousSuiteFile) }
+            catch { rollbackErrors.append("suite metadata: \(error.localizedDescription)") }
+            if let previousRepositoryFile {
+                do { try restoreFile(previousRepositoryFile) }
+                catch { rollbackErrors.append("repository definition: \(error.localizedDescription)") }
+            }
+
+            suite = previousSuite
+            draftSuite = previousDraft
+            workspace = previousWorkspace
+            selection = previousSelection
+            notice = previousNotice
+            draftSaveFailed = previousDraftSaveFailed
+            if !rollbackErrors.isEmpty {
+                throw EvaluationStoreError.persistence(
+                    "\(error.localizedDescription) Rollback also failed for \(rollbackErrors.joined(separator: "; "))."
+                )
+            }
+            if let storeError = error as? EvaluationStoreError { throw storeError }
+            if let workspaceError = error as? EvaluationWorkspaceError { throw workspaceError }
+            throw EvaluationStoreError.persistence(error.localizedDescription)
+        }
+
         pendingPromptEdits.removeAll()
         draftSaveTask?.cancel()
         draftSaveTask = nil
         isDraftSavePending = false
-        suite = blank
-        draftSuite = blank
         draftSaveFailed = false
         selection = .suite
         // Old drafts must not reappear after relaunch, even when the new suite is incomplete.
         if FileManager.default.fileExists(atPath: draftSuiteURL.path) {
-            try FileManager.default.removeItem(at: draftSuiteURL)
+            do {
+                try FileManager.default.removeItem(at: draftSuiteURL)
+            } catch {
+                notice = "The suite was reset, but its older draft could not be removed: \(error.localizedDescription)"
+            }
         }
-        try updateSelectedSuiteRecord { record in
-            record.name = blank.name
-            record.updatedAt = Date()
+        do {
+            let validatedDirectory = try EvaluationAttachmentStorage.validatedStorageDirectory(attachmentsDirectory)
+            for url in try FileManager.default.contentsOfDirectory(
+                at: validatedDirectory,
+                includingPropertiesForKeys: nil
+            ) {
+                try FileManager.default.removeItem(at: url)
+            }
+        } catch {
+            let cleanupNotice = "The suite was reset, but some private attachment files could not be removed: \(error.localizedDescription)"
+            notice = [notice, cleanupNotice].compactMap { $0 }.joined(separator: "\n")
         }
     }
 
@@ -1807,10 +1949,33 @@ final class EvaluationStore {
         data: Data,
         expectedRevision: String
     ) async throws -> EvaluationAttachmentImportResult {
-        if let existing = suite.attachments.first(where: { $0.id == id }) {
-            let digest = Self.sha256(data)
-            guard existing.sha256 == digest, existing.name == name else {
+        // Duplicate fast-path: re-preparing and comparing performs no mutation,
+        // so it intentionally skips requireIdle/requireRevision and stays usable
+        // with a stale revision or while a run is in progress. This keeps
+        // at-least-once callers (notably MCP upload retries) idempotent: a retry
+        // of an already-imported attachment reports "duplicate" with the current
+        // revision instead of stale_revision (see
+        // attachmentToolsAreBoundedAndNaturallyIdempotent). The selection guard
+        // and post-prepare re-read still apply: if the suite changes mid-prepare
+        // we report a conflict, and if the attachment disappears we report
+        // not_found (surfaced to MCP as not_found).
+        if suite.attachments.contains(where: { $0.id == id }) {
+            let projectID = selectedProjectID
+            let suiteID = selectedSuiteID
+            let prepared = try await Task.detached(priority: .userInitiated) {
+                try Self.prepareAttachment(id: id, name: name, mediaType: mediaType, data: data)
+            }.value
+            guard selectedProjectID == projectID, selectedSuiteID == suiteID else {
+                throw EvaluationStoreError.resourceConflict("The selected workspace changed during attachment import.")
+            }
+            guard let existing = suite.attachments.first(where: { $0.id == id }) else {
+                throw EvaluationStoreError.resourceNotFound("Attachment")
+            }
+            guard existing == prepared.attachment else {
                 throw EvaluationStoreError.resourceConflict("Attachment ID already exists with different content.")
+            }
+            if existing.kind == .image {
+                _ = try attachmentData(id: existing.id)
             }
             return EvaluationAttachmentImportResult(
                 attachment: existing,
@@ -1911,6 +2076,22 @@ final class EvaluationStore {
 
     func refreshModelMetadata() {
         onDeviceContextSizes.invalidate()
+        guard draftSuite.modelConfiguration.provider == .coreAI,
+              let loadedCoreAI,
+              draftSuite.modelConfiguration.coreAISettings == loadedCoreAIConfiguration else { return }
+        do {
+            let current = try CoreAIModelLoader.resourceIdentity(
+                for: draftSuite.modelConfiguration.coreAISettings
+            )
+            guard current != loadedCoreAI.resourceIdentity else { return }
+            self.loadedCoreAI = nil
+            coreAILoadStatus = .failed(
+                "The Core AI model resource files changed. Load the model again before running."
+            )
+        } catch {
+            self.loadedCoreAI = nil
+            coreAILoadStatus = .failed(error.localizedDescription)
+        }
     }
 
     @discardableResult
@@ -2057,6 +2238,11 @@ final class EvaluationStore {
                 ) { [weak self] result, completed, total in
                     await self?.updateProgress(runID: id, result: result, completed: completed, total: total)
                 }
+                if self.activeRun?.id == id,
+                   self.activeRun?.cancellationRequested == true {
+                    run.cancelled = true
+                    run.terminationReason = "cancelled"
+                }
                 run.projectID = ownerProjectID
                 run.suiteDefinition = EvaluationSuiteDefinition(suite: suiteSnapshot)
                 run.subjectEvidence = evidence
@@ -2148,7 +2334,45 @@ final class EvaluationStore {
             let url = try EvaluationAttachmentStorage.storedFileURL(
                 filename: storedFilename, attachmentID: attachment.id, in: attachmentsDirectory
             )
-            return (attachment, try Data(contentsOf: url))
+            // Read metadata before opening the file, then cap the stream at the
+            // image limit plus one byte. This bounds a replacement-file race as
+            // well as an honest oversized file.
+            let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+            guard values.isRegularFile == true else {
+                throw EvaluationStoreError.persistence("The stored attachment is not a regular file.")
+            }
+            guard let reportedByteCount = values.fileSize else {
+                throw EvaluationStoreError.persistence("The stored attachment size could not be determined.")
+            }
+            guard reportedByteCount <= Self.maximumImageBytes else {
+                throw EvaluationStoreError.persistence(
+                    "The stored attachment exceeds the maximum allowed image size. Remove it and import it again."
+                )
+            }
+            guard reportedByteCount == attachment.byteCount else {
+                throw EvaluationStoreError.persistence(
+                    "The stored attachment failed its size or checksum validation. Remove it and import it again."
+                )
+            }
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            let data = try EvaluationAttachmentStorage.readBoundedData(
+                reportedByteCount: reportedByteCount,
+                maximumBytes: Self.maximumImageBytes,
+                tooLargeError: {
+                    EvaluationStoreError.persistence(
+                        "The stored attachment exceeds the maximum allowed image size. Remove it and import it again."
+                    )
+                },
+                readChunk: { try handle.read(upToCount: $0) }
+            )
+            guard data.count == attachment.byteCount,
+                  Self.sha256(data) == attachment.sha256 else {
+                throw EvaluationStoreError.persistence(
+                    "The stored attachment failed its size or checksum validation. Remove it and import it again."
+                )
+            }
+            return (attachment, data)
         } catch {
             if let storeError = error as? EvaluationStoreError { throw storeError }
             throw EvaluationStoreError.persistence(error.localizedDescription)
@@ -2225,11 +2449,7 @@ final class EvaluationStore {
     ) -> String? {
         let configuration = candidate.modelConfiguration
         let capabilities = selectedModelCapabilities(for: candidate)
-        let validateCapabilities = includeModelReadiness || configuration.provider != .coreAI
-            || coreAIModel(for: candidate) != nil
-        if includeModelReadiness, !modelStatus(for: candidate).isAvailable {
-            return modelStatus(for: candidate).detail
-        }
+        let validateCapabilities = configuration.provider != .coreAI || coreAIModel(for: candidate) != nil
         if let issue = configuration.customizationSettings.validationIssue { return issue }
         if configuration.reasoningLevel == .custom,
            configuration.customizationSettings.reasoningName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2424,7 +2644,9 @@ final class EvaluationStore {
             includesModelJudge: candidate.needsModelJudge,
             sharedToolOutputReserve: candidate.sharedToolOutputReserve
         )
-        if modelContextSize > 0, allocation.effectiveInputLimit < 512 {
+        let contextSizeIsAuthoritative = candidate.modelConfiguration.provider != .onDevice
+            || !onDeviceContextSizes.usedFallback(for: configuration)
+        if contextSizeIsAuthoritative, modelContextSize > 0, allocation.effectiveInputLimit < 512 {
             return "Reduce the response limit or reference-tool call limit so at least 512 input tokens remain."
         }
         if candidate.attachments.count > Self.maximumAttachments {
@@ -2758,8 +2980,13 @@ final class EvaluationStore {
         }
         for item in prepared {
             if let existing = suite.attachments.first(where: { $0.id == item.attachment.id }) {
-                guard existing.sha256 == item.attachment.sha256, existing.name == item.attachment.name else {
+                guard existing == item.attachment else {
                     throw EvaluationStoreError.resourceConflict("Attachment ID already exists with different content.")
+                }
+                if existing.kind == .image {
+                    // Matching image metadata is not sufficient for a duplicate:
+                    // validate the private bytes before accepting batch imports.
+                    _ = try attachmentData(id: existing.id)
                 }
             }
         }
@@ -2790,7 +3017,14 @@ final class EvaluationStore {
             try commitSuite(candidate)
             draftSuite.attachments = candidate.attachments
         } catch {
-            for url in writtenURLs { try? FileManager.default.removeItem(at: url) }
+            let suiteURL = suiteDirectory.appending(path: "suite.json")
+            let referencedFilenames = (try? CanonicalJSON.decode(
+                EvaluationSuite.self,
+                from: Data(contentsOf: suiteURL)
+            )).map { Set($0.attachments.compactMap(\.storedFilename)) } ?? []
+            for url in writtenURLs where !referencedFilenames.contains(url.lastPathComponent) {
+                try? FileManager.default.removeItem(at: url)
+            }
             if let storeError = error as? EvaluationStoreError { throw storeError }
             throw EvaluationStoreError.persistence(error.localizedDescription)
         }
@@ -2811,25 +3045,56 @@ final class EvaluationStore {
             throw EvaluationStoreError.invalidSuite(issue)
         }
         let canonicalChanged = candidate != suite
+        let previousSuite = suite
+        let previousWorkspace = workspace
+        let suiteURL = suiteDirectory.appending(path: "suite.json")
+        let repositoryURL = EvaluationWorkspacePersistence.repositoryDefinitionURL(
+            project: selectedProject,
+            suite: selectedSuiteRecord
+        )
+        // Snapshot existing files with throwing reads before any directory or
+        // persistence mutation. An unreadable existing file must abort safely.
+        let previousSuiteFile = try snapshotFile(at: suiteURL)
+        let previousRepositoryFile = try repositoryURL.map { try snapshotFile(at: $0) }
+        let catalogURL = supportDirectory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        let previousCatalogFile = try snapshotFile(at: catalogURL)
         do {
             try EvaluationWorkspacePersistence.createSuiteDirectories(at: suiteDirectory)
             try persistRepositoryDefinitionIfLinked(candidate)
             let data = try CanonicalJSON.data(for: candidate)
-            try data.write(to: suiteDirectory.appending(path: "suite.json"), options: .atomic)
-            suite = candidate
-            draftSaveFailed = false
+            try data.write(to: suiteURL, options: .atomic)
             try updateSelectedSuiteRecord { record in
                 record.name = candidate.name
                 record.updatedAt = Date()
             }
-        } catch let error as EvaluationStoreError {
-            draftSaveFailed = true
-            throw error
-        } catch let error as EvaluationWorkspaceError {
-            draftSaveFailed = true
-            throw error
+            suite = candidate
+            draftSaveFailed = false
         } catch {
+            suite = previousSuite
+            workspace = previousWorkspace
+            var rollbackErrors: [String] = []
+            do {
+                try restoreFile(previousCatalogFile)
+            } catch {
+                rollbackErrors.append("workspace catalog: \(error.localizedDescription)")
+            }
+            do {
+                try restoreFile(previousSuiteFile)
+            } catch {
+                rollbackErrors.append("suite metadata: \(error.localizedDescription)")
+            }
+            if let previousRepositoryFile {
+                do { try restoreFile(previousRepositoryFile) }
+                catch { rollbackErrors.append("repository definition: \(error.localizedDescription)") }
+            }
             draftSaveFailed = true
+            if !rollbackErrors.isEmpty {
+                throw EvaluationStoreError.persistence(
+                    "\(error.localizedDescription) Rollback also failed for \(rollbackErrors.joined(separator: "; "))."
+                )
+            }
+            if let storeError = error as? EvaluationStoreError { throw storeError }
+            if let workspaceError = error as? EvaluationWorkspaceError { throw workspaceError }
             throw EvaluationStoreError.persistence(error.localizedDescription)
         }
 
@@ -3028,6 +3293,39 @@ final class EvaluationStore {
         } catch {
             throw EvaluationStoreError.persistence(error.localizedDescription)
         }
+    }
+
+    private func snapshotFile(at url: URL) throws -> PersistedFileSnapshot {
+        let existed = FileManager.default.fileExists(atPath: url.path)
+        guard existed else { return PersistedFileSnapshot(url: url, existed: false, data: nil) }
+        do {
+            return PersistedFileSnapshot(url: url, existed: true, data: try Data(contentsOf: url))
+        } catch {
+            throw EvaluationStoreError.persistence(
+                "Could not read the existing file before saving: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func restoreFile(_ snapshot: PersistedFileSnapshot) throws {
+        if snapshot.existed {
+            guard let data = snapshot.data else {
+                throw EvaluationStoreError.persistence("The saved file snapshot is incomplete.")
+            }
+            try FileManager.default.createDirectory(
+                at: snapshot.url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: snapshot.url, options: .atomic)
+            return
+        }
+
+        guard FileManager.default.fileExists(atPath: snapshot.url.path) else { return }
+        let values = try snapshot.url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isRegularFile == true || values.isSymbolicLink == true else {
+            throw EvaluationStoreError.persistence("A newly created path is not a regular file.")
+        }
+        try FileManager.default.removeItem(at: snapshot.url)
     }
 
     private func persistJudgeConnections(_ connections: [EvaluationJudgeConnection]) throws {
@@ -3334,6 +3632,12 @@ private struct PreparedAttachment: Sendable {
     var attachment: EvaluationAttachment
     var imageData: Data?
     var truncated: Bool
+}
+
+private struct PersistedFileSnapshot {
+    let url: URL
+    let existed: Bool
+    let data: Data?
 }
 
 private struct ActiveRunRecord: Codable, Sendable {

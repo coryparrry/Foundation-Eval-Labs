@@ -589,12 +589,18 @@
 		FE0000000000000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
-			requirement = {kind = exactVersion; version = 2.9.6; };
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.6;
+			};
 		};
 		FE0000000000000000000013 /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/PostHog/posthog-ios.git";
-			requirement = {kind = exactVersion; version = 3.71.4; };
+			requirement = {
+				kind = exactVersion;
+				version = 3.71.4;
+			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 

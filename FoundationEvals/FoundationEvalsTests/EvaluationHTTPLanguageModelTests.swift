@@ -41,6 +41,45 @@ struct EvaluationHTTPLanguageModelTests {
         }
     }
 
+    @Test func customProviderTokenizerEndpointUsesTheSameLoopbackRules() {
+        var configuration = EvaluationCustomProviderConfiguration()
+        configuration.tokenizerEndpoint = "https://127.0.0.1:19096/tokenize"
+        #expect(configuration.validationIssue?.contains("tokenizer endpoint") == true)
+
+        configuration.tokenizerEndpoint = "http://127.0.0.1:17873/tokenize"
+        #expect(configuration.validationIssue?.contains("reserved") == true)
+
+        configuration.tokenizerEndpoint = "http://127.0.0.1:19096/tokenize"
+        #expect(configuration.validationIssue == nil)
+        #expect(configuration.validatedTokenizerEndpoint?.absoluteString == configuration.tokenizerEndpoint)
+    }
+
+    @Test func portableTokenEstimateDoesNotUndercountUTF8Bytes() async throws {
+        let text = "ASCII, cafe\u{301}, \u{4F60}\u{597D}, \u{1F642}"
+        let count = try await EvaluationPortablePromptInputTokenCounter().tokenCount(forText: text)
+
+        #expect(count == text.utf8.count)
+    }
+
+    @Test func tokenizerResponseIsRejectedWhileStreamingPastItsLimit() async {
+        let bytes = AsyncStream<UInt8> { continuation in
+            for byte in Data("four".utf8) { continuation.yield(byte) }
+            continuation.finish()
+        }
+
+        do {
+            _ = try await EvaluationHTTPLanguageModelExecutor.boundedData(
+                from: bytes,
+                maximumBytes: 3
+            )
+            Issue.record("Expected the tokenizer response to stop at its byte limit.")
+        } catch let error as EvaluationHTTPProviderError {
+            #expect(error.localizedDescription.contains("response exceeded 3 bytes"))
+        } catch {
+            Issue.record("Unexpected tokenizer response error: \(error)")
+        }
+    }
+
     @Test func requestEnvelopeCarriesTranscriptToolsSchemaOptionsContextAndMetadata() throws {
         let id = UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")!
         let tool = Transcript.ToolDefinition(
@@ -276,6 +315,8 @@ struct EvaluationHTTPLanguageModelTests {
         ]
         suite.modelConfiguration.provider = .customHTTP
         suite.modelConfiguration.customProviderSettings.endpoint = "http://127.0.0.1:\(fixture.port)/text"
+        suite.modelConfiguration.customProviderSettings.tokenizerEndpoint =
+            "http://127.0.0.1:\(fixture.port)/tokenize"
         suite.features.streamResponse = true
 
         let run = await EvaluationRunner().run(
@@ -285,6 +326,7 @@ struct EvaluationHTTPLanguageModelTests {
 
         #expect(run.results.count == 4)
         #expect(run.results.allSatisfy { $0.response == "Deterministic fixture stream." })
+        #expect(run.execution?.inputTokenCountingMethod == "Provider tokenizer endpoint")
         let updates = await recorder.updates
         for evaluationCase in suite.cases {
             for repetition in 1...suite.repetitions {

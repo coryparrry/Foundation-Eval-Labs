@@ -4,6 +4,46 @@ import Testing
 @testable import FoundationEvals
 
 struct EvaluationStoreRunLifecycleTests {
+    @Test(.timeLimit(.minutes(1)))
+    func cancellationWhileFinalProgressIsSuspendedMarksRunCancelled() async throws {
+        let fixture = try LifecycleCustomModelFixture()
+        defer { fixture.stop() }
+        let progressGate = FinalProgressGate()
+        var suite = EvaluationSuite()
+        suite.scoringMode = .exactMatch
+        suite.repetitions = 1
+        suite.cases = [EvaluationCase(
+            name: "Final sample",
+            prompt: "Return the fixture response.",
+            expected: "Deterministic fixture stream."
+        )]
+        suite.modelConfiguration.provider = .customHTTP
+        suite.modelConfiguration.customProviderSettings.endpoint = fixture.endpoint(path: "/text")
+
+        let task = Task {
+            await EvaluationRunner().run(
+                id: UUID(),
+                suiteRevision: "final-progress-cancellation",
+                startedAt: Date(),
+                suite: suite,
+                images: []
+            ) { _, completed, total in
+                #expect(completed == total)
+                await progressGate.suspend()
+            }
+        }
+
+        await progressGate.waitUntilSuspended()
+        task.cancel()
+        await progressGate.release()
+        let run = await task.value
+
+        #expect(run.results.count == 1)
+        #expect(run.cancelled)
+        #expect(run.terminationReason == "cancelled")
+        #expect(!run.stoppedEarly)
+    }
+
     @MainActor
     @Test(.timeLimit(.minutes(1)))
     func exactMatchRunCompletesPersistsReloadsAndAnalyzes() async throws {
@@ -140,6 +180,34 @@ struct EvaluationStoreRunLifecycleTests {
             .appending(path: "EvaluationStoreRunLifecycleTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+private actor FinalProgressGate {
+    private var isSuspended = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        isSuspended = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilSuspended() async {
+        if isSuspended { return }
+        await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
 

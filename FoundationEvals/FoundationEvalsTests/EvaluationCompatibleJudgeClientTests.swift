@@ -75,9 +75,112 @@ struct EvaluationCompatibleJudgeClientTests {
         let responseFormat = try #require(json["response_format"] as? [String: Any])
         #expect(responseFormat["type"] as? String == "json_object")
         #expect(responseFormat["json_schema"] == nil)
+        #expect(json["max_tokens"] as? Int == EvaluationCompatibleJudgeClient.portableJudgeMaxTokens)
+        #expect(json["thinking"] == nil)
+        #expect(json["stream"] as? Bool == false)
         let messages = try #require(json["messages"] as? [[String: Any]])
         let system = try #require(messages.first?["content"] as? String)
         #expect(system.localizedCaseInsensitiveContains("JSON"))
+        #expect(system.contains("\"requirements\""))
+        #expect(!system.contains("requirementN"))
+        #expect(!system.contains("Fill every requirement"))
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func deepseekCompatibleRequestKeepsThinkingAndRaisesGenerationBudget() async throws {
+        let fixture = try CompatibleJudgeFixture(mode: .sse)
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "DeepSeek judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "deepseek-flash",
+            requestTimeoutSeconds: 60
+        )
+        #expect(EvaluationCompatibleJudgeClient.usesThinkingGeneration(connection))
+        #expect(
+            EvaluationCompatibleJudgeClient.requestTimeoutSeconds(for: connection)
+                == EvaluationCompatibleJudgeClient.thinkingJudgeMinimumTimeoutSeconds
+        )
+        let suite = approvedSuite(for: connection)
+
+        let result = try await EvaluationCompatibleJudgeClient().judge(
+            response: "Response",
+            evaluationCase: suite.cases[0],
+            effectivePrompt: "Prompt",
+            suite: suite,
+            images: [],
+            toolEvidence: nil,
+            resolved: .init(connection: connection, apiKey: nil)
+        )
+        #expect(result.judgment.score == 4)
+
+        let request = try #require(fixture.lastCompletionRequest)
+        let separator = try #require(request.range(of: "\r\n\r\n"))
+        let body = Data(request[separator.upperBound...].utf8)
+        let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let thinking = try #require(json["thinking"] as? [String: Any])
+        #expect(thinking["type"] as? String == "enabled")
+        #expect(json["stream"] as? Bool == true)
+        #expect(json["max_tokens"] as? Int == EvaluationCompatibleJudgeClient.thinkingJudgeMaxTokens)
+        let responseFormat = try #require(json["response_format"] as? [String: Any])
+        #expect(responseFormat["type"] as? String == "json_object")
+        let streamOptions = try #require(json["stream_options"] as? [String: Any])
+        #expect(streamOptions["include_usage"] as? Bool == true)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func fencedJSONAndContentPartsStillDecodeAsAVerdict() async throws {
+        for mode: CompatibleJudgeFixture.Mode in [.fenced, .contentParts] {
+            let fixture = try CompatibleJudgeFixture(mode: mode)
+            defer { fixture.stop() }
+            let connection = EvaluationJudgeConnection(
+                id: UUID(), name: "Wrapped judge", kind: .localCompatible,
+                baseURL: fixture.baseURL, modelID: "judge-fixture"
+            )
+            let suite = approvedSuite(for: connection)
+            let result = try await EvaluationCompatibleJudgeClient().judge(
+                response: "Response",
+                evaluationCase: suite.cases[0],
+                effectivePrompt: "Prompt",
+                suite: suite,
+                images: [],
+                toolEvidence: nil,
+                resolved: .init(connection: connection, apiKey: nil)
+            )
+            #expect(result.judgment.score == 4)
+            fixture.stop()
+        }
+    }
+
+    @Test func jsonPayloadStripsMarkdownFences() {
+        let fenced = """
+            ```json
+            {"requirements":[{"criterionIndex":1,"score":4,"rationale":"Met."}]}
+            ```
+            """
+        #expect(
+            EvaluationCompatibleJudgeClient.jsonPayload(from: fenced)
+                == #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Met."}]}"#
+        )
+        #expect(EvaluationCompatibleJudgeClient.jsonPayload(from: "  {\"score\":1}  ") == "{\"score\":1}")
+    }
+
+    @Test func thinkingGenerationIsUsedForDeepSeekHostsAndModelIDsOnly() {
+        #expect(
+            EvaluationCompatibleJudgeClient.usesThinkingGeneration(
+                EvaluationJudgeConnection(
+                    id: UUID(), name: "DeepSeek", kind: .customCompatible,
+                    baseURL: "https://api.deepseek.com", modelID: "flash"
+                )
+            )
+        )
+        #expect(
+            !EvaluationCompatibleJudgeClient.usesThinkingGeneration(
+                EvaluationJudgeConnection(
+                    id: UUID(), name: "Local", kind: .localCompatible,
+                    baseURL: "http://127.0.0.1:11434/v1", modelID: "llama3"
+                )
+            )
+        )
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -150,9 +253,96 @@ struct EvaluationCompatibleJudgeClientTests {
             )
             Issue.record("Expected malformed judgment to fail closed.")
         } catch let error as EvaluationCompatibleJudgeError {
+            guard case let .exhausted(message, attempts) = error else {
+                Issue.record("Expected exhausted error, received \(error).")
+                return
+            }
+            #expect(!message.isEmpty)
+            #expect(attempts.count == 2)
+            #expect(attempts.allSatisfy { !$0.prompt.isEmpty })
+            #expect(attempts.allSatisfy { $0.rawResponse != nil })
+            #expect(attempts.allSatisfy { $0.validationError != nil })
             #expect(error.localizedDescription.contains("after one bounded retry"))
         }
         #expect(fixture.completionRequestCount == 2)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func oversizedResponseIsCancelledWhileStreamingAtTheConfiguredCap() async throws {
+        let fixture = try CompatibleJudgeFixture(mode: .oversized)
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Oversized judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+
+        do {
+            _ = try await EvaluationCompatibleJudgeClient().judge(
+                response: "Response",
+                evaluationCase: approvedSuite(for: connection).cases[0],
+                effectivePrompt: "Prompt",
+                suite: approvedSuite(for: connection),
+                images: [],
+                toolEvidence: nil,
+                resolved: .init(connection: connection, apiKey: nil)
+            )
+            Issue.record("Expected the oversized response to fail closed.")
+        } catch let error as EvaluationCompatibleJudgeError {
+            guard case .responseTooLarge = error else {
+                Issue.record("Expected responseTooLarge, received \(error).")
+                return
+            }
+        }
+
+        #expect(fixture.waitForOversizedConnectionClose())
+        #expect(fixture.oversizedBodyChunksSent < fixture.oversizedBodyChunkCount)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func incompleteUsageMetadataIsUnavailableAndCompleteUsageEstimatesCost() async throws {
+        let shapes: [CompatibleJudgeFixture.UsageShape] = [
+            .empty, .promptOnly, .completionOnly, .costOnly, .negative, .overflow,
+            .array, .string, .null, .missing
+        ]
+        for shape in shapes {
+            let fixture = try CompatibleJudgeFixture(mode: .usage(shape))
+            let connection = EvaluationJudgeConnection(
+                id: UUID(), name: "Usage fixture", kind: .localCompatible,
+                baseURL: fixture.baseURL, modelID: "judge-fixture",
+                inputUSDPerMillionTokens: 1, outputUSDPerMillionTokens: 2
+            )
+            let suite = approvedSuite(for: connection)
+            defer { fixture.stop() }
+            let result = try await EvaluationCompatibleJudgeClient().judge(
+                response: "Response", evaluationCase: suite.cases[0],
+                effectivePrompt: "Prompt", suite: suite, images: [],
+                toolEvidence: nil, resolved: .init(connection: connection, apiKey: nil)
+            )
+            #expect(result.judgment.score == 4)
+            #expect(result.usage == nil)
+            #expect(result.cost.availability == .unavailable)
+            #expect(result.cost.usd == nil)
+            #expect(fixture.completionRequestCount == 1)
+            fixture.stop()
+        }
+
+        let fixture = try CompatibleJudgeFixture(mode: .usage(.complete))
+        defer { fixture.stop() }
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Complete usage fixture", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture",
+            inputUSDPerMillionTokens: 1, outputUSDPerMillionTokens: 2
+        )
+        let suite = approvedSuite(for: connection)
+        let result = try await EvaluationCompatibleJudgeClient().judge(
+            response: "Response", evaluationCase: suite.cases[0],
+            effectivePrompt: "Prompt", suite: suite, images: [],
+            toolEvidence: nil, resolved: .init(connection: connection, apiKey: nil)
+        )
+        #expect(result.usage?.inputTokens == 10)
+        #expect(result.usage?.outputTokens == 5)
+        #expect(result.cost.availability == .estimated)
+        #expect(result.cost.usd == 0.00002)
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -375,9 +565,28 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
     enum Mode {
         case valid
         case malformed
+        case fenced
+        case contentParts
+        case sse
         case status(Int)
         case redirect
         case stalled
+        case oversized
+        case usage(UsageShape)
+    }
+
+    enum UsageShape {
+        case empty
+        case promptOnly
+        case completionOnly
+        case costOnly
+        case complete
+        case negative
+        case overflow
+        case array
+        case string
+        case null
+        case missing
     }
 
     private let listener: NWListener
@@ -388,11 +597,18 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
     private var requestCount = 0
     private var completionRequests: [String] = []
     private var stalledConnections: [NWConnection] = []
+    private let oversizedConnectionClosed = DispatchSemaphore(value: 0)
+    private(set) var oversizedBodyChunksSent = 0
+    private(set) var oversizedBodyChunkCount = 0
     private(set) var port: UInt16 = 0
 
     var baseURL: String { "http://127.0.0.1:\(port)/v1" }
     var completionRequestCount: Int { lock.withLock { requestCount } }
     var lastCompletionRequest: String? { lock.withLock { completionRequests.last } }
+
+    func waitForOversizedConnectionClose() -> Bool {
+        oversizedConnectionClosed.wait(timeout: .now() + 5) == .success
+    }
 
     init(mode: Mode) throws {
         self.mode = mode
@@ -426,6 +642,17 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
     }
 
     private func accept(_ connection: NWConnection) {
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            let closed: Bool
+            switch state {
+            case .cancelled, .failed(_): closed = true
+            default: closed = false
+            }
+            if case .oversized = self.mode, closed {
+                self.oversizedConnectionClosed.signal()
+            }
+        }
         connection.start(queue: queue)
         receive(connection, data: Data())
     }
@@ -446,7 +673,7 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
 
     private func respond(to request: Data, connection: NWConnection) {
         let first = String(decoding: request, as: UTF8.self).components(separatedBy: "\r\n").first ?? ""
-        let body: Data
+        var body = Data()
         if first.contains("/models") {
             body = Data(#"{"data":[{"id":"judge-fixture","supported_parameters":["response_format"],"architecture":{"input_modalities":["text"]}}]}"#.utf8)
         } else {
@@ -471,24 +698,137 @@ final class CompatibleJudgeFixture: @unchecked Sendable {
             case .stalled:
                 lock.withLock { stalledConnections.append(connection) }
                 return
-            case .valid, .redirect, .malformed:
-                let content = switch mode {
-                case .valid, .redirect:
-                    #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Supported by the saved evidence."}]}"#
+            case .oversized:
+                sendOversizedResponse(to: connection)
+                return
+            case .sse:
+                sendSSEVerdict(to: connection)
+                return
+            case .usage:
+                break
+            case .valid, .redirect, .malformed, .fenced, .contentParts:
+                let verdict = #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Supported by the saved evidence."}]}"#
+                let messageContent: Any = switch mode {
                 case .malformed:
                     #"{"requirements":[]}"#
+                case .fenced:
+                    "```json\n\(verdict)\n```"
+                case .contentParts:
+                    [["type": "text", "text": verdict]]
                 default:
-                    fatalError("Handled above")
+                    verdict
                 }
                 body = try! JSONSerialization.data(withJSONObject: [
-                    "choices": [["message": ["content": content]]],
+                    "choices": [["message": ["content": messageContent]]],
                     "model": "judge-fixture-reported",
                     "provider": "fixture-provider",
                     "usage": ["prompt_tokens": 10, "completion_tokens": 5]
                 ], options: [.sortedKeys])
             }
         }
+        if case .usage(let shape) = mode {
+            let content = #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Supported by the saved evidence."}]}"#
+            let escapedContent = String(
+                data: try! JSONSerialization.data(withJSONObject: content, options: [.fragmentsAllowed]),
+                encoding: .utf8
+            )!
+            let usage: String? = switch shape {
+            case .empty: "{}"
+            case .promptOnly: #"{"prompt_tokens":10}"#
+            case .completionOnly: #"{"completion_tokens":5}"#
+            case .costOnly: #"{"cost":0.25}"#
+            case .complete: #"{"prompt_tokens":10,"completion_tokens":5}"#
+            case .negative: #"{"prompt_tokens":-1,"completion_tokens":5}"#
+            case .overflow: #"{"prompt_tokens":9223372036854775808,"completion_tokens":5}"#
+            case .array: "[]"
+            case .string: #""bad""#
+            case .null, .missing: nil
+            }
+            let usageField: String
+            switch shape {
+            case .null:
+                usageField = ",\"usage\":null"
+            case .missing:
+                usageField = ""
+            default:
+                usageField = ",\"usage\":\(usage!)"
+            }
+            body = Data(#"{"choices":[{"message":{"content":\#(escapedContent)}}],"model":"judge-fixture-reported","provider":"fixture-provider"\#(usageField)}"#.utf8)
+        }
         send(status: 200, body: body, to: connection)
+    }
+
+    private func sendOversizedResponse(to connection: NWConnection) {
+        let chunkSize = 16 * 1_024
+        let bodySize = EvaluationCompatibleJudgeClient.maximumResponseBytes + chunkSize * 256
+        let bodyChunk = Data(repeating: 0x61, count: chunkSize)
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(bodySize)\r\nConnection: close\r\n\r\n"
+        oversizedBodyChunkCount = bodySize / chunkSize
+        connection.send(
+            content: Data(head.utf8),
+            contentContext: .defaultMessage,
+            isComplete: false,
+            completion: .contentProcessed { [weak self] error in
+                guard let self else { return }
+                guard error == nil else {
+                    self.oversizedConnectionClosed.signal()
+                    return
+                }
+                self.sendOversizedChunk(bodyChunk, remaining: self.oversizedBodyChunkCount, to: connection)
+            }
+        )
+    }
+
+    private func sendOversizedChunk(_ chunk: Data, remaining: Int, to connection: NWConnection) {
+        guard remaining > 0 else {
+            connection.send(
+                content: nil,
+                contentContext: .defaultMessage,
+                isComplete: true,
+                completion: .contentProcessed { _ in connection.cancel() }
+            )
+            return
+        }
+        connection.send(
+            content: chunk,
+            contentContext: .defaultMessage,
+            isComplete: false,
+            completion: .contentProcessed { [weak self] error in
+                guard let self else { return }
+                guard error == nil else {
+                    self.oversizedConnectionClosed.signal()
+                    return
+                }
+                self.lock.withLock { self.oversizedBodyChunksSent += 1 }
+                self.sendOversizedChunk(chunk, remaining: remaining - 1, to: connection)
+            }
+        )
+    }
+
+    private func sendSSEVerdict(to connection: NWConnection) {
+        let verdict = #"{"requirements":[{"criterionIndex":1,"score":4,"rationale":"Supported by the saved evidence."}]}"#
+        let prefix = String(verdict.prefix(20))
+        let suffix = String(verdict.dropFirst(20))
+        let events = [
+            #"data: {"choices":[{"delta":{"content":\#(Self.jsonString(prefix))}}],"model":"judge-fixture-reported"}"#,
+            #"data: {"choices":[{"delta":{"content":\#(Self.jsonString(suffix))}}],"provider":"fixture-provider","usage":{"prompt_tokens":10,"completion_tokens":5}}"#,
+            "data: [DONE]",
+        ].joined(separator: "\n") + "\n"
+        let body = Data(events.utf8)
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        connection.send(
+            content: Data(head.utf8) + body,
+            contentContext: .defaultMessage,
+            isComplete: true,
+            completion: .contentProcessed { _ in connection.cancel() }
+        )
+    }
+
+    private static func jsonString(_ value: String) -> String {
+        String(
+            data: try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
+            encoding: .utf8
+        )!
     }
 
     private func send(status: Int, body: Data, to connection: NWConnection) {

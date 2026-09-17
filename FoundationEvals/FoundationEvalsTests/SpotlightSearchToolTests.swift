@@ -61,7 +61,8 @@ struct SpotlightSearchToolTests {
             enabled: true,
             fileSource: .init(
                 enabled: true,
-                folderPath: "/tmp/foundation-evals-spotlight-fixture",
+                folderPath: FileManager.default.homeDirectoryForCurrentUser
+                    .appending(path: "Documents/foundation-evals-spotlight-fixture").path,
                 maximumResults: 7,
                 fetchedAttributes: .init(
                     presets: [.title, .textContent],
@@ -159,15 +160,32 @@ struct SpotlightSearchToolTests {
     @Test func validationRejectsBroadSystemAndOtherUserHomeScopes() {
         for path in [
             "/private", "/etc", "/var", "/usr", "/bin", "/sbin",
-            "/System/Volumes/Data", "/Users/foundation-evals-other-user",
+            "/System/Volumes/Data", "/Library", "/Users/foundation-evals-other-user",
+            "/etc/hosts", "/var/root", "/private/var/folders",
+            "/Library/Application Support", "/usr/local", "/bin/sh", "/sbin/fsck",
+            "/System/Library",
         ] {
             let url = URL(fileURLWithPath: path, isDirectory: true)
             #expect(EvaluationSpotlightSearchConfiguration.isDisallowedFileScope(url), "Expected \(path) to be rejected")
         }
 
+        for path in ["/various/projects", "/etcetera/config", "/LibraryKit/Resources"] {
+            #expect(
+                !EvaluationSpotlightSearchConfiguration.isDisallowedFileScope(
+                    URL(fileURLWithPath: path, isDirectory: true)
+                ),
+                "Expected nearby path \(path) to remain allowed"
+            )
+        }
+
         #expect(
             !EvaluationSpotlightSearchConfiguration.isDisallowedFileScope(
                 URL(fileURLWithPath: "/Users/foundation-evals-other-user/Documents/Project", isDirectory: true)
+            )
+        )
+        #expect(
+            !EvaluationSpotlightSearchConfiguration.isDisallowedFileScope(
+                URL(fileURLWithPath: "/Volumes/foundation-evals-volume/Documents/Project", isDirectory: true)
             )
         )
     }
@@ -198,7 +216,7 @@ struct SpotlightSearchToolTests {
     }
 
     @Test func runtimeBuildsWithoutSearchingAndTraceContainsOnlyMetadata() async throws {
-        let fixtureFolder = FileManager.default.temporaryDirectory
+        let fixtureFolder = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "foundation-evals-spotlight-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: fixtureFolder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fixtureFolder) }
@@ -283,7 +301,7 @@ struct SpotlightSearchToolTests {
             )
         }
 
-        let fixtureFolder = FileManager.default.temporaryDirectory
+        let fixtureFolder = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "foundation-evals-spotlight-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: fixtureFolder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fixtureFolder) }

@@ -73,6 +73,17 @@ private enum SuiteConfigurationPage: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+enum SuiteCasePickerSelection {
+    static func resolved(_ selection: UUID?, in cases: [EvaluationCase]) -> UUID? {
+        guard let selection, cases.contains(where: { $0.id == selection }) else { return nil }
+        return selection
+    }
+
+    static func resolvedOrFirst(_ selection: UUID?, in cases: [EvaluationCase]) -> UUID? {
+        resolved(selection, in: cases) ?? cases.first?.id
+    }
+}
+
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
     @State private var selectedPage = SuiteEditorPage.cases
@@ -85,6 +96,11 @@ struct SuiteEditorView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 18) {
                     SuiteOverviewHeader(store: store)
+                    if let migrationNotice = store.migrationNotice {
+                        Label(migrationNotice, systemImage: "tray.and.arrow.down")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     if selectedPage == .cases {
                         SuiteDashboardCards(store: store)
                         RunReadinessPanel(store: store)
@@ -457,21 +473,19 @@ private struct ScoringSection: View {
                         Text("Scoring target")
                             .font(.headline)
                         Spacer()
-                        Picker("Scoring case", selection: $selectedCaseID) {
+                        Picker("Scoring case", selection: scoringCaseSelection) {
                             ForEach(store.draftSuite.cases) { evaluationCase in
                                 Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
-                                    .tag(Optional(evaluationCase.id))
+                                    .tag(evaluationCase.id)
                             }
                         }
                         .accessibilitySelectionActions(
-                            store.draftSuite.cases.map { Optional($0.id) },
-                            selection: $selectedCaseID,
+                            store.draftSuite.cases.map(\.id),
+                            selection: scoringCaseSelection,
                             title: { caseID in
-                                guard let caseID,
-                                      let evaluationCase = store.draftSuite.cases.first(where: { $0.id == caseID }) else {
-                                    return "Untitled case"
-                                }
-                                return evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name
+                                let evaluationCase = store.draftSuite.cases.first(where: { $0.id == caseID })
+                                let name = evaluationCase?.name ?? ""
+                                return name.isEmpty ? "Untitled case" : name
                             }
                         )
                         .labelsHidden()
@@ -533,8 +547,21 @@ private struct ScoringSection: View {
     }
 
     private var selectedCaseIndex: Int? {
-        guard let selectedCaseID else { return nil }
-        return store.draftSuite.cases.firstIndex(where: { $0.id == selectedCaseID })
+        guard let id = SuiteCasePickerSelection.resolvedOrFirst(
+            selectedCaseID, in: store.draftSuite.cases
+        ) else { return nil }
+        return store.draftSuite.cases.firstIndex(where: { $0.id == id })
+    }
+
+    private var scoringCaseSelection: Binding<UUID> {
+        Binding(
+            get: {
+                SuiteCasePickerSelection.resolvedOrFirst(
+                    selectedCaseID, in: store.draftSuite.cases
+                ) ?? UUID()
+            },
+            set: { selectedCaseID = $0 }
+        )
     }
 
 }
@@ -628,6 +655,13 @@ private struct CasesSection: View {
     @Binding var selectedCaseID: UUID?
     @State private var isImportingCases = false
 
+    private var pickerSelection: Binding<UUID?> {
+        Binding(
+            get: { SuiteCasePickerSelection.resolved(selectedCaseID, in: store.draftSuite.cases) },
+            set: { selectedCaseID = $0 }
+        )
+    }
+
     var body: some View {
         EditorSection(
             "Test cases",
@@ -639,7 +673,8 @@ private struct CasesSection: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                Picker("Editing case", selection: $selectedCaseID) {
+                Picker("Editing case", selection: pickerSelection) {
+                    Text("Choose a case").tag(UUID?.none)
                     ForEach(store.draftSuite.cases) { evaluationCase in
                         Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
                             .tag(Optional(evaluationCase.id))
@@ -758,6 +793,8 @@ private struct EvaluationCaseEditor: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.secondary.opacity(0.2))
                     }
+                PromptQuickActionsSection(prompt: $prompt, isDisabled: isDisabled)
+                    .id(evaluationCase.id)
             }
 
             ConversationConfigurationEditor(

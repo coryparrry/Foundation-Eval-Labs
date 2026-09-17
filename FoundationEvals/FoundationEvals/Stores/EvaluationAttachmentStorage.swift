@@ -6,6 +6,25 @@ enum EvaluationAttachmentStorage {
         isImage: Bool,
         maximumBytes: Int
     ) throws -> Data {
+        try readImportFile(at: url, maximumBytes: maximumBytes) {
+            isImage ? ImportError.imageTooLarge : ImportError.fileTooLarge
+        }
+    }
+
+    nonisolated static func readCaseImportFile(
+        at url: URL,
+        maximumBytes: Int
+    ) throws -> Data {
+        try readImportFile(at: url, maximumBytes: maximumBytes) {
+            EvaluationCaseImportError.fileTooLarge(maximumBytes: maximumBytes)
+        }
+    }
+
+    private nonisolated static func readImportFile(
+        at url: URL,
+        maximumBytes: Int,
+        tooLargeError: @escaping () -> any Error
+    ) throws -> Data {
         guard url.isFileURL else { throw ImportError.notRegularLocalFile }
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
         guard values.isRegularFile == true else {
@@ -14,28 +33,72 @@ enum EvaluationAttachmentStorage {
         guard let byteCount = values.fileSize else {
             throw ImportError.unknownFileSize
         }
-        guard byteCount <= maximumBytes else {
-            throw isImage
-                ? ImportError.imageTooLarge
-                : ImportError.fileTooLarge
+        guard maximumBytes >= 0, byteCount >= 0, byteCount <= maximumBytes else {
+            throw tooLargeError()
         }
 
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
+        return try readBoundedData(
+            reportedByteCount: byteCount,
+            maximumBytes: maximumBytes,
+            tooLargeError: tooLargeError,
+            readChunk: { try handle.read(upToCount: $0) }
+        )
+    }
+
+    nonisolated static func readBoundedData(
+        reportedByteCount: Int,
+        maximumBytes: Int,
+        tooLargeError: @escaping () -> any Error,
+        readChunk: (Int) throws -> Data?
+    ) throws -> Data {
+        guard maximumBytes >= 0, reportedByteCount >= 0 else {
+            throw tooLargeError()
+        }
+        guard reportedByteCount <= maximumBytes else {
+            throw tooLargeError()
+        }
+
+        let readLimit = maximumBytes == Int.max ? Int.max : maximumBytes + 1
         var data = Data()
-        data.reserveCapacity(min(byteCount, maximumBytes))
-        while data.count <= maximumBytes {
-            let remaining = maximumBytes + 1 - data.count
-            guard let chunk = try handle.read(upToCount: min(remaining, 64 * 1_024)),
+        data.reserveCapacity(min(reportedByteCount, maximumBytes))
+        while data.count < readLimit {
+            let remaining = readLimit - data.count
+            let requested = min(remaining, 64 * 1_024)
+            guard requested > 0,
+                  let chunk = try readChunk(requested),
                   !chunk.isEmpty else { break }
+            guard chunk.count <= requested else {
+                throw tooLargeError()
+            }
             data.append(chunk)
         }
         guard data.count <= maximumBytes else {
-            throw isImage
-                ? ImportError.imageTooLarge
-                : ImportError.fileTooLarge
+            throw tooLargeError()
         }
         return data
+    }
+
+    nonisolated static func validatedStorageDirectory(_ directory: URL) throws -> URL {
+        let standardizedDirectory = directory.standardizedFileURL
+        do {
+            let values = try standardizedDirectory.resourceValues(
+                forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            )
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                throw EvaluationStoreError.persistence(
+                    "Attachment storage directory is missing, not a directory, or a symbolic link."
+                )
+            }
+        } catch let error as EvaluationStoreError {
+            throw error
+        } catch {
+            throw EvaluationStoreError.persistence(
+                "Attachment storage directory could not be accessed."
+            )
+        }
+        return standardizedDirectory
     }
 
     nonisolated static func storedFileURL(
@@ -55,7 +118,7 @@ enum EvaluationAttachmentStorage {
             throw EvaluationStoreError.persistence("Attachment storage contains an invalid filename.")
         }
 
-        let standardizedDirectory = directory.standardizedFileURL
+        let standardizedDirectory = try validatedStorageDirectory(directory)
         let canonicalDirectory = standardizedDirectory.resolvingSymlinksInPath()
         let candidate = standardizedDirectory
             .appending(path: filename, directoryHint: .notDirectory)

@@ -44,7 +44,7 @@ actor EvaluationReassessmentService {
 
         for saved in run.results {
             try Task.checkCancellation()
-            guard saved.errorCategory == nil, !saved.response.isEmpty,
+            guard saved.hasCompleteSubjectEvidenceForJudging,
                   let evaluationCase = (run.plannedCases ?? suite.cases).first(where: { $0.id == saved.caseID }) else {
                 samples.append(.init(
                     id: UUID(), sampleID: saved.id, status: .unscored, score: nil,
@@ -115,13 +115,20 @@ actor EvaluationReassessmentService {
             } catch let error as URLError where error.code == .cancelled {
                 throw CancellationError()
             } catch {
+                let errorCategory = EvaluationRunner.externalJudgeErrorCategory(error)
                 samples.append(.init(
                     id: UUID(), sampleID: saved.id, status: .unscored, score: nil,
-                    rationale: "The independent judge did not produce valid evidence.", trace: nil,
-                    errorCategory: "judgeFailure", errorMessage: error.localizedDescription,
+                    rationale: "The independent judge did not produce valid evidence.",
+                    trace: EvaluationRunner.externalJudgeFailureTrace(
+                        error,
+                        completedChecks: objective,
+                        judgedCriterionIndexes: semanticIndexes.map { $0 + 1 }
+                    ),
+                    errorCategory: errorCategory, errorMessage: error.localizedDescription,
                     usage: nil, durationMilliseconds: milliseconds(since: judgeStarted)
                 ))
                 costAvailability = .unavailable
+                if EvaluationRunner.stopsBatch(for: errorCategory) { break }
             }
         }
         let cost = costAvailability == .unavailable
@@ -159,6 +166,13 @@ actor EvaluationReassessmentService {
                 results.append(.init(
                     example: example, actualStatus: .unscored, passed: false,
                     errorMessage: source.errorMessage ?? "The reviewed example's saved evidence is missing."
+                ))
+                continue
+            }
+            guard sample.hasCompleteSubjectEvidenceForJudging else {
+                results.append(.init(
+                    example: example, actualStatus: .unscored, passed: false,
+                    errorMessage: "The reviewed example has no complete subject response to judge."
                 ))
                 continue
             }

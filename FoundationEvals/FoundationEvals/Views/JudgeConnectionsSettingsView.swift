@@ -82,7 +82,12 @@ struct JudgeConnectionsSettingsView: View {
                             Text("Use the provider slugs from OpenRouter. The order is fixed for repeatable judging.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        Stepper("Timeout: \(Int(draft.requestTimeoutSeconds)) seconds", value: $draft.requestTimeoutSeconds, in: 1...300)
+                        Stepper(
+                            "Timeout: \(Int(draft.requestTimeoutSeconds)) seconds",
+                            value: $draft.requestTimeoutSeconds,
+                            in: 1...900,
+                            step: 1
+                        )
                     }
                     if let issue = draft.validationIssue {
                         Text(issue).font(.callout).foregroundStyle(.orange)

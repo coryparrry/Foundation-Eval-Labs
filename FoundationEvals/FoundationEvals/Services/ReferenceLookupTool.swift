@@ -148,41 +148,122 @@ private enum ReferenceLookupError: LocalizedError {
     }
 }
 
+struct ReferenceToolReservation: Sendable {
+    var callIndex: Int
+    var workflowSpanID: UUID?
+}
+
 actor ReferenceToolRecorder {
+    static let maximumRecordedRejections = 4
+
     let workflowRecorder: EvaluationWorkflowRecorder?
     private let maximumCalls: Int
     private let callLimiter: (any EvaluationToolCallLimiting)?
+    private let beforeRecord: (@Sendable () async -> Void)?
     private var attemptedCallCount = 0
     private var reservedCallCount = 0
+    private var recordedRejectionCount = 0
+    private var attemptWaiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var pendingWorkflowCallIndices: Set<Int> = []
     private var traces: [EvaluationToolCallTrace] = []
     private var ephemeralOutputs: [(callIndex: Int, text: String)] = []
 
     init(
         maximumCalls: Int,
         callLimiter: (any EvaluationToolCallLimiting)? = nil,
-        workflowRecorder: EvaluationWorkflowRecorder? = nil
+        workflowRecorder: EvaluationWorkflowRecorder? = nil,
+        beforeRecord: (@Sendable () async -> Void)? = nil
     ) {
         self.workflowRecorder = workflowRecorder
         self.maximumCalls = max(1, min(maximumCalls, 4))
         self.callLimiter = callLimiter
+        self.beforeRecord = beforeRecord
     }
 
     func reserveCall() async throws -> Int {
-        attemptedCallCount += 1
+        let reservation = try await reserveCallAndBeginWorkflowSpan(parentID: nil, beginWorkflowSpan: false)
+        return reservation.callIndex
+    }
+
+    /// Reserves a call and atomically decides whether its workflow span should be retained.
+    /// The direct `reserveCall()` API intentionally remains span-free for existing callers.
+    func reserveCallAndBeginWorkflowSpan(parentID: UUID?) async throws -> ReferenceToolReservation {
+        try await reserveCallAndBeginWorkflowSpan(parentID: parentID, beginWorkflowSpan: true)
+    }
+
+    private func reserveCallAndBeginWorkflowSpan(
+        parentID: UUID?,
+        beginWorkflowSpan: Bool
+    ) async throws -> ReferenceToolReservation {
+        attemptedCallCount = attemptedCallCount == .max ? .max : attemptedCallCount + 1
+        resumeReadyAttemptWaiters()
         let callIndex = attemptedCallCount
         guard reservedCallCount < maximumCalls else {
+            let spanID = beginWorkflowSpan
+                ? beginCappedWorkflowSpanIfAvailable(parentID: parentID, callIndex: callIndex)
+                : nil
+            let error = ReferenceLookupError.callLimitReached
             recordRejectedCall(callIndex: callIndex, durationMilliseconds: 0)
-            throw ReferenceLookupError.callLimitReached
+            workflowRecorder?.finish(
+                spanID,
+                status: EvaluationWorkflowRecorder.status(for: error),
+                errorMessage: error.localizedDescription
+            )
+            throw error
         }
         reservedCallCount += 1
+        let spanID: UUID?
+        if beginWorkflowSpan, let workflowRecorder {
+            let id = workflowRecorder.begin(
+                kind: .tool,
+                title: ReferenceLookupTool.toolName,
+                parentID: parentID,
+                metadata: ["toolName": ReferenceLookupTool.toolName, "toolSource": "reference"]
+            )
+            workflowRecorder.update(id, metadata: ["callIndex": String(callIndex)])
+            pendingWorkflowCallIndices.insert(callIndex)
+            spanID = id
+        } else {
+            spanID = nil
+        }
         do {
             try await callLimiter?.beginCall()
         } catch {
             reservedCallCount -= 1
+            pendingWorkflowCallIndices.remove(callIndex)
             recordRejectedCall(callIndex: callIndex, durationMilliseconds: 0)
+            workflowRecorder?.finish(
+                spanID,
+                status: EvaluationWorkflowRecorder.status(for: error),
+                errorMessage: error.localizedDescription
+            )
             throw error
         }
-        return callIndex
+        return ReferenceToolReservation(callIndex: callIndex, workflowSpanID: spanID)
+    }
+
+    func attemptedCallTotal() -> Int {
+        attemptedCallCount
+    }
+
+    func waitUntilAttempted(_ target: Int) async {
+        guard attemptedCallCount < target else { return }
+        await withCheckedContinuation { continuation in
+            attemptWaiters.append((target: target, continuation: continuation))
+            resumeReadyAttemptWaiters()
+        }
+    }
+
+    private func resumeReadyAttemptWaiters() {
+        var ready: [CheckedContinuation<Void, Never>] = []
+        attemptWaiters.removeAll { waiter in
+            guard attemptedCallCount >= waiter.target else { return false }
+            ready.append(waiter.continuation)
+            return true
+        }
+        for continuation in ready {
+            continuation.resume()
+        }
     }
 
     func record(
@@ -190,7 +271,13 @@ actor ReferenceToolRecorder {
         results: [ReferenceSearchResult],
         output: String,
         durationMilliseconds: Double? = nil
-    ) {
+    ) async throws {
+        try Task.checkCancellation()
+        if let beforeRecord {
+            await beforeRecord()
+            try Task.checkCancellation()
+        }
+        pendingWorkflowCallIndices.remove(callIndex)
         ephemeralOutputs.append((callIndex, output))
         traces.append(
             EvaluationToolCallTrace(
@@ -204,10 +291,18 @@ actor ReferenceToolRecorder {
         )
     }
 
-    func recordRejectedCall(callIndex: Int, durationMilliseconds: Double) {
+    func recordRejectedCall(
+        callIndex: Int,
+        durationMilliseconds: Double,
+        outcome: String = "rejected",
+        evidence: String = "[Reference search rejected before producing results.]"
+    ) {
+        pendingWorkflowCallIndices.remove(callIndex)
+        guard recordedRejectionCount < Self.maximumRecordedRejections else { return }
+        recordedRejectionCount += 1
         ephemeralOutputs.append((
             callIndex,
-            "[Reference search rejected before producing results.]"
+            evidence
         ))
         traces.append(
             EvaluationToolCallTrace(
@@ -215,7 +310,7 @@ actor ReferenceToolRecorder {
                 callIndex: callIndex,
                 matchedFiles: [],
                 outputCharacterCount: 0,
-                outcome: "rejected",
+                outcome: outcome,
                 durationMilliseconds: durationMilliseconds
             )
         )
@@ -231,6 +326,24 @@ actor ReferenceToolRecorder {
             .map { "Tool call \($0.callIndex):\n\($0.text)" }
             .joined(separator: "\n\n")
         return text.isEmpty ? nil : text
+    }
+
+    private func beginCappedWorkflowSpanIfAvailable(parentID: UUID?, callIndex: Int) -> UUID? {
+        guard let workflowRecorder,
+              recordedRejectionCount + pendingWorkflowCallIndices.count < Self.maximumRecordedRejections else {
+            return nil
+        }
+        let id = workflowRecorder.begin(
+            kind: .tool,
+            title: ReferenceLookupTool.toolName,
+            parentID: parentID,
+            metadata: [
+                "toolName": ReferenceLookupTool.toolName,
+                "toolSource": "reference",
+                "callIndex": String(callIndex)
+            ]
+        )
+        return id
     }
 }
 
@@ -253,26 +366,31 @@ struct ReferenceLookupTool: Tool {
 
     func call(arguments: ReferenceLookupArguments) async throws -> String {
         let workflow = recorder.workflowRecorder
-        let spanID = workflow?.begin(kind: .tool, title: name, parentID: workflow?.activeParentID,
-            metadata: ["toolName": name, "toolSource": "reference"])
+        let started = ContinuousClock.now
+        var callIndex: Int?
+        var spanID: UUID?
+        var didRecordTrace = false
         do {
-            let started = ContinuousClock.now
-            let callIndex = try await recorder.reserveCall()
-            workflow?.update(spanID, metadata: ["callIndex": String(callIndex)])
+            let reservation = try await recorder.reserveCallAndBeginWorkflowSpan(parentID: workflow?.activeParentID)
+            let reservedCallIndex = reservation.callIndex
+            callIndex = reservedCallIndex
+            spanID = reservation.workflowSpanID
             try Task.checkCancellation()
             let query = arguments.query.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !query.isEmpty else {
                 await recorder.recordRejectedCall(
-                    callIndex: callIndex,
+                    callIndex: reservedCallIndex,
                     durationMilliseconds: Self.milliseconds(since: started)
                 )
+                didRecordTrace = true
                 throw ReferenceLookupError.emptyQuery
             }
             guard query.count <= 200 else {
                 await recorder.recordRejectedCall(
-                    callIndex: callIndex,
+                    callIndex: reservedCallIndex,
                     durationMilliseconds: Self.milliseconds(since: started)
                 )
+                didRecordTrace = true
                 throw ReferenceLookupError.queryTooLong
             }
 
@@ -287,15 +405,38 @@ struct ReferenceLookupTool: Tool {
                 }.joined(separator: "\n\n")
             }
             output = Self.boundedOutput(output)
-            await recorder.record(
-                callIndex: callIndex,
+            try await recorder.record(
+                callIndex: reservedCallIndex,
                 results: results,
                 output: output,
                 durationMilliseconds: Self.milliseconds(since: started)
             )
+            didRecordTrace = true
             workflow?.finish(spanID, metadata: ["outputBytes": String(output.utf8.count)])
             return output
+        } catch is CancellationError {
+            if let callIndex, !didRecordTrace {
+                await recorder.recordRejectedCall(
+                    callIndex: callIndex,
+                    durationMilliseconds: Self.milliseconds(since: started),
+                    outcome: "cancelled",
+                    evidence: "[Reference search cancelled before producing results.]"
+                )
+            }
+            workflow?.finish(spanID, status: .cancelled, errorMessage: "The reference search was cancelled.")
+            throw CancellationError()
         } catch {
+            if let callIndex, !didRecordTrace {
+                let wasCancelled = EvaluationWorkflowRecorder.status(for: error) == .cancelled
+                await recorder.recordRejectedCall(
+                    callIndex: callIndex,
+                    durationMilliseconds: Self.milliseconds(since: started),
+                    outcome: wasCancelled ? "cancelled" : "failed",
+                    evidence: wasCancelled
+                        ? "[Reference search cancelled before producing results.]"
+                        : "[Reference search failed before producing results.]"
+                )
+            }
             workflow?.finish(spanID, status: EvaluationWorkflowRecorder.status(for: error), errorMessage: error.localizedDescription)
             throw error
         }

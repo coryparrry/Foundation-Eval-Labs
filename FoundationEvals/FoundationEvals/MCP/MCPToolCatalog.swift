@@ -198,12 +198,14 @@ enum MCPModelCapability: String, Codable, CaseIterable, Hashable, Sendable {
 
 struct MCPCustomProviderConfiguration: Codable, Sendable {
     var endpoint: String
+    var tokenizerEndpoint: String? = nil
     var contextSize: Int
     var capabilities: [MCPModelCapability]
     var requestTimeoutSeconds: Double
 
     init(_ configuration: EvaluationCustomProviderConfiguration) {
         endpoint = configuration.endpoint
+        tokenizerEndpoint = configuration.tokenizerEndpoint
         contextSize = configuration.contextSize
         capabilities = [
             configuration.supportsVision ? .vision : nil,
@@ -218,6 +220,7 @@ struct MCPCustomProviderConfiguration: Codable, Sendable {
         let declared = Set(capabilities)
         return EvaluationCustomProviderConfiguration(
             endpoint: endpoint,
+            tokenizerEndpoint: tokenizerEndpoint,
             contextSize: contextSize,
             supportsVision: declared.contains(.vision),
             supportsGuidedGeneration: declared.contains(.guidedGeneration),
@@ -638,6 +641,10 @@ enum MCPToolCatalog {
                         properties: [
                             "endpoint": string(
                                 "Explicit http://127.0.0.1:<port> generation endpoint.",
+                                maximumLength: 2_048
+                            ),
+                            "tokenizerEndpoint": string(
+                                "Optional http://127.0.0.1:<port> endpoint for exact input-token counts.",
                                 maximumLength: 2_048
                             ),
                             "contextSize": integer(minimum: 1, maximum: 262_144),
