@@ -7,8 +7,8 @@ public enum CaptureDigest {
     }
 }
 
-enum CaptureJSONCoding {
-    static func encoder(prettyPrinted: Bool = false) -> JSONEncoder {
+public enum CaptureJSONCoding {
+    public static func encoder(prettyPrinted: Bool = false) -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = prettyPrinted
@@ -17,7 +17,7 @@ enum CaptureJSONCoding {
         return encoder
     }
 
-    static func decoder() -> JSONDecoder {
+    public static func decoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder

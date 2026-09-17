@@ -66,6 +66,10 @@ extension CaptureJSON: Codable {
         if case .null = self { return true }
         return false
     }
+
+    public func utf8Text(prettyPrinted: Bool = true) throws -> String {
+        String(decoding: try CaptureJSONCoding.encoder(prettyPrinted: prettyPrinted).encode(self), as: UTF8.self)
+    }
 }
 
 /// Distinguishes a missing output from a successful JSON `null`.

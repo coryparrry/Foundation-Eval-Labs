@@ -1,0 +1,153 @@
+{
+  "durationInMilliseconds" : 3,
+  "endTime" : "2026-09-17T19:17:18.863Z",
+  "evaluationID" : "ReceiptNativeEvaluation",
+  "evaluationInfo" : {
+    "fixture" : "controlled-receipt"
+  },
+  "reportMetadata" : {
+    "ColumnOrdering" : [
+      "Input",
+      "Response",
+      "Expected",
+      "SubjectInferenceError",
+      "EvaluatorErrors",
+      "paidTotal",
+      "ignoredDemo",
+      "penceScale"
+    ]
+  },
+  "resultID" : "19EE78CD-9DEE-4182-9681-43DA7D674255",
+  "results" : [
+    {
+      "EvaluatorErrors" : null,
+      "Expected" : "{\n  \"date\" : \"2026-09-01\",\n  \"shopName\" : \"Example Shop\",\n  \"totalPence\" : 1000\n}",
+      "ignoredDemo" : {
+        "evaluatorKind" : "custom",
+        "kind" : "ignore",
+        "rationale" : "Check ignored · Not evidence of a pass",
+        "value" : null
+      },
+      "Input" : "{\n  \"input\" : {\n    \"instructions\" : \"null\",\n    \"prompt\" : \"Example Shop\\nDate: 2026-09-01\\nSubtotal: GBP 10.00\\nTotal paid: GBP 10.00\"\n  },\n  \"output\" : {\n    \"value\" : {\n      \"date\" : \"2026-09-01\",\n      \"shopName\" : \"Example Shop\",\n      \"totalPence\" : 1000\n    }\n  }\n}",
+      "paidTotal" : {
+        "evaluatorKind" : "custom",
+        "kind" : "pass",
+        "rationale" : "Paid total matched 1000 pence",
+        "value" : true
+      },
+      "penceScale" : {
+        "evaluatorKind" : "custom",
+        "kind" : "score",
+        "rationale" : "Pence scale; not a 1-4 rubric",
+        "value" : 99
+      },
+      "Response" : {
+        "typeName" : "ReceiptOutput",
+        "value" : "{\n  \"date\" : \"2026-09-01\",\n  \"shopName\" : \"Example Shop\",\n  \"totalPence\" : 1000\n}"
+      },
+      "SubjectInferenceError" : null
+    },
+    {
+      "EvaluatorErrors" : null,
+      "Expected" : "{\n  \"date\" : \"2026-09-01\",\n  \"shopName\" : \"Example Shop\",\n  \"totalPence\" : 750\n}",
+      "ignoredDemo" : {
+        "evaluatorKind" : "custom",
+        "kind" : "ignore",
+        "rationale" : "Check ignored · Not evidence of a pass",
+        "value" : null
+      },
+      "Input" : "{\n  \"input\" : {\n    \"instructions\" : \"null\",\n    \"prompt\" : \"Example Shop\\nDate: 2026-09-01\\nSubtotal: GBP 10.00\\nDiscount: GBP 2.50\\nTotal paid: GBP 7.50\"\n  },\n  \"output\" : {\n    \"value\" : {\n      \"date\" : \"2026-09-01\",\n      \"shopName\" : \"Example Shop\",\n      \"totalPence\" : 750\n    }\n  }\n}",
+      "paidTotal" : {
+        "evaluatorKind" : "custom",
+        "kind" : "fail",
+        "rationale" : "Producer-reported check failed: 1000 != 750",
+        "value" : false
+      },
+      "penceScale" : {
+        "evaluatorKind" : "custom",
+        "kind" : "score",
+        "rationale" : "Pence scale; not a 1-4 rubric",
+        "value" : 99
+      },
+      "Response" : {
+        "typeName" : "ReceiptOutput",
+        "value" : "{\n  \"date\" : \"2026-09-01\",\n  \"shopName\" : \"Example Shop\",\n  \"totalPence\" : 1000\n}"
+      },
+      "SubjectInferenceError" : null
+    },
+    {
+      "EvaluatorErrors" : null,
+      "Expected" : "{\n  \"shopName\" : \"Example Shop\",\n  \"totalPence\" : 100\n}",
+      "ignoredDemo" : {
+        "kind" : "ignore",
+        "rationale" : "No inference was produced for this sample, so the metric was not evaluated.",
+        "value" : null
+      },
+      "Input" : "{\n  \"input\" : {\n    \"instructions\" : \"null\",\n    \"prompt\" : \"SUBJECT_THROW\\nEmpty\"\n  },\n  \"output\" : {\n    \"value\" : {\n      \"shopName\" : \"Example Shop\",\n      \"totalPence\" : 100\n    }\n  }\n}",
+      "paidTotal" : {
+        "kind" : "ignore",
+        "rationale" : "No inference was produced for this sample, so the metric was not evaluated.",
+        "value" : null
+      },
+      "penceScale" : {
+        "kind" : "ignore",
+        "rationale" : "No inference was produced for this sample, so the metric was not evaluated.",
+        "value" : null
+      },
+      "Response" : null,
+      "SubjectInferenceError" : "The receipt has no shop name."
+    },
+    {
+      "EvaluatorErrors" : [
+        "[Evaluator<ModelSample<ReceiptOutput>>] The receipt has no total."
+      ],
+      "Expected" : "{\n  \"shopName\" : \"Example Shop\",\n  \"totalPence\" : 100\n}",
+      "ignoredDemo" : {
+        "evaluatorKind" : "custom",
+        "kind" : "ignore",
+        "rationale" : "Check ignored · Not evidence of a pass",
+        "value" : null
+      },
+      "Input" : "{\n  \"input\" : {\n    \"instructions\" : \"null\",\n    \"prompt\" : \"EVALUATOR_THROW\\nExample Shop\\nSubtotal: GBP 1.00\\nTotal paid: GBP 1.00\"\n  },\n  \"output\" : {\n    \"value\" : {\n      \"shopName\" : \"Example Shop\",\n      \"totalPence\" : 100\n    }\n  }\n}",
+      "paidTotal" : {
+        "kind" : "ignore",
+        "rationale" : "No inference was produced for this sample, so the metric was not evaluated.",
+        "value" : null
+      },
+      "penceScale" : {
+        "evaluatorKind" : "custom",
+        "kind" : "score",
+        "rationale" : "Pence scale; not a 1-4 rubric",
+        "value" : 99
+      },
+      "Response" : {
+        "typeName" : "ReceiptOutput",
+        "value" : "{\n  \"shopName\" : \"EVALUATOR_THROW\",\n  \"totalPence\" : 100\n}"
+      },
+      "SubjectInferenceError" : null
+    }
+  ],
+  "runErrors" : {
+    "anyInferenceProduced" : true,
+    "evaluatorFailureCount" : 1,
+    "failingEvaluatorTypes" : [
+      "Evaluator<ModelSample<ReceiptOutput>>"
+    ],
+    "inferenceFailureCount" : 1,
+    "metricsNotFound" : [
+
+    ]
+  },
+  "startTime" : "2026-09-17T19:17:18.860Z",
+  "summary" : [
+    {
+      "Mean of paidTotal" : {
+        "operation" : {
+          "metric" : "paidTotal",
+          "type" : "mean"
+        },
+        "value" : 0.5
+      }
+    }
+  ]
+}

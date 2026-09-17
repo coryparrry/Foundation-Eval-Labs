@@ -37,3 +37,6 @@ FoundationEvals/FoundationEvals.xcodeproj/xcshareddata/xcschemes/FoundationEvals
 
 # Local working notes.
 /worklog.md
+
+# Local capture handoff for the Connected Feature example.
+.foundation-evals/

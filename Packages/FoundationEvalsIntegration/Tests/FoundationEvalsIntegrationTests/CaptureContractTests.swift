@@ -131,6 +131,45 @@ struct CaptureContractTests {
         #expect(bundle.manifest.run.state == .finished)
     }
 
+    @Test func evaluatorFailureKeepsReturnedOutput() {
+        let observation = CaptureObservation(
+            coordinate: .init(caseID: "discounted", repetition: 1),
+            inputRevision: "v1",
+            input: .object(["text": .string("Total paid: GBP 7.50")]),
+            output: .returned(.object(["totalPence": .number("1000")])),
+            execution: .returned,
+            durationMilliseconds: 4,
+            evaluatorError: .init(kind: "evaluator", message: "check crashed"),
+            checks: []
+        )
+        #expect(observation.execution == .returned)
+        if case .returned(let value) = observation.output {
+            #expect(value != .null)
+        } else {
+            Issue.record("Feature output was dropped after the evaluator failed.")
+        }
+        #expect(observation.evaluatorError?.kind == "evaluator")
+    }
+
+    @Test func transcriptHookFailureKeepsFeatureOutput() {
+        let observation = CaptureObservation(
+            coordinate: .init(caseID: "ordinary", repetition: 1),
+            inputRevision: "v1",
+            input: .object(["text": .string("Example Shop")]),
+            output: .returned(.object(["totalPence": .number("1000")])),
+            execution: .returned,
+            durationMilliseconds: 4,
+            transcriptError: .init(kind: "transcript", message: "session snapshot failed")
+        )
+        #expect(observation.execution == .returned)
+        #expect(observation.transcriptError != nil)
+        if case .returned = observation.output {
+            // Feature output remains after transcript capture failure.
+        } else {
+            Issue.record("Transcript failure erased the returned output.")
+        }
+    }
+
     @Test func cancelBeforeNextCaseLeavesItUnattempted() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -1,0 +1,410 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		CF0000000000000000000001 /* FoundationEvalsIntegration in Frameworks */ = {isa = PBXBuildFile; productRef = CF0000000000000000000011 /* FoundationEvalsIntegration */; };
+		CF0000000000000000000002 /* FoundationEvalsIntegration in Frameworks */ = {isa = PBXBuildFile; productRef = CF0000000000000000000012 /* FoundationEvalsIntegration */; };
+		CF0000000000000000000003 /* FoundationEvalsAppleBridge in Frameworks */ = {isa = PBXBuildFile; productRef = CF0000000000000000000013 /* FoundationEvalsAppleBridge */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		CF0000000000000000000020 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CF0000000000000000000100 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CF0000000000000000000030;
+			remoteInfo = ConnectedFeature;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		CF0000000000000000000031 /* ConnectedFeature.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConnectedFeature.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CF0000000000000000000041 /* ConnectedFeatureTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConnectedFeatureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		CF0000000000000000000050 /* ConnectedFeature */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ConnectedFeature;
+			sourceTree = "<group>";
+		};
+		CF0000000000000000000051 /* ConnectedFeatureTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ConnectedFeatureTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CF0000000000000000000060 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				CF0000000000000000000001 /* FoundationEvalsIntegration in Frameworks */,
+			);
+		};
+		CF0000000000000000000061 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				CF0000000000000000000003 /* FoundationEvalsAppleBridge in Frameworks */,
+			);
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		CF0000000000000000000070 = {
+			isa = PBXGroup;
+			children = (
+				CF0000000000000000000050 /* ConnectedFeature */,
+				CF0000000000000000000051 /* ConnectedFeatureTests */,
+				CF0000000000000000000071 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CF0000000000000000000071 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CF0000000000000000000031 /* ConnectedFeature.app */,
+				CF0000000000000000000041 /* ConnectedFeatureTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		CF0000000000000000000030 /* ConnectedFeature */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CF0000000000000000000080 /* Build configuration list for PBXNativeTarget "ConnectedFeature" */;
+			buildPhases = (
+				CF0000000000000000000090 /* Sources */,
+				CF0000000000000000000060 /* Frameworks */,
+				CF0000000000000000000092 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				CF0000000000000000000050 /* ConnectedFeature */,
+			);
+			name = ConnectedFeature;
+			packageProductDependencies = (
+				CF0000000000000000000011 /* FoundationEvalsIntegration */,
+			);
+			productName = ConnectedFeature;
+			productReference = CF0000000000000000000031 /* ConnectedFeature.app */;
+			productType = "com.apple.product-type.application";
+		};
+		CF0000000000000000000040 /* ConnectedFeatureTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CF0000000000000000000081 /* Build configuration list for PBXNativeTarget "ConnectedFeatureTests" */;
+			buildPhases = (
+				CF0000000000000000000091 /* Sources */,
+				CF0000000000000000000061 /* Frameworks */,
+				CF0000000000000000000093 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CF0000000000000000000021 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				CF0000000000000000000051 /* ConnectedFeatureTests */,
+			);
+			name = ConnectedFeatureTests;
+			packageProductDependencies = (
+				CF0000000000000000000013 /* FoundationEvalsAppleBridge */,
+			);
+			productName = ConnectedFeatureTests;
+			productReference = CF0000000000000000000041 /* ConnectedFeatureTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		CF0000000000000000000100 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					CF0000000000000000000030 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					CF0000000000000000000040 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = CF0000000000000000000030;
+					};
+				};
+			};
+			buildConfigurationList = CF0000000000000000000082 /* Build configuration list for PBXProject "ConnectedFeature" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = CF0000000000000000000070;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CF0000000000000000000010 /* XCLocalSwiftPackageReference "../../Packages/FoundationEvalsIntegration" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CF0000000000000000000071 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CF0000000000000000000030 /* ConnectedFeature */,
+				CF0000000000000000000040 /* ConnectedFeatureTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		CF0000000000000000000092 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		CF0000000000000000000093 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CF0000000000000000000090 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		CF0000000000000000000091 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CF0000000000000000000021 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CF0000000000000000000030 /* ConnectedFeature */;
+			targetProxy = CF0000000000000000000020 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		CF00000000000000000000A0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		CF00000000000000000000A1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		CF00000000000000000000A2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Connected Feature";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.ConnectedFeature;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		CF00000000000000000000A3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Connected Feature";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.ConnectedFeature;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		CF00000000000000000000A4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Evaluations,
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -F$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.ConnectedFeatureTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+				);
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConnectedFeature.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ConnectedFeature";
+			};
+			name = Debug;
+		};
+		CF00000000000000000000A5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Evaluations,
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -F$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.ConnectedFeatureTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+				);
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConnectedFeature.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ConnectedFeature";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CF0000000000000000000080 /* Build configuration list for PBXNativeTarget "ConnectedFeature" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CF00000000000000000000A2 /* Debug */,
+				CF00000000000000000000A3 /* Release */,
+			);
+			defaultConfigurationName = Release;
+		};
+		CF0000000000000000000081 /* Build configuration list for PBXNativeTarget "ConnectedFeatureTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CF00000000000000000000A4 /* Debug */,
+				CF00000000000000000000A5 /* Release */,
+			);
+			defaultConfigurationName = Release;
+		};
+		CF0000000000000000000082 /* Build configuration list for PBXProject "ConnectedFeature" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CF00000000000000000000A0 /* Debug */,
+				CF00000000000000000000A1 /* Release */,
+			);
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		CF0000000000000000000010 /* XCLocalSwiftPackageReference "../../Packages/FoundationEvalsIntegration" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../Packages/FoundationEvalsIntegration;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CF0000000000000000000011 /* FoundationEvalsIntegration */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CF0000000000000000000010 /* XCLocalSwiftPackageReference "../../Packages/FoundationEvalsIntegration" */;
+			productName = FoundationEvalsIntegration;
+		};
+		CF0000000000000000000012 /* FoundationEvalsIntegration */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CF0000000000000000000010 /* XCLocalSwiftPackageReference "../../Packages/FoundationEvalsIntegration" */;
+			productName = FoundationEvalsIntegration;
+		};
+		CF0000000000000000000013 /* FoundationEvalsAppleBridge */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CF0000000000000000000010 /* XCLocalSwiftPackageReference "../../Packages/FoundationEvalsIntegration" */;
+			productName = FoundationEvalsAppleBridge;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = CF0000000000000000000100 /* Project object */;
+}

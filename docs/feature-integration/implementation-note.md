@@ -18,7 +18,7 @@ Recorded against commit `bbbbcdae4d9ede98ef42c0238d79afa4300e91a4` (current `mai
 | Limits already in force | `EvaluationStore.maximumCases` / `maximumPlannedSamples` = 100; `maximumTextFileBytes` = 5_000_000 | Capture limits live in `CaptureLimits`. When mapping into `EvaluationRun`, keep the tighter workbench cap. |
 | Portable package | Root `Package.swift` (`FoundationEvalsPortable`) | Unchanged. New package is `Packages/FoundationEvalsIntegration`. |
 
-## New types (not present in this checkout)
+## New types
 
 Package transport, capture writer, Apple codecs, `EvidenceImportService`, `EvidenceImportMapper`, `ConnectedFeatureLauncher`, `EvidenceImportView`, and `Examples/ConnectedFeature`.
 
