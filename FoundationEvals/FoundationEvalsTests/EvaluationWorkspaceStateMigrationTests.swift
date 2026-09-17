@@ -132,6 +132,7 @@ struct EvaluationWorkspaceStateMigrationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         var suite = EvaluationSuite()
         suite.scoringMode = .exactMatch
+        suite.repetitions = 1
         suite.releasePolicy.requireApprovedBaseline = true
         let state = try representativeState(for: suite)
         let originalBytes = try writeLegacy(suite: suite, state: state, to: directory)
@@ -176,10 +177,10 @@ struct EvaluationWorkspaceStateMigrationTests {
         return EvaluationRun(id: runID, suiteID: suite.id, suiteName: suite.name, suiteVersion: suite.version,
             instructions: suite.instructions, criteria: suite.criteria, scoringMode: suite.scoringMode, repetitions: 1,
             judgePromptVersion: nil, judgePassingScore: nil, plannedSampleCount: results.count,
-            suiteRevision: "fixture", startedAt: Date(), completedAt: Date(),
+            suiteRevision: "fixture", plannedCases: suite.cases, startedAt: Date(), completedAt: Date(),
             cancelled: false, terminationReason: nil,
             environment: .init(operatingSystem: "fixture", locale: "en", model: "fixture", modelContextSize: 4096),
-            attachments: [], results: results, plannedCases: suite.cases)
+            attachments: [], results: results)
     }
 
     private func existingCatalog(legacySuite: EvaluationSuite) -> EvaluationWorkspaceCatalog {
