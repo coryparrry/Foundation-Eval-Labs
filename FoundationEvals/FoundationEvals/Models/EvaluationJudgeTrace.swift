@@ -9,15 +9,26 @@ struct EvaluationJudgeTrace: Codable, Sendable {
     var attempts: [EvaluationJudgeAttemptTrace]? = nil
     var judgedCriterionIndexes: [Int]? = nil
     var refusal: EvaluationRefusalTrace? = nil
-    /// Nil for legacy traces; never invent a historical request policy.
-    var policyVersion: String? = nil
 }
 
 struct EvaluationJudgeAttemptTrace: Codable, Sendable {
     var prompt: String
     var rawResponse: String? = nil
     var validationError: String? = nil
-    /// Exact request instructions, not reconstructed from the current policy.
-    var instructions: String? = nil
-    var policyVersion: String? = nil
+    /// Older traces remain readable; no policy is invented for historical data.
+    var requestConfiguration: EvaluationJudgeRequestConfiguration? = nil
+}
+
+/// The same immutable value drives the wire request and the saved audit trail.
+/// Credentials, headers and image bytes deliberately do not belong here.
+struct EvaluationJudgeRequestConfiguration: Codable, Equatable, Sendable {
+    var promptVersion: String
+    var instructions: String
+    var modelID: String
+    var criteriaCount: Int
+    var responseFormat: String
+    var maximumResponseTokens: Int
+    var timeoutSeconds: Double
+    var stream: Bool
+    var thinking: Bool
 }

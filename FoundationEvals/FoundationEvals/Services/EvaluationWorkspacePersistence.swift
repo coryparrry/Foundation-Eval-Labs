@@ -8,7 +8,9 @@ struct EvaluationWorkspaceBootstrap {
 
 enum EvaluationWorkspacePersistence {
     static let catalogFilename = "workspace-v1.json"
-    static let stateMigrationMarkerFilename = "legacy-state-migration-v1.complete"
+    /// Presence, including an unreadable marker, closes automatic legacy import.
+    /// Keep this outside state.json so losing the state cannot reopen migration.
+    static let legacyStateMigrationFilename = "legacy-state-migration-complete-v1"
 
     static func bootstrap(
         in supportDirectory: URL,
@@ -24,6 +26,7 @@ enum EvaluationWorkspacePersistence {
                   !catalog.projects.isEmpty else {
                 throw EvaluationWorkspaceError.unsupportedCatalog
             }
+
             guard let legacySuite,
                   let matchingProject = catalog.projects.first(where: {
                       $0.suites.contains { $0.id == legacySuite.id }
@@ -33,26 +36,18 @@ enum EvaluationWorkspacePersistence {
                   }) else {
                 return EvaluationWorkspaceBootstrap(catalog: catalog)
             }
+
             let target = suiteDirectory(
                 supportDirectory: supportDirectory,
                 projectID: matchingProject.id,
                 suiteID: matchingSuite.id
             )
-            if FileManager.default.fileExists(atPath: target.appending(path: stateMigrationMarkerFilename).path) {
-                // Completion is suite-local and monotonic. A missing or damaged file
-                // after this point is data loss, not permission to replay old decisions.
-                let stateURL = target.appending(path: "state.json")
-                let readable = (try? Data(contentsOf: stateURL)).flatMap {
-                    try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: $0)
-                } != nil
-                return EvaluationWorkspaceBootstrap(
-                    catalog: catalog,
-                    notice: readable ? nil : "Workspace state is missing or unreadable. Legacy migration already completed; old approvals were not restored. Recover a backup and review its decisions before approving a baseline."
-                )
-            }
+            // Older releases omitted local state from some migrations. An
+            // unmarked workspace cannot prove that legacy decisions are current.
+            // Recover evidence once, but never reactivate historical authority.
             do {
                 try createSuiteDirectories(at: target)
-                let recovered = try recoverUnmigratedLocalState(from: supportDirectory, to: target)
+                let recovered = try recoverUnmigratedLegacyState(from: supportDirectory, to: target)
                 guard recovered else {
                     return EvaluationWorkspaceBootstrap(catalog: catalog)
                 }
@@ -63,14 +58,14 @@ enum EvaluationWorkspacePersistence {
                 try save(repairedCatalog, in: supportDirectory)
                 return EvaluationWorkspaceBootstrap(
                     catalog: repairedCatalog,
-                    notice: "An older legacy state snapshot was recovered. Its original bytes are preserved as state-recovered-legacy-*.json. Baseline approvals were revoked and corrections/reviewed examples were quarantined in that snapshot; review and explicitly approve them again."
+                    notice: "An older legacy state snapshot was recovered. Its exact bytes were preserved beside the suite as state-recovered-legacy-*.json. Historical baseline approvals were revoked; corrections, judge-check examples and experiment decisions require fresh review."
                 )
             } catch {
-                // Never delete the live destination on failure. Recovery writes are
-                // atomic, and an unreadable current file is evidence, not a scratch file.
+                // All replacements are atomic. Never delete the current state
+                // merely because a legacy source exists or a catalog save failed.
                 return EvaluationWorkspaceBootstrap(
                     catalog: catalog,
-                    notice: "Legacy state could not be recovered: \(error.localizedDescription)"
+                    notice: "Legacy state could not be repaired: \(error.localizedDescription)"
                 )
             }
         }
@@ -107,18 +102,25 @@ enum EvaluationWorkspacePersistence {
             suiteID: seedSuite.id
         )
         try createSuiteDirectories(at: target)
+
         var migrated = false
         if legacySuite != nil {
             migrated = try copyLegacyStorage(from: supportDirectory, to: target)
+            let stateURL = target.appending(path: "state.json")
+            if !FileManager.default.fileExists(atPath: stateURL.path) {
+                try CanonicalJSON.data(for: EvaluationSuiteLocalState()).write(to: stateURL, options: .atomic)
+            }
+            // Seal before publishing the new workspace. Future missing/corrupt
+            // state is recovery, not permission to repeat the initial import.
+            try completeLegacyStateMigration(in: target)
         }
         let suiteURL = target.appending(path: "suite.json")
         if !FileManager.default.fileExists(atPath: suiteURL.path) {
             try CanonicalJSON.data(for: seedSuite).write(to: suiteURL, options: .atomic)
         }
-        if migrated { catalog.migratedLegacyStorageAt = now }
-        // Seal the local migration before publishing a catalog that can be used.
-        // First-time migration retains authority; later recovery never assumes freshness.
-        try completeStateMigration(in: target)
+        if migrated {
+            catalog.migratedLegacyStorageAt = now
+        }
         try save(catalog, in: supportDirectory)
         return EvaluationWorkspaceBootstrap(
             catalog: catalog,
@@ -215,23 +217,27 @@ enum EvaluationWorkspacePersistence {
         return copied
     }
 
-    private static func completeStateMigration(in target: URL) throws {
-        try Data("completed\n".utf8).write(
-            to: target.appending(path: stateMigrationMarkerFilename), options: .atomic
-        )
+    static func hasCompletedLegacyStateMigration(in directory: URL) -> Bool {
+        FileManager.default.fileExists(atPath: directory.appending(path: legacyStateMigrationFilename).path)
     }
 
-    /// Old catalogs have no per-suite completion marker. Their absent state may
-    /// be an original omission OR later loss. Preserve evidence but trust neither
-    /// interpretation enough to restore historical approval authority.
-    private static func recoverUnmigratedLocalState(from source: URL, to target: URL) throws -> Bool {
+    private static func completeLegacyStateMigration(in directory: URL) throws {
+        let url = directory.appending(path: legacyStateMigrationFilename)
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        try Data("Completed. Do not automatically restore legacy approval state.\n".utf8)
+            .write(to: url, options: .atomic)
+    }
+
+    private static func recoverUnmigratedLegacyState(from source: URL, to target: URL) throws -> Bool {
+        guard !hasCompletedLegacyStateMigration(in: target) else { return false }
         let destination = target.appending(path: "state.json")
         let destinationData: Data?
         if FileManager.default.fileExists(atPath: destination.path) {
+            // A read failure is not permission to overwrite an existing file.
             destinationData = try Data(contentsOf: destination)
-            if let data = destinationData,
-               (try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: data)) != nil {
-                try completeStateMigration(in: target)
+            if let destinationData,
+               (try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: destinationData)) != nil {
+                try completeLegacyStateMigration(in: target)
                 return false
             }
         } else {
@@ -243,30 +249,39 @@ enum EvaluationWorkspacePersistence {
         guard var recovered = try? CanonicalJSON.decode(EvaluationSuiteLocalState.self, from: legacyData) else {
             return false
         }
-        // Backups must succeed before the live destination may be replaced.
+
+        // Preservation is required, not best-effort. Failure leaves current
+        // bytes untouched. The archive retains all historical decisions verbatim.
+        try preserveState(legacyData, in: target, prefix: "state-recovered-legacy")
         if let destinationData {
-            try preserveStateBytes(destinationData, in: target, prefix: "state-unreadable")
+            try preserveState(destinationData, in: target, prefix: "state-unreadable")
         }
-        try preserveStateBytes(legacyData, in: target, prefix: "state-recovered-legacy")
         let recoveredAt = Date()
         for index in recovered.baselineApprovals.indices where recovered.baselineApprovals[index].isCurrent {
             recovered.baselineApprovals[index].revokedAt = recoveredAt
         }
         recovered.humanCorrections = []
         recovered.reviewedJudgeExamples = []
+        for index in recovered.experiments.indices {
+            recovered.experiments[index].decision = .inconclusive
+        }
         try CanonicalJSON.data(for: recovered).write(to: destination, options: .atomic)
-        try completeStateMigration(in: target)
+        // If sealing fails, the next launch sees only this sanitized state and
+        // adopts it; it cannot copy the old active approvals over it.
+        try completeLegacyStateMigration(in: target)
         return true
     }
 
-    private static func preserveStateBytes(_ data: Data, in target: URL, prefix: String) throws {
+    private static func preserveState(_ data: Data, in directory: URL, prefix: String) throws {
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let backup = target.appending(path: "\(prefix)-\(digest).json", directoryHint: .notDirectory)
+        let backup = directory.appending(path: "\(prefix)-\(digest).json", directoryHint: .notDirectory)
         if FileManager.default.fileExists(atPath: backup.path) {
-            guard try Data(contentsOf: backup) == data else { throw CocoaError(.fileWriteFileExists) }
-        } else {
-            try data.write(to: backup, options: .atomic)
+            guard try Data(contentsOf: backup) == data else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            return
         }
+        try data.write(to: backup, options: .atomic)
     }
 }
 
@@ -337,6 +352,7 @@ enum EvaluationRepositoryInspector {
 
 private enum EvaluationRepositoryInspectionError: LocalizedError {
     case git(String)
+
     var errorDescription: String? {
         switch self { case .git(let message): message }
     }
