@@ -1,5 +1,5 @@
+import Darwin
 import Foundation
-import FoundationEvalsAppleBridge
 import FoundationEvalsIntegration
 
 enum EvidenceImportService {
@@ -58,44 +58,64 @@ enum EvidenceImportService {
     private nonisolated static func stageDirectory(_ root: URL, into stagingRoot: URL) throws -> StagedImport {
         var files: [String: Data] = [:]
         var total = 0
-        try walk(root: root, relative: "", stagingRoot: stagingRoot, files: &files, total: &total)
+        var visited = 1
+        let rootFD = try CaptureFileIO.openDirectoryNoFollow(at: root)
+        defer { close(rootFD) }
+        try walk(
+            directoryFD: rootFD,
+            relative: "",
+            depth: 1,
+            stagingRoot: stagingRoot,
+            files: &files,
+            total: &total,
+            visited: &visited
+        )
         return StagedImport(filename: root.lastPathComponent, files: files)
     }
 
     private nonisolated static func walk(
-        root: URL,
+        directoryFD: Int32,
         relative: String,
+        depth: Int,
         stagingRoot: URL,
         files: inout [String: Data],
-        total: inout Int
+        total: inout Int,
+        visited: inout Int
     ) throws {
-        let contents = try FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        )
-        guard files.count + contents.count <= CaptureLimits.version1.maximumRegularFiles else {
-            throw CaptureFileIOError.tooLarge(maximumBytes: CaptureLimits.version1.maximumBundleBytes)
+        if Task.isCancelled { throw EvidenceImportError.cancelled }
+        guard depth <= CaptureLimits.version1.maximumDirectoryDepth else {
+            throw CaptureFileIOError.directoryTooDeep
         }
-        for child in contents {
-            let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
-            if values.isSymbolicLink == true {
-                throw CaptureFileIOError.symlinkRejected
-            }
-            let name = child.lastPathComponent
+        let names = try CaptureFileIO.directoryNames(from: directoryFD)
+        visited += names.count
+        guard visited <= CaptureLimits.version1.maximumVisitedEntries else {
+            throw CaptureFileIOError.tooManyEntries
+        }
+        for name in names {
+            if Task.isCancelled { throw EvidenceImportError.cancelled }
             let nextRelative = relative.isEmpty ? name : "\(relative)/\(name)"
             _ = try CaptureFileIO.relativePathComponents(nextRelative)
-            if values.isDirectory == true {
+            if let childFD = try? CaptureFileIO.openMemberNoFollow(directoryFD: directoryFD, name: name, directory: true) {
+                defer { close(childFD) }
                 try FileManager.default.createDirectory(
                     at: stagingRoot.appending(path: nextRelative, directoryHint: .isDirectory),
                     withIntermediateDirectories: true
                 )
-                try walk(root: child, relative: nextRelative, stagingRoot: stagingRoot, files: &files, total: &total)
+                try walk(
+                    directoryFD: childFD,
+                    relative: nextRelative,
+                    depth: depth + 1,
+                    stagingRoot: stagingRoot,
+                    files: &files,
+                    total: &total,
+                    visited: &visited
+                )
                 continue
             }
-            guard values.isRegularFile == true else { throw CaptureFileIOError.notRegularFile }
+            let fileFD = try CaptureFileIO.openMemberNoFollow(directoryFD: directoryFD, name: name, directory: false)
+            defer { close(fileFD) }
             let remaining = CaptureLimits.version1.maximumBundleBytes - total
-            let data = try CaptureFileIO.readRegularFileNoFollow(at: child, maximumBytes: remaining)
+            let data = try CaptureFileIO.readRegularFileNoFollow(fromFileFD: fileFD, maximumBytes: remaining, name: name)
             total += data.count
             guard total <= CaptureLimits.version1.maximumBundleBytes else {
                 throw CaptureFileIOError.tooLarge(maximumBytes: CaptureLimits.version1.maximumBundleBytes)
@@ -142,7 +162,7 @@ enum EvidenceImportService {
             maximumDepth: CaptureLimits.version1.maximumJSONNestingDepth,
             rejectDuplicateKeys: false
         )
-        if let inspection = try? AppleEvaluationCodec.inspect(bytes: data) {
+        if let inspection = try? AppleEvaluationJSONInspector.inspect(bytes: data) {
             let run = EvidenceImportMapper.run(
                 from: inspection,
                 destinationProjectID: destinationProjectID,
@@ -194,15 +214,11 @@ enum EvidenceImportService {
         let evidence = run.importedEvidence
         let digest = evidence?.sourceDigest ?? ""
         let producerRunID = evidence?.producerRunID
-        let outcome: EvidenceImportOutcome
-        if let match = existing.first(where: { $0.producerRunID == producerRunID && $0.sourceDigest == digest })
-            ?? existing.first(where: { producerRunID == nil && $0.sourceDigest == digest }) {
-            outcome = .alreadyImported(match.ownedRunID)
-        } else if let producerRunID, let conflict = existing.first(where: { $0.producerRunID == producerRunID && $0.sourceDigest != digest }) {
-            outcome = .conflict(conflict.ownedRunID)
-        } else {
-            outcome = .readyToImport
-        }
+        let outcome = EvidenceImportIndex.outcome(
+            producerRunID: producerRunID,
+            sourceDigest: digest,
+            records: existing
+        )
         return EvidenceImportPreview(
             destinationProjectID: destinationProjectID,
             destinationSuiteID: destinationSuiteID,

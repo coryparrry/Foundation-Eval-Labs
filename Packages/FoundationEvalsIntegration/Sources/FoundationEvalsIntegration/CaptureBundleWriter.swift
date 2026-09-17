@@ -8,6 +8,9 @@ public enum CaptureBundleError: Error, Equatable, LocalizedError {
     case multipleAttemptsUnsupported(String)
     case extraObservation(String)
     case missingObservation(String)
+    case duplicateObservation(String)
+    case observationPlanMismatch(String)
+    case missingRequiredFile(String)
     case conflictingFiles
     case incompleteCannotFinish
     case alreadyPublished
@@ -23,6 +26,9 @@ public enum CaptureBundleError: Error, Equatable, LocalizedError {
         case .multipleAttemptsUnsupported(let id): "Version 1 does not allow multiple attempts for \(id)."
         case .extraObservation(let id): "Observation \(id) is not in the frozen plan."
         case .missingObservation(let id): "Planned coordinate \(id) has no observation."
+        case .duplicateObservation(let id): "Observation \(id) is duplicated."
+        case .observationPlanMismatch(let id): "Observation \(id) does not match the frozen plan."
+        case .missingRequiredFile(let path): "The capture is missing required file \(path)."
         case .conflictingFiles: "The bundle contains conflicting file entries."
         case .incompleteCannotFinish: "A finished bundle cannot omit planned observations."
         case .alreadyPublished: "A capture folder with this run ID already exists."
@@ -50,6 +56,8 @@ public actor CaptureBundleWriter {
     private var rawFiles: [(relativePath: String, data: Data, kind: CaptureFileKind)] = []
     private var expectations: [CaptureExpectation]
     private var finalized = false
+    private var observationBytes = 0
+    private var rawBytes = 0
 
     public func recordedObservations() -> [CaptureObservation] {
         observations.values.sorted { $0.coordinate.identity < $1.coordinate.identity }
@@ -100,17 +108,29 @@ public actor CaptureBundleWriter {
 
     public func record(_ observation: CaptureObservation) throws {
         try validate(observation)
-        observations[observation.observationID] = observation
+        if observations[observation.observationID] != nil {
+            throw CaptureBundleError.duplicateObservation(observation.observationID.uuidString)
+        }
         let data = try CaptureJSONCoding.encoder().encode(observation)
+        try checkPublishedBudget(observationBytes: observationBytes + data.count, extraFiles: 0, extraBytes: 0)
         try CaptureFileIO.writeAtomically(
             data,
             to: workingDirectory.appending(path: "observations/\(observation.observationID.uuidString).json")
         )
+        observationBytes += data.count
+        observations[observation.observationID] = observation
     }
 
     public func attachRaw(relativePath: String, data: Data, kind: CaptureFileKind) throws {
         _ = try CaptureFileIO.relativePathComponents(relativePath)
+        if kind == .appleResult || kind == .transcript {
+            guard data.count <= limits.maximumAppleJSONBytes else {
+                throw CaptureFileIOError.tooLarge(maximumBytes: limits.maximumAppleJSONBytes)
+            }
+        }
+        try checkPublishedBudget(observationBytes: observationBytes, extraFiles: 1, extraBytes: data.count)
         rawFiles.append((relativePath, data, kind))
+        rawBytes += data.count
         try CaptureFileIO.writeAtomically(data, to: workingDirectory.appending(path: relativePath))
     }
 
@@ -167,11 +187,13 @@ public actor CaptureBundleWriter {
             jsonl.append(UInt8(ascii: "\n"))
         }
         try CaptureFileIO.writeAtomically(jsonl, to: workingDirectory.appending(path: "observations.jsonl"))
+        try checkPublishedBudget(observationBytes: jsonl.count, extraFiles: 0, extraBytes: 0)
 
         var files: [CaptureFileEntry] = []
         files.append(try fileEntry("observations.jsonl", kind: .observations))
         if !expectations.isEmpty {
             let data = try CaptureJSONCoding.encoder(prettyPrinted: true).encode(expectations)
+            try checkPublishedBudget(observationBytes: jsonl.count, extraFiles: 1, extraBytes: data.count)
             try CaptureFileIO.writeAtomically(data, to: workingDirectory.appending(path: "expectations.json"))
             files.append(try fileEntry("expectations.json", kind: .expectations))
         }
@@ -199,7 +221,37 @@ public actor CaptureBundleWriter {
             rejectDuplicateKeys: true
         )
         try CaptureFileIO.writeAtomically(manifestData, to: workingDirectory.appending(path: "manifest.json"))
+        try checkPublishedBudget(
+            observationBytes: jsonl.count,
+            extraFiles: expectations.isEmpty ? 1 : 2,
+            extraBytes: (expectations.isEmpty ? 0 : (files.first { $0.kind == .expectations }?.byteCount ?? 0)) + manifestData.count
+        )
+        try removePrivateWorkingFiles()
         try FileManager.default.moveItem(at: workingDirectory, to: publishedDirectory)
+    }
+
+    private func checkPublishedBudget(observationBytes: Int, extraFiles: Int, extraBytes: Int) throws {
+        let publishedFiles = 1 + extraFiles + rawFiles.count
+        guard publishedFiles <= limits.maximumRegularFiles else {
+            throw CaptureFileIOError.tooManyEntries
+        }
+        let total = observationBytes + rawBytes + extraBytes
+        guard total <= limits.maximumBundleBytes else {
+            throw CaptureFileIOError.tooLarge(maximumBytes: limits.maximumBundleBytes)
+        }
+    }
+
+    private func removePrivateWorkingFiles() throws {
+        let journals = workingDirectory.appending(path: "observations", directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: journals.path) {
+            try FileManager.default.removeItem(at: journals)
+        }
+        for name in ["plan.json", "state.json"] {
+            let url = workingDirectory.appending(path: name)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+        }
     }
 
     private func fileEntry(_ relativePath: String, kind: CaptureFileKind) throws -> CaptureFileEntry {
@@ -280,12 +332,51 @@ public actor CaptureSession<Feature: FeatureUnderTest> {
             }
             let clock = ContinuousClock.now
             let observationID = UUID()
+            let output: Feature.Output
             do {
-                let output = try await feature.evaluate(try decodeInput(item.input))
-                let encoded: CaptureOutput
+                output = try await feature.evaluate(try decodeInput(item.input))
+            } catch is CancellationError {
                 do {
-                    encoded = .returned(try CaptureJSON.fromEncoded(output))
+                    try await persist(CaptureObservation(
+                        observationID: observationID,
+                        coordinate: item.coordinate,
+                        inputRevision: item.inputRevision,
+                        input: item.input,
+                        output: .absent,
+                        execution: .cancelled,
+                        durationMilliseconds: milliseconds(since: clock)
+                    ))
                 } catch {
+                    throw CaptureBundleError.captureFailed(error.localizedDescription)
+                }
+                stopped = true
+                break
+            } catch {
+                do {
+                    try await persist(CaptureObservation(
+                        observationID: observationID,
+                        coordinate: item.coordinate,
+                        inputRevision: item.inputRevision,
+                        input: item.input,
+                        output: .absent,
+                        execution: .threw,
+                        durationMilliseconds: milliseconds(since: clock),
+                        error: .init(kind: "subject", message: error.localizedDescription)
+                    ))
+                } catch {
+                    throw CaptureBundleError.captureFailed(error.localizedDescription)
+                }
+                if policy != .continueAfterCaseError {
+                    stopped = true
+                    break
+                }
+                continue
+            }
+            let encoded: CaptureOutput
+            do {
+                encoded = .returned(try CaptureJSON.fromEncoded(output))
+            } catch {
+                do {
                     try await persist(CaptureObservation(
                         observationID: observationID,
                         coordinate: item.coordinate,
@@ -296,8 +387,12 @@ public actor CaptureSession<Feature: FeatureUnderTest> {
                         durationMilliseconds: milliseconds(since: clock),
                         captureError: .init(kind: "serializationFailed", message: error.localizedDescription)
                     ))
-                    continue
+                } catch {
+                    throw CaptureBundleError.captureFailed(error.localizedDescription)
                 }
+                continue
+            }
+            do {
                 try await persist(CaptureObservation(
                     observationID: observationID,
                     coordinate: item.coordinate,
@@ -307,33 +402,8 @@ public actor CaptureSession<Feature: FeatureUnderTest> {
                     execution: .returned,
                     durationMilliseconds: milliseconds(since: clock)
                 ))
-            } catch is CancellationError {
-                try await persist(CaptureObservation(
-                    observationID: observationID,
-                    coordinate: item.coordinate,
-                    inputRevision: item.inputRevision,
-                    input: item.input,
-                    output: .absent,
-                    execution: .cancelled,
-                    durationMilliseconds: milliseconds(since: clock)
-                ))
-                stopped = true
-                break
             } catch {
-                try await persist(CaptureObservation(
-                    observationID: observationID,
-                    coordinate: item.coordinate,
-                    inputRevision: item.inputRevision,
-                    input: item.input,
-                    output: .absent,
-                    execution: .threw,
-                    durationMilliseconds: milliseconds(since: clock),
-                    error: .init(kind: "subject", message: error.localizedDescription)
-                ))
-                if policy != .continueAfterCaseError {
-                    stopped = true
-                    break
-                }
+                throw CaptureBundleError.captureFailed(error.localizedDescription)
             }
         }
         if Task.isCancelled || stopped {

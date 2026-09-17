@@ -4,7 +4,11 @@ import Foundation
 import PackageDescription
 
 /// Apple's Evaluations framework ships in Xcode's developer library (next to XCTest),
-/// not in the macOS SDK. Link that copy; do not vendor the binary.
+/// not in the macOS SDK. Link that copy only from FoundationEvalsAppleBridge, a
+/// developer-machine target. The workbench app must not link Evaluations.
+/// `unsafeFlags` make AppleBridge ineligible as a versioned remote SwiftPM product;
+/// consume it from this local package. Set `DEVELOPER_DIR` to a selected Xcode;
+/// otherwise `xcode-select -p` is used.
 let evaluationsFrameworkSearchPath: String = {
     let developerDir = Context.environment["DEVELOPER_DIR"]
         ?? "/Applications/Xcode.app/Contents/Developer"

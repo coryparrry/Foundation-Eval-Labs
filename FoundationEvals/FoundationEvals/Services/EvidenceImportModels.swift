@@ -14,6 +14,24 @@ struct EvaluationImportedCheck: Codable, Equatable, Sendable {
     var status: String
     var label: String
     var rationale: String?
+    var semantics: String?
+    var value: String?
+    var evaluator: String?
+}
+
+struct EvaluationImportedTranscriptEntry: Codable, Equatable, Sendable {
+    var sampleID: UUID?
+    var id: String
+    var kind: String
+    var text: String?
+    var toolName: String?
+}
+
+struct EvaluationImportedSampleNote: Codable, Equatable, Sendable {
+    var sampleID: UUID
+    var partialOutput: String?
+    var captureError: String?
+    var transcriptRelativePath: String?
 }
 
 struct EvaluationImportedEvidence: Codable, Equatable, Sendable {
@@ -36,6 +54,9 @@ struct EvaluationImportedEvidence: Codable, Equatable, Sendable {
     var sourceCaseIDs: [String: String]
     var transcriptAvailable: Bool
     var checks: [EvaluationImportedCheck]
+    var sourcePlan: CapturePlan? = nil
+    var transcriptEntries: [EvaluationImportedTranscriptEntry]? = nil
+    var sampleNotes: [EvaluationImportedSampleNote]? = nil
 }
 
 enum EvaluationImportedLabels {
@@ -50,6 +71,7 @@ enum EvaluationImportedLabels {
     static let alreadyImported = "Already imported"
     static let conflict = "Conflicting evidence · Original preserved"
     static let inspectionOnly = "Inspection-only · Not a release pass"
+    static let metadataOnly = AppleEvaluationInspectionLabels.metadataOnly
 }
 
 struct EvidenceImportIndexRecord: Codable, Equatable, Sendable {
@@ -62,6 +84,22 @@ struct EvidenceImportIndexRecord: Codable, Equatable, Sendable {
 
 struct EvidenceImportIndex: Codable, Equatable, Sendable {
     var records: [EvidenceImportIndexRecord] = []
+
+    static func outcome(
+        producerRunID: String?,
+        sourceDigest: String,
+        records: [EvidenceImportIndexRecord]
+    ) -> EvidenceImportOutcome {
+        if let match = records.first(where: { $0.producerRunID == producerRunID && $0.sourceDigest == sourceDigest })
+            ?? records.first(where: { producerRunID == nil && $0.sourceDigest == sourceDigest }) {
+            return .alreadyImported(match.ownedRunID)
+        }
+        if let producerRunID,
+           let conflict = records.first(where: { $0.producerRunID == producerRunID && $0.sourceDigest != sourceDigest }) {
+            return .conflict(conflict.ownedRunID)
+        }
+        return .readyToImport
+    }
 }
 
 enum EvidenceImportOutcome: Equatable, Sendable {

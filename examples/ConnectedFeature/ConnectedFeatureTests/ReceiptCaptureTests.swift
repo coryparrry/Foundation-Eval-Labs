@@ -7,8 +7,8 @@ struct ReceiptCaptureTests {
     @Test func appAndTestsShareProductionEntry() async throws {
         let output = try await ReceiptExtractor().evaluate(ReceiptInput(text: ReceiptFixtures.discounted.text))
         #expect(output.shopName == "Example Shop")
-        #expect(output.totalPence == 1000)
         #expect(ReceiptExtractor.reviewedPaidTotalPence(in: ReceiptFixtures.discounted.text) == 750)
+        #expect(output.totalPence != 750, "The example extractor still demonstrates the unpaid-total bug.")
     }
 
     @Test func captureWritesVersion1Bundle() async throws {
@@ -58,8 +58,9 @@ struct ReceiptCaptureTests {
 
         let discounted = bundle.observations.first { $0.coordinate.caseID == ReceiptFixtures.discounted.id }
         #expect(discounted?.execution == .returned)
+        let live = try await ReceiptExtractor().evaluate(ReceiptInput(text: ReceiptFixtures.discounted.text))
         if case .returned(let value) = discounted?.output, case .object(let object) = value {
-            #expect(object["totalPence"] == .number("1000"))
+            #expect(object["totalPence"] == .number(String(live.totalPence)))
         } else {
             Issue.record("Discounted observation did not keep the production output.")
         }

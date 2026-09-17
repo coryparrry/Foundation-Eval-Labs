@@ -9,7 +9,10 @@ struct WorkspaceOverviewView: View {
     @State private var isImportingEvidence = false
     @Environment(\.scenePhase) private var scenePhase
 
-    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles || store.isImportingEvidence }
+    private var isBusy: Bool {
+        store.isRunning || store.isReassessing || store.isProcessingFiles || store.isImportingEvidence
+            || store.launcherState == .launching || store.launcherState == .running || store.launcherState == .stopping
+    }
 
     private func summary(for record: EvaluationSuiteRecord) -> SuiteOverviewSummary? {
         if record.id == store.selectedSuiteID {

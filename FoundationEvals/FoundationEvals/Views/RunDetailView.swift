@@ -145,7 +145,22 @@ private struct ImportedEvidenceSection: View {
             LabeledContent("Producer environment", value: evidence.environmentClaims["operatingSystem"] ?? "Unknown")
             LabeledContent("Importer Mac", value: evidence.importerHost["operatingSystem"] ?? "")
             LabeledContent("Imported", value: evidence.importedAt.formatted(date: .abbreviated, time: .standard))
-            if evidence.transcriptAvailable {
+            if let entries = evidence.transcriptEntries, !entries.isEmpty {
+                DisclosureGroup("Transcript sequence (\(entries.count))") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text([entry.kind, entry.toolName].compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption.weight(.semibold))
+                                if let text = entry.text, !text.isEmpty {
+                                    Text(text).font(.caption.monospaced())
+                                }
+                            }
+                        }
+                    }
+                    .textSelection(.enabled)
+                }
+            } else if evidence.transcriptAvailable {
                 Text("Transcript captured")
             } else {
                 Text(EvaluationImportedLabels.transcriptMissing)
@@ -468,9 +483,14 @@ private struct ResultsSection: View {
                     }
                     .width(70)
                     TableColumn("Latency") { result in
-                        Text(Duration.milliseconds(result.durationMilliseconds)
-                            .formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)))
-                            .monospacedDigit()
+                        if run.importedEvidence != nil, result.durationMilliseconds == 0 {
+                            Text("—")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(Duration.milliseconds(result.durationMilliseconds)
+                                .formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)))
+                                .monospacedDigit()
+                        }
                     }
                     .width(min: 90, ideal: 110)
                     TableColumn("Tokens") { result in
@@ -497,7 +517,8 @@ private struct ResultsSection: View {
                         repetitions: run.repetitions,
                         passingScore: run.judgePassingScore ?? EvaluationSuite.judgePassingScore,
                         subjectModelName: run.execution?.modelDisplayName ?? run.environment.model,
-                        modelConfiguration: run.execution?.configuration
+                        modelConfiguration: run.execution?.configuration,
+                        importedEvidence: run.importedEvidence
                     )
                     .id(selectedResult.id)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -573,6 +594,7 @@ private struct ResultDetail: View {
     let passingScore: Int
     let subjectModelName: String
     let modelConfiguration: EvaluationModelConfiguration?
+    var importedEvidence: EvaluationImportedEvidence? = nil
     @State private var hasCopiedResponse = false
 
     var body: some View {
@@ -597,10 +619,14 @@ private struct ResultDetail: View {
 
             if let errorMessage = result.errorMessage {
                 ErrorBanner(
-                    title: "Response failed",
+                    title: result.errorCategory == "capture" ? "Capture failed" : "Response failed",
                     message: errorMessage,
                     category: result.errorCategory
                 )
+            }
+            if let note = importedEvidence?.sampleNotes?.first(where: { $0.sampleID == result.id }),
+               let partial = note.partialOutput, !partial.isEmpty {
+                LabeledText(label: "Partial output", text: partial)
             }
             if let refusal = result.refusal {
                 RefusalExplanationView(trace: refusal)
@@ -635,6 +661,40 @@ private struct ResultDetail: View {
                     label: "Scoring rationale",
                     text: rationale
                 )
+            }
+            let checks = importedEvidence?.checks.filter { $0.sampleID == result.id } ?? []
+            if !checks.isEmpty {
+                DisclosureGroup("Imported checks (\(checks.count))") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(checks.enumerated()), id: \.offset) { _, check in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(check.name) · \(check.label)")
+                                    .font(.caption.weight(.semibold))
+                                if let value = check.value { Text("Value: \(value)").font(.caption.monospaced()) }
+                                if let semantics = check.semantics { Text("Meaning: \(semantics)").font(.caption) }
+                                if let evaluator = check.evaluator { Text("Evaluator: \(evaluator)").font(.caption) }
+                                if let rationale = check.rationale { Text(rationale).foregroundStyle(.secondary) }
+                            }
+                        }
+                    }
+                    .textSelection(.enabled)
+                }
+            }
+            if let entries = importedEvidence?.transcriptEntries?.filter({ $0.sampleID == result.id }), !entries.isEmpty {
+                DisclosureGroup("Sample transcript (\(entries.count))") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text([entry.kind, entry.toolName].compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption.weight(.semibold))
+                                if let text = entry.text, !text.isEmpty {
+                                    Text(text).font(.caption.monospaced())
+                                }
+                            }
+                        }
+                    }
+                    .textSelection(.enabled)
+                }
             }
 
             if result.judgeReasoningText != nil || (result.judgeUsage?.reasoningTokens ?? 0) > 0 {

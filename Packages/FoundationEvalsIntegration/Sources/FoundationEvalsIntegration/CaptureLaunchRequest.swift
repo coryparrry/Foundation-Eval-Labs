@@ -50,6 +50,28 @@ public struct CaptureLaunchRequest: Sendable, Equatable, Codable {
         self.cases = cases
     }
 
+    public func matches(bundle: CaptureBundle) throws {
+        guard bundle.manifest.run.runID == runID else {
+            throw CaptureBundleError.invalidControlDocument("Returned run ID does not match the request.")
+        }
+        guard bundle.manifest.producer.featureID == featureID else {
+            throw CaptureBundleError.invalidControlDocument("Returned feature ID does not match the request.")
+        }
+        let actual = bundle.manifest.plan.cases.map {
+            CaptureLaunchCase(
+                caseID: $0.caseID,
+                inputRevision: $0.inputRevision,
+                repetition: $0.repetition,
+                featureVariant: $0.featureVariant,
+                input: $0.input
+            )
+        }
+        let digest = try CapturePlanDigest.hash(cases: actual)
+        guard digest == planDigest, digest == (try CapturePlanDigest.hash(cases: cases)) else {
+            throw CaptureBundleError.invalidControlDocument("Returned plan does not match the request.")
+        }
+    }
+
     public func validatedJobDirectory(projectRoot: URL) throws -> URL {
         let jobs = projectRoot
             .appending(path: ".foundation-evals", directoryHint: .isDirectory)

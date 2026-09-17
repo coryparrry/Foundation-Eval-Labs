@@ -15,7 +15,10 @@ struct WorkspaceSidebar: View {
     @State private var runToDelete: EvaluationRun?
     @State private var runSearch = ""
 
-    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles || store.isImportingEvidence }
+    private var isBusy: Bool {
+        store.isRunning || store.isReassessing || store.isProcessingFiles || store.isImportingEvidence
+            || store.launcherState == .launching || store.launcherState == .running || store.launcherState == .stopping
+    }
     private var filteredRuns: [EvaluationRun] {
         let query = runSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty ? store.runs : store.runs.filter {

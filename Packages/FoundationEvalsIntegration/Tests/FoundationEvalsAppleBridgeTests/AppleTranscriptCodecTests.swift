@@ -1,5 +1,5 @@
 import Foundation
-import FoundationEvalsAppleBridge
+import FoundationEvalsIntegration
 import FoundationModels
 import Testing
 

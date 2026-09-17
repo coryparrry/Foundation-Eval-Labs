@@ -232,6 +232,80 @@ struct CaptureContractTests {
         #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "\(await writer.runID.uuidString).fevalrun").path))
     }
 
+    @Test func publishedBundleDropsJournalFilesAndHonorsByteBudget() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let limits = CaptureLimits(
+            maximumObservationLineBytes: 8_192,
+            maximumBundleBytes: 4_096,
+            maximumRegularFiles: 8
+        )
+        let plan = CapturePlan(cases: [
+            CapturePlanCase(caseID: "one", inputRevision: "v1", input: .object(["text": .string("one")]))
+        ])
+        let writer = try CaptureBundleWriter(
+            outputParent: directory,
+            limits: limits,
+            producer: .init(appID: "example", featureID: "receipt"),
+            plan: plan,
+            environment: .currentHost()
+        )
+        try await writer.begin()
+        try await writer.record(CaptureObservation(
+            coordinate: .init(caseID: "one", repetition: 1),
+            inputRevision: "v1",
+            input: .object(["text": .string("one")]),
+            output: .returned(.null),
+            execution: .returned,
+            durationMilliseconds: 1
+        ))
+        let published = try await writer.finish(state: .finished)
+        #expect(!FileManager.default.fileExists(atPath: published.appending(path: "observations").path))
+        #expect(!FileManager.default.fileExists(atPath: published.appending(path: "plan.json").path))
+        #expect(FileManager.default.fileExists(atPath: published.appending(path: "observations.jsonl").path))
+
+        let huge = CaptureJSON.string(String(repeating: "x", count: 3_500))
+        let second = try CaptureBundleWriter(
+            outputParent: directory,
+            limits: limits,
+            producer: .init(appID: "example", featureID: "receipt"),
+            plan: plan,
+            environment: .currentHost()
+        )
+        try await second.begin()
+        await #expect(throws: CaptureFileIOError.self) {
+            try await second.record(CaptureObservation(
+                coordinate: .init(caseID: "one", repetition: 1),
+                inputRevision: "v1",
+                input: huge,
+                output: .returned(huge),
+                execution: .returned,
+                durationMilliseconds: 1
+            ))
+        }
+    }
+
+    @Test func appleEvaluationJSONKeepsSampleRows() throws {
+        let data = Data(
+            """
+            {"resultID":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","evaluationID":"ReceiptNativeEvaluation","evaluationInfo":{},"startTime":"2026-09-17T19:17:18Z","endTime":"2026-09-17T19:17:18Z","runErrors":{"inferenceFailureCount":1,"evaluatorFailureCount":1,"failingEvaluatorTypes":[],"metricsNotFound":[]},"results":[{"Input":"{\\"input\\":{\\"prompt\\":\\"hi\\"}}","Response":{"value":"{\\"totalPence\\":1000}"},"Expected":"{}","SubjectInferenceError":null,"EvaluatorErrors":null,"paidTotal":{"kind":"fail","value":false},"penceScale":{"kind":"score","value":99}},{"Input":"{}","Response":null,"Expected":"{}","SubjectInferenceError":"threw","EvaluatorErrors":null},{"Input":"{}","Response":{"value":"{}"},"Expected":"{}","EvaluatorErrors":["eval failed"],"penceScale":{"kind":"ignore"}}]}
+            """.utf8
+        )
+        let inspection = try AppleEvaluationJSONInspector.inspect(bytes: data)
+        #expect(inspection.samples.count == 3)
+        #expect(inspection.samples[0].fields["response"]?.contains("1000") == true)
+        #expect(inspection.samples[0].metrics.contains { $0.name == "paidTotal" && $0.kind == "fail" })
+        #expect(inspection.samples[1].subjectError == "threw")
+        #expect(inspection.samples[2].evaluatorError == "eval failed")
+        #expect(inspection.warnings.contains(AppleEvaluationInspectionLabels.ignoredCheck))
+        #expect(!inspection.warnings.contains(AppleEvaluationInspectionLabels.metadataOnly))
+    }
+
+    @Test func developerDirectoryPrefersDEVELOPER_DIR() {
+        #expect(DeveloperDirectory.resolved(environment: ["DEVELOPER_DIR": "/opt/Xcode.app/Contents/Developer"], xcodeSelect: { "/unused" }) == "/opt/Xcode.app/Contents/Developer")
+        #expect(DeveloperDirectory.resolved(environment: [:], xcodeSelect: { "/Selected.xctoolchain" }) == "/Selected.xctoolchain")
+    }
+
     @Test func jsonNullIsDistinctFromAbsentOutput() throws {
         let returnedNull = CaptureObservation(
             coordinate: .init(caseID: "null", repetition: 1),
@@ -340,6 +414,127 @@ struct CaptureContractTests {
                 durationMilliseconds: 1
             ))
         }
+    }
+
+    @Test func jsonNumbersRoundTripWithoutBinaryFloat() throws {
+        for literal in ["1000", "18446744073709551615", "-9223372036854775808", "0.5", "1e2"] {
+            let value = CaptureJSON.number(literal)
+            let data = try CaptureJSONCoding.encoder().encode(value)
+            let decoded = try CaptureJSONCoding.decoder().decode(CaptureJSON.self, from: data)
+            let parsed = try JSONStructure.decodeJSON(Data(literal.utf8))
+            #expect(parsed == .number(literal))
+            if case .number(let token) = decoded {
+                #expect(Decimal(string: token) == Decimal(string: literal))
+            } else {
+                Issue.record("Expected a JSON number for \(literal).")
+            }
+        }
+        let object = CaptureJSON.object(["total": .number("18446744073709551615")])
+        let encoded = try CaptureJSONCoding.encoder().encode(object)
+        #expect(!String(decoding: encoded, as: UTF8.self).contains("1.8446744073709552e+19"))
+        #expect(String(decoding: encoded, as: UTF8.self).contains("18446744073709551615"))
+    }
+
+    @Test func missingObservationsDeclarationIsRejected() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appending(path: "empty.fevalrun", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: root.appending(path: "observations.jsonl"))
+        let manifest = CaptureManifest(
+            producer: .init(appID: "example", featureID: "receipt"),
+            run: .init(runID: UUID(), startedAt: .now, state: .finished),
+            plan: CapturePlan(cases: []),
+            files: [],
+            environment: .currentHost()
+        )
+        try CaptureJSONCoding.encoder(prettyPrinted: true).encode(manifest)
+            .write(to: root.appending(path: "manifest.json"))
+        #expect(throws: CaptureBundleError.missingRequiredFile("observations.jsonl")) {
+            _ = try CaptureBundleValidator.load(root: root)
+        }
+    }
+
+    @Test func observationInputMustMatchThePlan() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try CaptureJSON.fromEncoded(ReceiptInput(text: "one"))
+        let plan = CapturePlan(cases: [
+            CapturePlanCase(caseID: "one", inputRevision: "v1", input: input)
+        ])
+        let writer = try CaptureBundleWriter(
+            outputParent: directory,
+            producer: .init(appID: "example", featureID: "receipt"),
+            plan: plan,
+            environment: .currentHost()
+        )
+        try await writer.begin()
+        try await writer.record(CaptureObservation(
+            coordinate: .init(caseID: "one", repetition: 1),
+            inputRevision: "v2",
+            input: input,
+            output: .returned(.number("1")),
+            execution: .returned,
+            durationMilliseconds: 1
+        ))
+        let url = try await writer.finish(state: .finished)
+        #expect(throws: CaptureBundleError.observationPlanMismatch("one#1#default")) {
+            _ = try CaptureBundleValidator.load(root: url)
+        }
+    }
+
+    @Test func storageFailureDoesNotReplaceAReturnedObservation() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let plan = CapturePlan(cases: [try planCase(id: "one", text: "one")])
+        let writer = try CaptureBundleWriter(
+            outputParent: directory,
+            producer: .init(appID: "example", featureID: "receipt"),
+            plan: plan,
+            environment: .currentHost()
+        )
+        try await writer.begin()
+        let observationID = UUID()
+        let input = try CaptureJSON.fromEncoded(ReceiptInput(text: "one"))
+        let observationsDirectory = await writer.workingURL.appending(path: "observations")
+        try FileManager.default.removeItem(at: observationsDirectory)
+        try Data().write(to: observationsDirectory)
+        await #expect(throws: (any Error).self) {
+            try await writer.record(CaptureObservation(
+                observationID: observationID,
+                coordinate: .init(caseID: "one", repetition: 1),
+                inputRevision: "v1",
+                input: input,
+                output: .returned(.number("1")),
+                execution: .returned,
+                durationMilliseconds: 1
+            ))
+        }
+        #expect(await writer.recordedObservations().isEmpty)
+        try FileManager.default.removeItem(at: observationsDirectory)
+        try FileManager.default.createDirectory(at: observationsDirectory, withIntermediateDirectories: true)
+        try await writer.record(CaptureObservation(
+            observationID: observationID,
+            coordinate: .init(caseID: "one", repetition: 1),
+            inputRevision: "v1",
+            input: input,
+            output: .returned(.number("1")),
+            execution: .returned,
+            durationMilliseconds: 1
+        ))
+        await #expect(throws: CaptureBundleError.duplicateObservation(observationID.uuidString)) {
+            try await writer.record(CaptureObservation(
+                observationID: observationID,
+                coordinate: .init(caseID: "one", repetition: 1),
+                inputRevision: "v1",
+                input: input,
+                output: .returned(.number("2")),
+                execution: .returned,
+                durationMilliseconds: 1
+            ))
+        }
+        #expect(await writer.recordedObservations().count == 1)
+        #expect(await writer.recordedObservations()[0].output == .returned(.number("1")))
     }
 
     @Test func pathTraversalIsRejected() {

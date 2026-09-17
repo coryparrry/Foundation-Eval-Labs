@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import FoundationEvalsAppleBridge
 import FoundationEvalsIntegration
 import FoundationModels
 import ImageIO
@@ -54,6 +53,7 @@ final class EvaluationStore {
     private(set) var connectedFeatureAuthorization: ConnectedFeatureLaunchAuthorization?
     private let connectedFeatureLauncher = ConnectedFeatureLauncher()
     private var launcherTask: Task<Void, Never>?
+    private var launcherJobID: UUID?
     private(set) var activeRun: EvaluationActiveRun?
 
     private let runner = EvaluationRunner()
@@ -1693,16 +1693,22 @@ final class EvaluationStore {
         }
     }
 
-    func previewImportedEvidence(at url: URL) async throws -> EvidenceImportPreview {
+    func previewImportedEvidence(
+        at url: URL,
+        destinationProjectID: UUID? = nil,
+        destinationSuiteID: UUID? = nil
+    ) async throws -> EvidenceImportPreview {
         isImportingEvidence = true
         defer { isImportingEvidence = false }
         let stagingParent = supportDirectory.appending(path: "ImportStaging", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: stagingParent, withIntermediateDirectories: true)
-        let destinationProjectID = selectedProjectID
-        let destinationSuiteID = selectedSuiteID
-        let destinationProjectName = selectedProject.name
-        let suiteName = draftSuite.name
+        let destinationProjectID = destinationProjectID ?? selectedProjectID
+        let destinationSuiteID = destinationSuiteID ?? selectedSuiteID
+        let destinationProjectName = workspace.projects.first { $0.id == destinationProjectID }?.name ?? selectedProject.name
+        let suiteName = workspace.projects.first { $0.id == destinationProjectID }?.suites.first { $0.id == destinationSuiteID }?.name
+            ?? draftSuite.name
         let existing = loadImportedEvidenceIndex(projectID: destinationProjectID)
+            .filter { persistedRunLocation(id: $0.ownedRunID) != nil }
         return try await Task.detached(priority: .userInitiated) {
             try EvidenceImportService.preview(
                 url: url,
@@ -1728,7 +1734,18 @@ final class EvaluationStore {
             EvidenceImportService.discard(stagingRoot: preview.stagingRoot)
             throw EvidenceImportError.destinationMissing
         }
-        switch preview.outcome {
+        if case .rejected = preview.outcome {
+            EvidenceImportService.discard(stagingRoot: preview.stagingRoot)
+            throw EvidenceImportError.unsupportedContent("The evidence cannot be imported.")
+        }
+        let liveIndex = loadImportedEvidenceIndex(projectID: preview.destinationProjectID)
+            .filter { persistedRunLocation(id: $0.ownedRunID) != nil }
+        let outcome = EvidenceImportIndex.outcome(
+            producerRunID: preview.producerRunID,
+            sourceDigest: preview.sourceDigest,
+            records: liveIndex
+        )
+        switch outcome {
         case .alreadyImported(let id):
             EvidenceImportService.discard(stagingRoot: preview.stagingRoot)
             if preview.destinationProjectID == selectedProjectID, preview.destinationSuiteID == selectedSuiteID {
@@ -1746,8 +1763,20 @@ final class EvaluationStore {
         }
 
         var run = preview.run
+        run.id = UUID()
         run.projectID = preview.destinationProjectID
         run.suiteID = preview.destinationSuiteID
+        let destinationRuns = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: supportDirectory,
+            projectID: preview.destinationProjectID,
+            suiteID: preview.destinationSuiteID
+        ).appending(path: "Runs", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: destinationRuns, withIntermediateDirectories: true)
+        var runURL = destinationRuns.appending(path: "\(run.id.uuidString).json")
+        while FileManager.default.fileExists(atPath: runURL.path) || persistedRunLocation(id: run.id) != nil {
+            run.id = UUID()
+            runURL = destinationRuns.appending(path: "\(run.id.uuidString).json")
+        }
         let evidenceDirectory = runEvidenceDirectory(
             projectID: preview.destinationProjectID,
             suiteID: preview.destinationSuiteID,
@@ -1757,18 +1786,16 @@ final class EvaluationStore {
         try FileManager.default.copyItem(at: preview.stagingRoot, to: evidenceDirectory.appending(path: preview.filename))
         EvidenceImportService.discard(stagingRoot: preview.stagingRoot)
 
-        let destinationRuns = EvaluationWorkspacePersistence.suiteDirectory(
-            supportDirectory: supportDirectory,
-            projectID: preview.destinationProjectID,
-            suiteID: preview.destinationSuiteID
-        ).appending(path: "Runs", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: destinationRuns, withIntermediateDirectories: true)
         run = runPreparedForHistory(run)
-        try CanonicalJSON.data(for: run).write(
-            to: destinationRuns.appending(path: "\(run.id.uuidString).json"),
-            options: .atomic
-        )
+        if var evidence = run.importedEvidence {
+            evidence.originalRelativePath = "imported/\(preview.filename)"
+            run.importedEvidence = evidence
+        }
+        try CanonicalJSON.data(for: run).write(to: runURL, options: .withoutOverwriting)
         var index = EvidenceImportIndex(records: loadImportedEvidenceIndex(projectID: preview.destinationProjectID))
+        index.records.removeAll {
+            $0.producerRunID == preview.producerRunID && persistedRunLocation(id: $0.ownedRunID) == nil
+        }
         index.records.append(
             EvidenceImportIndexRecord(
                 sourceKind: preview.sourceKind,
@@ -1800,8 +1827,7 @@ final class EvaluationStore {
             scheme: "ConnectedFeature",
             testIdentifier: "ConnectedFeatureTests/ReceiptCaptureTests",
             featureID: "receipt-extractor",
-            developerDir: ProcessInfo.processInfo.environment["DEVELOPER_DIR"]
-                ?? "/Applications/Xcode.app/Contents/Developer",
+            developerDir: DeveloperDirectory.resolved(),
             authorizedAt: Date()
         )
         try CanonicalJSON.data(for: authorization).write(to: connectedFeatureAuthorizationURL, options: .atomic)
@@ -1819,28 +1845,26 @@ final class EvaluationStore {
         }
         guard let evidence = run.importedEvidence,
               evidence.producerFeatureID == authorization.featureID,
-              evidence.sourceKind == .captureBundle else {
+              evidence.sourceKind == .captureBundle,
+              let plan = evidence.sourcePlan, !plan.cases.isEmpty else {
             notice = ConnectedFeatureLauncherError.incompatibleEvidence.localizedDescription
             return
         }
-        let parentInputs: [CaptureLaunchCase] = (run.plannedCases ?? []).compactMap { item in
-            let sourceID = evidence.sourceCaseIDs[item.id.uuidString] ?? item.name
-            let input = (try? JSONStructure.decodeJSON(Data(item.prompt.utf8)))
-                ?? .object(["text": .string(item.prompt)])
-            return CaptureLaunchCase(
-                caseID: sourceID,
-                inputRevision: "receipt-text-v1",
-                input: input
+        let cases = plan.cases.map {
+            CaptureLaunchCase(
+                caseID: $0.caseID,
+                inputRevision: $0.inputRevision,
+                repetition: $0.repetition,
+                featureVariant: $0.featureVariant,
+                input: $0.input
             )
         }
-        guard !parentInputs.isEmpty else {
-            notice = ConnectedFeatureLauncherError.incompatibleEvidence.localizedDescription
-            return
-        }
-        let cases = parentInputs
         launcherState = .launching
         let jobID = UUID()
+        launcherJobID = jobID
         let runID = UUID()
+        let destinationProjectID = selectedProjectID
+        let destinationSuiteID = selectedSuiteID
         launcherTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -1857,11 +1881,49 @@ final class EvaluationStore {
                     .appending(path: ".foundation-evals/jobs/\(jobID.uuidString)", directoryHint: .isDirectory)
                 try FileManager.default.createDirectory(at: jobParent, withIntermediateDirectories: true)
                 self.launcherState = .running
-                let published = try await connectedFeatureLauncher.run(authorization: authorization, request: request)
-                let preview = try await previewImportedEvidence(at: published)
+                var published: URL?
+                do {
+                    published = try await connectedFeatureLauncher.run(authorization: authorization, request: request)
+                } catch ConnectedFeatureLauncherError.processFailedWithCapture(let url, let status, let log) {
+                    published = url
+                    self.notice = ConnectedFeatureLauncherError.processFailed(status: status, log: log).localizedDescription
+                }
+                guard self.launcherJobID == jobID else { return }
+                if Task.isCancelled {
+                    if let published {
+                        let preview = try await previewImportedEvidence(
+                            at: published,
+                            destinationProjectID: destinationProjectID,
+                            destinationSuiteID: destinationSuiteID
+                        )
+                        _ = try confirmImportedEvidence(preview)
+                        self.notice = "Rerun stopped. Captured evidence was kept for inspection."
+                    }
+                    self.launcherState = .idle
+                    return
+                }
+                guard let published else {
+                    throw ConnectedFeatureLauncherError.missingCapture
+                }
+                let preview = try await previewImportedEvidence(
+                    at: published,
+                    destinationProjectID: destinationProjectID,
+                    destinationSuiteID: destinationSuiteID
+                )
+                guard self.launcherJobID == jobID else {
+                    self.discardImportedEvidencePreview(preview)
+                    return
+                }
+                guard !Task.isCancelled else {
+                    _ = try confirmImportedEvidence(preview)
+                    self.notice = "Rerun stopped. Captured evidence was kept for inspection."
+                    self.launcherState = .idle
+                    return
+                }
                 _ = try confirmImportedEvidence(preview)
                 self.launcherState = .idle
             } catch {
+                guard self.launcherJobID == jobID else { return }
                 if Task.isCancelled {
                     self.launcherState = .idle
                     return
@@ -1873,10 +1935,14 @@ final class EvaluationStore {
     }
 
     func requestConnectedFeatureStop() {
+        let stoppingJob = launcherJobID
         launcherState = .stopping
+        launcherTask?.cancel()
         Task {
             _ = await connectedFeatureLauncher.requestStop()
-            launcherState = await connectedFeatureLauncher.waitForStop(timeout: .seconds(15))
+            let stopState = await connectedFeatureLauncher.waitForStop(timeout: .seconds(15))
+            guard self.launcherJobID == stoppingJob else { return }
+            launcherState = stopState
             if launcherState == .unresolvedStop {
                 notice = ConnectedFeatureLauncherError.unresolvedStop.localizedDescription
             }

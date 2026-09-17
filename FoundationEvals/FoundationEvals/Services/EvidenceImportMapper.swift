@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import FoundationEvalsAppleBridge
 import FoundationEvalsIntegration
 
 enum EvidenceImportMapper {
@@ -32,6 +31,8 @@ enum EvidenceImportMapper {
         let producer = bundle.manifest.producer
         var sourceCaseIDs: [String: String] = [:]
         var checks: [EvaluationImportedCheck] = []
+        var notes: [EvaluationImportedSampleNote] = []
+        var transcriptEntries: [EvaluationImportedTranscriptEntry] = []
         let plannedCases: [EvaluationCase] = bundle.manifest.plan.cases.map { item in
             let id = mappedCaseID(appID: producer.appID, featureID: producer.featureID, sourceCaseID: item.caseID)
             sourceCaseIDs[id.uuidString] = item.caseID
@@ -58,7 +59,10 @@ enum EvidenceImportMapper {
                         name: check.name,
                         status: check.status.rawValue,
                         label: label(for: check),
-                        rationale: check.rationale
+                        rationale: check.rationale,
+                        semantics: check.semantics,
+                        value: check.value.map(displayJSON),
+                        evaluator: check.evaluator
                     )
                 )
             }
@@ -69,9 +73,32 @@ enum EvidenceImportMapper {
                         name: "execution",
                         status: "unknown",
                         label: EvaluationImportedLabels.notAssessed,
-                        rationale: nil
+                        rationale: nil,
+                        semantics: nil,
+                        value: nil,
+                        evaluator: nil
                     )
                 )
+            }
+            let partial = try observation.partialOutput.map(displayJSON)
+            if observation.captureError != nil || partial != nil || observation.transcriptRelativePath != nil {
+                notes.append(
+                    EvaluationImportedSampleNote(
+                        sampleID: sampleID,
+                        partialOutput: partial,
+                        captureError: observation.captureError?.message,
+                        transcriptRelativePath: observation.transcriptRelativePath
+                    )
+                )
+            }
+            if let path = observation.transcriptRelativePath {
+                transcriptEntries.append(contentsOf: loadTranscriptEntries(from: bundle, relativePath: path, sampleID: sampleID))
+            }
+            let responseText: String
+            if let returned = try? response(for: observation), !returned.isEmpty {
+                responseText = returned
+            } else {
+                responseText = partial ?? ""
             }
             return EvaluationSampleResult(
                 id: sampleID,
@@ -80,14 +107,14 @@ enum EvidenceImportMapper {
                 repetition: observation.coordinate.repetition,
                 prompt: try observation.input.utf8Text(),
                 expected: "",
-                response: try response(for: observation),
-                status: observation.execution == .threw ? .error : .unscored,
+                response: responseText,
+                status: observation.execution == .threw || observation.captureError != nil ? .error : .unscored,
                 score: nil,
                 rationale: labels.joined(separator: " · "),
                 durationMilliseconds: observation.durationMilliseconds,
                 usage: EvaluationUsage(),
-                errorCategory: observation.error.map(\.kind),
-                errorMessage: observation.error?.message,
+                errorCategory: observation.captureError?.kind ?? observation.error.map(\.kind),
+                errorMessage: observation.captureError?.message ?? observation.error?.message,
                 judgeErrorCategory: observation.evaluatorError.map(\.kind),
                 judgeErrorMessage: observation.evaluatorError?.message
             )
@@ -102,7 +129,7 @@ enum EvidenceImportMapper {
         warnings.insert(EvaluationImportedLabels.inspectionOnly, at: 0)
         let environment = bundle.manifest.environment
         return EvaluationRun(
-            id: bundle.manifest.run.runID,
+            id: UUID(),
             suiteID: destinationSuiteID,
             suiteName: suiteName,
             suiteVersion: "imported",
@@ -142,11 +169,14 @@ enum EvidenceImportMapper {
                 coverageLabel: coverageLabel,
                 environmentClaims: environmentClaims(environment),
                 importerHost: importerHost(),
-                originalRelativePath: "imported/\(bundle.root.lastPathComponent)",
+                originalRelativePath: "",
                 rerunOf: bundle.manifest.run.rerunOf,
                 sourceCaseIDs: sourceCaseIDs,
-                transcriptAvailable: bundle.observations.contains { $0.transcriptRelativePath != nil },
-                checks: checks
+                transcriptAvailable: !transcriptEntries.isEmpty || bundle.observations.contains { $0.transcriptRelativePath != nil },
+                checks: checks,
+                sourcePlan: bundle.manifest.plan,
+                transcriptEntries: transcriptEntries,
+                sampleNotes: notes
             )
         )
     }
@@ -160,19 +190,22 @@ enum EvidenceImportMapper {
     ) -> EvaluationRun {
         let results: [EvaluationSampleResult] = inspection.samples.enumerated().map { index, sample in
             let caseID = mappedCaseID(appID: "apple-evaluation", featureID: inspection.evaluationID, sourceCaseID: String(index))
+            let sampleID = UUID()
             return EvaluationSampleResult(
-                id: UUID(),
+                id: sampleID,
                 caseID: caseID,
                 caseName: "Row \(index + 1)",
                 repetition: 1,
                 prompt: sample.fields["input"] ?? sample.fields.values.sorted().first ?? "",
-                expected: "",
+                expected: sample.fields["expected"] ?? "",
                 response: sample.fields["response"] ?? sample.fields["output"] ?? "",
                 status: sample.subjectError == nil ? .unscored : .error,
                 rationale: [
                     EvaluationImportedLabels.plannedUnknown,
                     EvaluationImportedLabels.inspectionOnly,
                     sample.evaluatorError.map { _ in "Evaluator failed separately from the subject" },
+                    sample.metrics.contains(where: { $0.kind == "fail" }) ? EvaluationImportedLabels.producerCheckFailed : nil,
+                    sample.metrics.contains(where: { $0.kind == "ignore" }) ? EvaluationImportedLabels.ignoredCheck : nil,
                     EvaluationImportedLabels.originalFileOnly,
                 ].compactMap { $0 }.joined(separator: " · "),
                 durationMilliseconds: 0,
@@ -183,8 +216,26 @@ enum EvidenceImportMapper {
                 judgeErrorMessage: sample.evaluatorError
             )
         }
+        let checks: [EvaluationImportedCheck] = zip(inspection.samples, results).flatMap { sample, result in
+            sample.metrics.map { metric in
+                EvaluationImportedCheck(
+                    sampleID: result.id,
+                    name: metric.name,
+                    status: metric.kind,
+                    label: metricLabel(metric.kind),
+                    rationale: metric.rationale,
+                    semantics: metric.kind,
+                    value: metric.value,
+                    evaluator: metric.evaluatorKind
+                )
+            }
+        }
+        var warnings = [EvaluationImportedLabels.inspectionOnly] + inspection.warnings
+        if inspection.samples.isEmpty, !warnings.contains(EvaluationImportedLabels.metadataOnly) {
+            warnings.insert(EvaluationImportedLabels.metadataOnly, at: 0)
+        }
         return EvaluationRun(
-            id: inspection.resultID,
+            id: UUID(),
             suiteID: destinationSuiteID,
             suiteName: suiteName,
             suiteVersion: "imported",
@@ -217,15 +268,15 @@ enum EvidenceImportMapper {
                 importedAt: importedAt,
                 captureStartedAt: inspection.startedAt,
                 captureEndedAt: inspection.endedAt,
-                warnings: [EvaluationImportedLabels.inspectionOnly] + inspection.warnings,
-                coverageLabel: EvaluationImportedLabels.plannedUnknown,
+                warnings: warnings,
+                coverageLabel: inspection.samples.isEmpty ? EvaluationImportedLabels.metadataOnly : EvaluationImportedLabels.plannedUnknown,
                 environmentClaims: inspection.evaluationInfo,
                 importerHost: importerHost(),
-                originalRelativePath: "imported/apple-evaluation-result.json",
+                originalRelativePath: "",
                 rerunOf: nil,
                 sourceCaseIDs: [:],
                 transcriptAvailable: false,
-                checks: []
+                checks: checks
             )
         )
     }
@@ -237,8 +288,12 @@ enum EvidenceImportMapper {
         suiteName: String,
         importedAt: Date = Date()
     ) -> EvaluationRun {
+        let entries = inspection.entries.map {
+            EvaluationImportedTranscriptEntry(sampleID: nil, id: $0.id, kind: $0.kind, text: $0.text, toolName: $0.toolName)
+        }
         let prompt = inspection.entries.filter { $0.kind == "prompt" }.compactMap(\.text).joined(separator: "\n")
         let response = inspection.entries.filter { $0.kind == "response" }.compactMap(\.text).joined(separator: "\n")
+        let tools = inspection.entries.compactMap(\.toolName)
         let result = EvaluationSampleResult(
             id: UUID(),
             caseID: mappedCaseID(appID: "apple-transcript", featureID: "transcript", sourceCaseID: inspection.digest),
@@ -250,7 +305,10 @@ enum EvidenceImportMapper {
             status: .unscored,
             rationale: [EvaluationImportedLabels.bareTranscript, EvaluationImportedLabels.inspectionOnly].joined(separator: " · "),
             durationMilliseconds: 0,
-            usage: EvaluationUsage()
+            usage: EvaluationUsage(),
+            toolCalls: tools.isEmpty ? nil : tools.enumerated().map {
+                EvaluationToolCallTrace(toolName: $1, callIndex: $0, matchedFiles: [], outputCharacterCount: 0, outcome: "imported")
+            }
         )
         return EvaluationRun(
             id: UUID(),
@@ -290,11 +348,12 @@ enum EvidenceImportMapper {
                 coverageLabel: EvaluationImportedLabels.plannedUnknown,
                 environmentClaims: [:],
                 importerHost: importerHost(),
-                originalRelativePath: "imported/apple-transcript.json",
+                originalRelativePath: "",
                 rerunOf: nil,
                 sourceCaseIDs: [:],
-                transcriptAvailable: true,
-                checks: []
+                transcriptAvailable: !inspection.entries.isEmpty,
+                checks: [],
+                transcriptEntries: entries
             )
         )
     }
@@ -335,6 +394,54 @@ enum EvidenceImportMapper {
         case .passed: "Producer-reported check passed"
         case .error: "Producer-reported check error"
         case .unknown: EvaluationImportedLabels.notAssessed
+        }
+    }
+
+    private static func displayJSON(_ value: CaptureJSON) -> String {
+        if case .string(let text) = value { return text }
+        if case .number(let literal) = value { return literal }
+        return (try? value.utf8Text(prettyPrinted: false)) ?? ""
+    }
+
+    private static func metricLabel(_ kind: String) -> String {
+        switch kind {
+        case "fail": EvaluationImportedLabels.producerCheckFailed
+        case "ignore": EvaluationImportedLabels.ignoredCheck
+        case "pass": "Producer-reported check passed"
+        case "score": "Producer-reported metric value"
+        default: EvaluationImportedLabels.notAssessed
+        }
+    }
+
+    private static func loadTranscriptEntries(
+        from bundle: CaptureBundle,
+        relativePath: String,
+        sampleID: UUID
+    ) -> [EvaluationImportedTranscriptEntry] {
+        guard let url = try? CaptureFileIO.resolvedMember(root: bundle.root, relativePath: relativePath),
+              let data = try? CaptureFileIO.readRegularFileNoFollow(
+                at: url,
+                maximumBytes: CaptureLimits.version1.maximumAppleJSONBytes
+              ),
+              let inspection = try? AppleTranscriptCodec.inspect(bytes: data) else {
+            return [
+                EvaluationImportedTranscriptEntry(
+                    sampleID: sampleID,
+                    id: relativePath,
+                    kind: "unavailable",
+                    text: "The linked transcript could not be opened from \(relativePath).",
+                    toolName: nil
+                )
+            ]
+        }
+        return inspection.entries.map {
+            EvaluationImportedTranscriptEntry(
+                sampleID: sampleID,
+                id: $0.id,
+                kind: $0.kind,
+                text: $0.text,
+                toolName: $0.toolName
+            )
         }
     }
 

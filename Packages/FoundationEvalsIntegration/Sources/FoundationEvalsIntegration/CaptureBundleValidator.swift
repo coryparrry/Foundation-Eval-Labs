@@ -52,22 +52,36 @@ public enum CaptureBundleValidator {
         }
 
         var warnings: [String] = []
-        let observations = try loadObservations(root: root, limits: limits, stagedBytes: stagedBytes)
+        guard manifest.plan.cases.count <= limits.maximumPlannedTrials else {
+            throw CaptureBundleError.planTooLarge(maximum: limits.maximumPlannedTrials)
+        }
+        let observationsEntry = try requiredFile(manifest.files, path: "observations.jsonl", kind: .observations)
+        try validateFileEntries(manifest.files, root: root, limits: limits, stagedBytes: stagedBytes)
+        let observations = try loadObservations(
+            root: root,
+            relativePath: observationsEntry.relativePath,
+            limits: limits,
+            stagedBytes: stagedBytes
+        )
         try validateIdentities(plan: manifest.plan, observations: observations)
+        try validatePlanAgreement(plan: manifest.plan, observations: observations)
         let coverage = CaptureCoverage.reconcile(plan: manifest.plan, observations: observations)
         if !coverage.extraCoordinates.isEmpty {
             throw CaptureBundleError.extraObservation(coverage.extraCoordinates[0].identity)
         }
 
         let expectations: [CaptureExpectation]
-        if manifest.files.contains(where: { $0.kind == .expectations }) {
-            let data = try read(root: root, relativePath: "expectations.json", maximumBytes: limits.maximumManifestBytes, stagedBytes: stagedBytes)
+        if let expectationsEntry = manifest.files.first(where: { $0.kind == .expectations }) {
+            let data = try read(
+                root: root,
+                relativePath: expectationsEntry.relativePath,
+                maximumBytes: limits.maximumManifestBytes,
+                stagedBytes: stagedBytes
+            )
             expectations = try CaptureJSONCoding.decoder().decode([CaptureExpectation].self, from: data)
         } else {
             expectations = []
         }
-
-        try validateFileEntries(manifest.files, root: root, limits: limits, stagedBytes: stagedBytes)
         if !coverage.isComplete {
             warnings.append("Incomplete capture · Some planned cases were not recorded")
         }
@@ -85,10 +99,11 @@ public enum CaptureBundleValidator {
 
     private static func loadObservations(
         root: URL,
+        relativePath: String,
         limits: CaptureLimits,
         stagedBytes: [String: Data]?
     ) throws -> [CaptureObservation] {
-        let data = try read(root: root, relativePath: "observations.jsonl", maximumBytes: limits.maximumBundleBytes, stagedBytes: stagedBytes)
+        let data = try read(root: root, relativePath: relativePath, maximumBytes: limits.maximumBundleBytes, stagedBytes: stagedBytes)
         if data.isEmpty { return [] }
         var observations: [CaptureObservation] = []
         var lineNumber = 0
@@ -120,8 +135,15 @@ public enum CaptureBundleValidator {
             }
         }
         var seenCoordinates: Set<String> = []
+        var seenObservationIDs: Set<UUID> = []
         var seenAttempts: [String: UUID] = [:]
         for observation in observations {
+            if !seenObservationIDs.insert(observation.observationID).inserted {
+                throw CaptureBundleError.duplicateObservation(observation.observationID.uuidString)
+            }
+            guard observation.coordinate.repetition >= 1 else {
+                throw CaptureBundleError.invalidControlDocument("Repetition must start at 1.")
+            }
             let identity = observation.coordinate.identity
             if !seenCoordinates.insert(identity).inserted {
                 throw CaptureBundleError.multipleAttemptsUnsupported(identity)
@@ -134,6 +156,25 @@ public enum CaptureBundleValidator {
                 throw CaptureBundleError.extraObservation(identity)
             }
         }
+    }
+
+    private static func validatePlanAgreement(plan: CapturePlan, observations: [CaptureObservation]) throws {
+        let planned = Dictionary(uniqueKeysWithValues: plan.cases.map { ($0.coordinate.identity, $0) })
+        for observation in observations {
+            guard let item = planned[observation.coordinate.identity] else {
+                throw CaptureBundleError.extraObservation(observation.coordinate.identity)
+            }
+            guard item.inputRevision == observation.inputRevision, item.input == observation.input else {
+                throw CaptureBundleError.observationPlanMismatch(observation.coordinate.identity)
+            }
+        }
+    }
+
+    private static func requiredFile(_ files: [CaptureFileEntry], path: String, kind: CaptureFileKind) throws -> CaptureFileEntry {
+        guard let entry = files.first(where: { $0.relativePath == path && $0.kind == kind }) else {
+            throw CaptureBundleError.missingRequiredFile(path)
+        }
+        return entry
     }
 
     private static func validateFileEntries(

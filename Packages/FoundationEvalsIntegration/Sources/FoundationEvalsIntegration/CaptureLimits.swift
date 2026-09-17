@@ -13,6 +13,8 @@ public struct CaptureLimits: Sendable, Equatable, Codable {
     public var maximumObservationLineBytes: Int
     public var maximumBundleBytes: Int
     public var maximumRegularFiles: Int
+    public var maximumVisitedEntries: Int
+    public var maximumDirectoryDepth: Int
     public var maximumJSONNestingDepth: Int
     public var maximumLauncherLogBytes: Int
     public var defaultRunDeadlineSeconds: Int
@@ -27,6 +29,8 @@ public struct CaptureLimits: Sendable, Equatable, Codable {
         maximumObservationLineBytes: Int = CaptureLimits.mebibyte,
         maximumBundleBytes: Int = 25 * CaptureLimits.mebibyte,
         maximumRegularFiles: Int = 256,
+        maximumVisitedEntries: Int = 256,
+        maximumDirectoryDepth: Int = 32,
         maximumJSONNestingDepth: Int = 64,
         maximumLauncherLogBytes: Int = CaptureLimits.mebibyte,
         defaultRunDeadlineSeconds: Int = 600,
@@ -40,6 +44,8 @@ public struct CaptureLimits: Sendable, Equatable, Codable {
         self.maximumObservationLineBytes = maximumObservationLineBytes
         self.maximumBundleBytes = maximumBundleBytes
         self.maximumRegularFiles = maximumRegularFiles
+        self.maximumVisitedEntries = maximumVisitedEntries
+        self.maximumDirectoryDepth = maximumDirectoryDepth
         self.maximumJSONNestingDepth = maximumJSONNestingDepth
         self.maximumLauncherLogBytes = maximumLauncherLogBytes
         self.defaultRunDeadlineSeconds = defaultRunDeadlineSeconds

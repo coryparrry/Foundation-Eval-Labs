@@ -63,22 +63,15 @@ actor ConnectedFeatureLauncher {
         child.standardError = errorPipe
         process = child
         try child.run()
-        let logs = await drain(output: outputPipe, error: errorPipe, limit: CaptureLimits.version1.maximumLauncherLogBytes)
-        child.waitUntilExit()
-        process = nil
-        let status = child.terminationStatus
-        let published = try FileManager.default.contentsOfDirectory(
-            at: job,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: []
-        ).first { $0.pathExtension == "fevalrun" }
-        guard let published else {
-            if status == 0 {
-                throw ConnectedFeatureLauncherError.missingCapture
-            }
-            throw ConnectedFeatureLauncherError.processFailed(status: status, log: logs)
+        let logs: String
+        do {
+            logs = try await waitForExit(child, output: outputPipe, error: errorPipe)
+        } catch {
+            process = nil
+            throw error
         }
-        return published
+        process = nil
+        return try collectCapture(in: job, request: request, status: child.terminationStatus, log: logs)
     }
 
     func requestStop() -> ConnectedFeatureLauncherState {
@@ -103,6 +96,58 @@ actor ConnectedFeatureLauncher {
         return .idle
     }
 
+    private func waitForExit(_ child: Process, output: Pipe, error: Pipe) async throws -> String {
+        try await withThrowingTaskGroup(of: String?.self) { group in
+            group.addTask {
+                await self.drain(output: output, error: error, limit: CaptureLimits.version1.maximumLauncherLogBytes)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(CaptureLimits.version1.defaultRunDeadlineSeconds))
+                return nil
+            }
+            let first = try await group.next() ?? nil
+            group.cancelAll()
+            if first == nil {
+                child.terminate()
+                throw ConnectedFeatureLauncherError.deadlineExceeded
+            }
+            child.waitUntilExit()
+            return first ?? ""
+        }
+    }
+
+    private func collectCapture(
+        in job: URL,
+        request: CaptureLaunchRequest,
+        status: Int32,
+        log: String
+    ) throws -> URL {
+        let jobCaptures = try FileManager.default.contentsOfDirectory(
+            at: job,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ).filter { $0.pathExtension == "fevalrun" }
+        if jobCaptures.count > 1 {
+            throw ConnectedFeatureLauncherError.ambiguousCaptures
+        }
+        let expected = job.appending(path: "\(request.runID.uuidString).fevalrun")
+        guard let published = jobCaptures.first else {
+            if status == 0 {
+                throw ConnectedFeatureLauncherError.missingCapture
+            }
+            throw ConnectedFeatureLauncherError.processFailed(status: status, log: log)
+        }
+        guard published.standardizedFileURL.path == expected.standardizedFileURL.path else {
+            throw ConnectedFeatureLauncherError.wrongCapture
+        }
+        let bundle = try CaptureBundleValidator.load(root: published)
+        try request.matches(bundle: bundle)
+        if status != 0 {
+            throw ConnectedFeatureLauncherError.processFailedWithCapture(url: published, status: status, log: log)
+        }
+        return published
+    }
+
     private func drain(output: Pipe, error: Pipe, limit: Int) async -> String {
         await withTaskGroup(of: Data.self) { group in
             group.addTask { readLimited(from: output.fileHandleForReading, limit: limit) }
@@ -125,6 +170,10 @@ enum ConnectedFeatureLauncherError: LocalizedError {
     case processFailed(status: Int32, log: String)
     case unauthorized
     case incompatibleEvidence
+    case wrongCapture
+    case ambiguousCaptures
+    case deadlineExceeded
+    case processFailedWithCapture(url: URL, status: Int32, log: String)
 
     var errorDescription: String? {
         switch self {
@@ -135,6 +184,11 @@ enum ConnectedFeatureLauncherError: LocalizedError {
             "The connected test exited \(status). \(log)"
         case .unauthorized: "Authorize the Connected Feature example before rerunning it."
         case .incompatibleEvidence: "This evidence cannot be rerun from Foundation Evals."
+        case .wrongCapture: "The returned capture does not belong to this job."
+        case .ambiguousCaptures: "The job directory contains more than one capture."
+        case .deadlineExceeded: "The connected-feature rerun exceeded its time limit."
+        case .processFailedWithCapture(_, let status, let log):
+            "The connected test exited \(status) after writing capture evidence. \(log)"
         }
     }
 }

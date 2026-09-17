@@ -1,5 +1,4 @@
 import Foundation
-import FoundationEvalsIntegration
 import FoundationModels
 
 public struct AppleTranscriptEntryInspection: Sendable, Equatable {
@@ -7,6 +6,13 @@ public struct AppleTranscriptEntryInspection: Sendable, Equatable {
     public var kind: String
     public var text: String?
     public var toolName: String?
+
+    public init(id: String, kind: String, text: String?, toolName: String?) {
+        self.id = id
+        self.kind = kind
+        self.text = text
+        self.toolName = toolName
+    }
 }
 
 public struct AppleTranscriptInspection: Sendable, Equatable {
@@ -14,6 +20,13 @@ public struct AppleTranscriptInspection: Sendable, Equatable {
     public var originalByteCount: Int
     public var digest: String
     public var warnings: [String]
+
+    public init(entries: [AppleTranscriptEntryInspection], originalByteCount: Int, digest: String, warnings: [String]) {
+        self.entries = entries
+        self.originalByteCount = originalByteCount
+        self.digest = digest
+        self.warnings = warnings
+    }
 }
 
 @available(macOS 27, *)
@@ -47,7 +60,7 @@ public enum AppleTranscriptCodec {
             case .reasoning(let reasoning):
                 entries.append(.init(id: reasoning.id, kind: "reasoning", text: text(from: reasoning.segments), toolName: nil))
             @unknown default:
-                warnings.append("Some fields are available only in the original file")
+                warnings.append(AppleEvaluationInspectionLabels.originalFileOnly)
             }
         }
         if entries.isEmpty {

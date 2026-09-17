@@ -1,5 +1,6 @@
 import Evaluations
 import Foundation
+import FoundationEvalsIntegration
 
 /// Native Apple evaluation-result codec. Requires Xcode's Evaluations framework.
 @available(macOS 27, *)
@@ -11,6 +12,10 @@ public enum AppleEvaluationCodec: Sendable {
     }
 
     public static func loadResult(from url: URL) throws -> EvaluationResult {
-        try EvaluationResult.loadJSON(from: url)
+        let data = try CaptureFileIO.readRegularFileNoFollow(
+            at: url,
+            maximumBytes: CaptureLimits.version1.maximumAppleJSONBytes
+        )
+        return try decodeResult(from: data)
     }
 }

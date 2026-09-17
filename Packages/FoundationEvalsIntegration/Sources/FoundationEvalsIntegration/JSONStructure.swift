@@ -34,9 +34,11 @@ public enum JSONStructure {
     }
 
     public static func decodeJSON(_ data: Data, maximumDepth: Int = CaptureLimits.version1.maximumJSONNestingDepth) throws -> CaptureJSON {
-        try validate(data, maximumDepth: maximumDepth, rejectDuplicateKeys: true)
-        let object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
-        return try captureJSON(from: object)
+        var parser = Parser(data: data, maximumDepth: maximumDepth, rejectDuplicateKeys: true)
+        let value = try parser.parseJSONValue()
+        parser.skipWhitespace()
+        if !parser.isAtEnd { throw JSONStructureError.trailingData }
+        return value
     }
 
     public static func captureJSON(from object: Any) throws -> CaptureJSON {
@@ -99,10 +101,94 @@ private struct Parser {
         case UInt8(ascii: "n"):
             try parseLiteral("null")
         case UInt8(ascii: "-"), UInt8(ascii: "0")...UInt8(ascii: "9"):
-            try parseNumber()
+            _ = try parseNumberLiteral()
         default:
             throw JSONStructureError.invalidSyntax("unexpected byte")
         }
+    }
+
+    mutating func parseJSONValue(depth: Int = 1) throws -> CaptureJSON {
+        guard depth <= maximumDepth else { throw JSONStructureError.nestingTooDeep(maximum: maximumDepth) }
+        skipWhitespace()
+        guard let byte = peek() else { throw JSONStructureError.truncated }
+        switch byte {
+        case UInt8(ascii: "{"):
+            return try parseJSONObject(depth: depth)
+        case UInt8(ascii: "["):
+            return try parseJSONArray(depth: depth)
+        case UInt8(ascii: "\""):
+            return .string(try parseDecodedString())
+        case UInt8(ascii: "t"):
+            try parseLiteral("true")
+            return .bool(true)
+        case UInt8(ascii: "f"):
+            try parseLiteral("false")
+            return .bool(false)
+        case UInt8(ascii: "n"):
+            try parseLiteral("null")
+            return .null
+        case UInt8(ascii: "-"), UInt8(ascii: "0")...UInt8(ascii: "9"):
+            return .number(try parseNumberLiteral())
+        default:
+            throw JSONStructureError.invalidSyntax("unexpected byte")
+        }
+    }
+
+    mutating func parseJSONObject(depth: Int) throws -> CaptureJSON {
+        try expect(UInt8(ascii: "{"))
+        skipWhitespace()
+        var object: [String: CaptureJSON] = [:]
+        var keys: Set<String> = []
+        if peek() == UInt8(ascii: "}") {
+            index += 1
+            return .object(object)
+        }
+        while true {
+            skipWhitespace()
+            let key = try parseDecodedString()
+            if rejectDuplicateKeys, !keys.insert(key).inserted {
+                throw JSONStructureError.duplicateKey(key)
+            }
+            skipWhitespace()
+            try expect(UInt8(ascii: ":"))
+            object[key] = try parseJSONValue(depth: depth + 1)
+            skipWhitespace()
+            if peek() == UInt8(ascii: "}") {
+                index += 1
+                return .object(object)
+            }
+            try expect(UInt8(ascii: ","))
+        }
+    }
+
+    mutating func parseJSONArray(depth: Int) throws -> CaptureJSON {
+        try expect(UInt8(ascii: "["))
+        skipWhitespace()
+        var values: [CaptureJSON] = []
+        if peek() == UInt8(ascii: "]") {
+            index += 1
+            return .array(values)
+        }
+        while true {
+            values.append(try parseJSONValue(depth: depth + 1))
+            skipWhitespace()
+            if peek() == UInt8(ascii: "]") {
+                index += 1
+                return .array(values)
+            }
+            try expect(UInt8(ascii: ","))
+        }
+    }
+
+    mutating func parseDecodedString() throws -> String {
+        let raw = try parseString()
+        var quoted = Data([UInt8(ascii: "\"")])
+        quoted.append(Data(raw.utf8))
+        quoted.append(UInt8(ascii: "\""))
+        guard let parsed = try JSONSerialization.jsonObject(with: quoted, options: [.fragmentsAllowed]) as? String else {
+            throw JSONStructureError.invalidSyntax("invalid string")
+        }
+        return parsed
     }
 
     mutating func parseObject(depth: Int) throws {
@@ -180,6 +266,11 @@ private struct Parser {
     }
 
     mutating func parseNumber() throws {
+        _ = try parseNumberLiteral()
+    }
+
+    mutating func parseNumberLiteral() throws -> String {
+        let start = index
         if peek() == UInt8(ascii: "-") { index += 1 }
         guard let first = peek(), isDigit(first) else { throw JSONStructureError.invalidSyntax("invalid number") }
         if first == UInt8(ascii: "0") {
@@ -198,6 +289,7 @@ private struct Parser {
             guard let byte = peek(), isDigit(byte) else { throw JSONStructureError.invalidSyntax("invalid exponent") }
             while let byte = peek(), isDigit(byte) { index += 1 }
         }
+        return String(decoding: bytes[start..<index], as: UTF8.self)
     }
 
     mutating func parseLiteral(_ expected: String) throws {

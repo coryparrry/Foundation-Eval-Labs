@@ -8,7 +8,8 @@ Recorded on the development Mac used to implement Feature 1.
 | Swift | 6.4 (swiftlang-6.4.0.34.1) |
 | SDK | macOS 27 |
 | Runtime OS | macOS 27.0 (26A428) |
-| Evaluations.framework | `$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks/Evaluations.framework` |
+| Evaluations.framework | Developer-only. Linked by `FoundationEvalsAppleBridge` and the Connected Feature example, not the distributed workbench. |
+| Workbench import | Parses Apple's saved evaluation JSON (`results`) without loading Evaluations.framework. Native `EvaluationResult(jsonData:)` remains the producer/test decoder. |
 | `EvaluationResult(jsonData:)` | Available |
 | `EvaluationResult.saveJSON(to:includeReportMetadata:)` | Available; `to` is a directory |
 | `.evaluates` | Available; subject is not run a second time in the test body |

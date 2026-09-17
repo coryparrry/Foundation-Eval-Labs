@@ -44,14 +44,17 @@ extension CaptureJSON: Codable {
         case .object(let value):
             try container.encode(value)
         case .number(let literal):
-            if let int = Int(literal) {
-                try container.encode(int)
-            } else if let double = Double(literal), double.isFinite {
-                try container.encode(double)
+            let token = try CaptureJSONNumber.validated(literal)
+            if let unsigned = UInt64(token), String(unsigned) == token {
+                try container.encode(unsigned)
+            } else if let signed = Int64(token), String(signed) == token {
+                try container.encode(signed)
+            } else if let decimal = Decimal(string: token, locale: Locale(identifier: "en_US_POSIX")) {
+                try container.encode(decimal)
             } else {
                 throw EncodingError.invalidValue(
                     literal,
-                    EncodingError.Context(codingPath: encoder.codingPath, debugDescription: "Invalid JSON number.")
+                    EncodingError.Context(codingPath: encoder.codingPath, debugDescription: "Unsupported JSON number.")
                 )
             }
         }
@@ -69,6 +72,20 @@ extension CaptureJSON: Codable {
 
     public func utf8Text(prettyPrinted: Bool = true) throws -> String {
         String(decoding: try CaptureJSONCoding.encoder(prettyPrinted: prettyPrinted).encode(self), as: UTF8.self)
+    }
+}
+
+enum CaptureJSONNumber {
+    static func validated(_ literal: String) throws -> String {
+        let data = Data(literal.utf8)
+        let parsed = try JSONStructure.decodeJSON(data, maximumDepth: 1)
+        guard case .number(let token) = parsed, token == literal else {
+            throw EncodingError.invalidValue(
+                literal,
+                EncodingError.Context(codingPath: [], debugDescription: "Invalid JSON number.")
+            )
+        }
+        return token
     }
 }
 

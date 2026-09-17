@@ -24,6 +24,9 @@ enum ConnectedFeatureHandoff {
         )
         try JSONStructure.validate(data, maximumDepth: CaptureLimits.version1.maximumJSONNestingDepth, rejectDuplicateKeys: true)
         let request = try CaptureJSONCoding.decoder().decode(CaptureLaunchRequest.self, from: data)
+        guard try CapturePlanDigest.hash(cases: request.cases) == request.planDigest else {
+            throw CaptureBundleError.invalidControlDocument("Launcher request plan digest does not match its cases.")
+        }
         _ = try request.validatedJobDirectory(projectRoot: projectRoot)
         return request
     }

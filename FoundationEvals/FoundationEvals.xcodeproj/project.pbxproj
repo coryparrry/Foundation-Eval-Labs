@@ -12,9 +12,7 @@
 		FE0000000000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000002 /* Sparkle */; };
 		FE0000000000000000000011 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000012 /* PostHog */; };
 		FE0000000000000000000025 /* FoundationEvalsIntegration in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000021 /* FoundationEvalsIntegration */; };
-		FE0000000000000000000026 /* FoundationEvalsAppleBridge in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000022 /* FoundationEvalsAppleBridge */; };
 		FE0000000000000000000027 /* FoundationEvalsIntegration in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000023 /* FoundationEvalsIntegration */; };
-		FE0000000000000000000028 /* FoundationEvalsAppleBridge in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000024 /* FoundationEvalsAppleBridge */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,14 +65,12 @@
 				FE0000000000000000000011 /* PostHog in Frameworks */,
 				AFC28B6E304A00010023273E /* Hummingbird in Frameworks */,
 				FE0000000000000000000025 /* FoundationEvalsIntegration in Frameworks */,
-				FE0000000000000000000026 /* FoundationEvalsAppleBridge in Frameworks */,
 			);
 		};
 		AFC28B503047331D0023273E /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				FE0000000000000000000027 /* FoundationEvalsIntegration in Frameworks */,
-				FE0000000000000000000028 /* FoundationEvalsAppleBridge in Frameworks */,
 			);
 		};
 		AFC28B5A3047331D0023273E /* Frameworks */ = {
@@ -128,7 +124,6 @@
 				AFC28B72304B00010023273E /* CoreAILM */,
 				AFC28B6D304A00010023273E /* Hummingbird */,
 				FE0000000000000000000021 /* FoundationEvalsIntegration */,
-				FE0000000000000000000022 /* FoundationEvalsAppleBridge */,
 			);
 			productName = FoundationEvals;
 			productReference = AFC28B46304733170023273E /* FoundationEvals.app */;
@@ -153,7 +148,6 @@
 			name = FoundationEvalsTests;
 			packageProductDependencies = (
 				FE0000000000000000000023 /* FoundationEvalsIntegration */,
-				FE0000000000000000000024 /* FoundationEvalsAppleBridge */,
 			);
 			productName = FoundationEvalsTests;
 			productReference = AFC28B533047331D0023273E /* FoundationEvalsTests.xctest */;
@@ -405,10 +399,6 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Configuration/AppInfo.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Foundation Evals";
@@ -417,21 +407,14 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../Frameworks",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
 				);
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-framework",
-					Evaluations,
-				);
-				OTHER_SWIFT_FLAGS = "$(inherited) -F$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks";
+				OTHER_LDFLAGS = "$(inherited)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.FoundationEvals;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -442,10 +425,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-				);
 			};
 			name = Debug;
 		};
@@ -459,10 +438,6 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Configuration/AppInfo.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Foundation Evals";
@@ -471,21 +446,14 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../Frameworks",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
 				);
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-framework",
-					Evaluations,
-				);
-				OTHER_SWIFT_FLAGS = "$(inherited) -F$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks";
+				OTHER_LDFLAGS = "$(inherited)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.FoundationEvals;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -496,10 +464,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-				);
 			};
 			name = Release;
 		};
@@ -509,19 +473,10 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-framework",
-					Evaluations,
-				);
-				OTHER_SWIFT_FLAGS = "$(inherited) -F$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks";
+				OTHER_LDFLAGS = "$(inherited)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.FoundationEvalsTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -531,10 +486,6 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-				);
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FoundationEvals.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FoundationEvals";
 			};
 			name = Debug;
@@ -545,19 +496,10 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-framework",
-					Evaluations,
-				);
-				OTHER_SWIFT_FLAGS = "$(inherited) -F$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks";
+				OTHER_LDFLAGS = "$(inherited)";
 				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.FoundationEvalsTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -567,10 +509,6 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-				);
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FoundationEvals.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FoundationEvals";
 			};
 			name = Release;
@@ -726,20 +664,10 @@
 			package = FE0000000000000000000020 /* XCLocalSwiftPackageReference "../Packages/FoundationEvalsIntegration" */;
 			productName = FoundationEvalsIntegration;
 		};
-		FE0000000000000000000022 /* FoundationEvalsAppleBridge */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FE0000000000000000000020 /* XCLocalSwiftPackageReference "../Packages/FoundationEvalsIntegration" */;
-			productName = FoundationEvalsAppleBridge;
-		};
 		FE0000000000000000000023 /* FoundationEvalsIntegration */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = FE0000000000000000000020 /* XCLocalSwiftPackageReference "../Packages/FoundationEvalsIntegration" */;
 			productName = FoundationEvalsIntegration;
-		};
-		FE0000000000000000000024 /* FoundationEvalsAppleBridge */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FE0000000000000000000020 /* XCLocalSwiftPackageReference "../Packages/FoundationEvalsIntegration" */;
-			productName = FoundationEvalsAppleBridge;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

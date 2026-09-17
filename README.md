@@ -45,7 +45,7 @@ Requirements:
 
 The app is signed with Developer ID and notarized by Apple.
 
-Xcode is only needed to build from source.
+Xcode is only needed to build from source. The distributed app does not load Xcode's Evaluations.framework. Importing a `.fevalrun` capture and inspecting Apple evaluation JSON from the saved file work without that developer library. Building the Connected Feature example, and native `EvaluationResult` decoding in `FoundationEvalsAppleBridge`, require Xcode. Set `DEVELOPER_DIR` when using a non-default Xcode.
 
 ## Run your first evaluation
 
