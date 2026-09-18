@@ -82,9 +82,9 @@ struct CaseImportView: View {
             HStack {
                 Button("Cancel", role: .cancel) { dismiss() }
                 Spacer()
-                Button("Import \(preview?.rows.count ?? 0) Cases") { importCases() }
+                Button("Import \(importCount) Cases") { importCases() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(preview?.canImport != true)
+                    .disabled(preview?.canImport != true || importCount == 0)
             }
         }
         .padding(22)
@@ -158,10 +158,14 @@ struct CaseImportView: View {
         }
     }
 
+    private var importCount: Int {
+        min(preview?.totalValidRowCount ?? 0, store.remainingCaseImportCapacity)
+    }
+
     private func importCases() {
         guard let data else { return }
         do {
-            let remaining = EvaluationStore.maximumCases - store.draftSuite.cases.count
+            let remaining = store.remainingCaseImportCapacity
             guard remaining > 0 else { throw EvaluationCaseImportError.tooManyRows(maximum: 0) }
             let imported = try EvaluationCaseImporter.cases(
                 data: data,
@@ -169,8 +173,7 @@ struct CaseImportView: View {
                 mapping: .init(nameColumn: nameColumn, promptColumn: promptColumn, expectedColumn: expectedColumn),
                 maximumCases: remaining
             )
-            store.draftSuite.cases.append(contentsOf: imported)
-            guard store.saveSuite() else { return }
+            try store.appendImportedCases(imported)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

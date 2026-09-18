@@ -659,6 +659,9 @@ struct EvaluationStorePersistenceTests {
         #expect(store.runs.isEmpty)
         if restart { store = EvaluationStore(supportDirectory: directory) }
         #expect(store.activeRun?.id == id)
+        #expect(store.hasUnsavedCompletedRun)
+        #expect(store.runBlocker?.contains("saved to history") == true)
+        #expect(store.pendingRunSaveMessage != nil)
         #expect(throws: EvaluationStoreError.self) {
             _ = try store.cancelRun(id: id)
         }

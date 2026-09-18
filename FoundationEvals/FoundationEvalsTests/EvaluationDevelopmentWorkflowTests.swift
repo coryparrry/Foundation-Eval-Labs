@@ -229,6 +229,112 @@ struct EvaluationDevelopmentWorkflowTests {
         #expect(cases.map(\.prompt) == ["First", "Second"])
     }
 
+    @Test func caseImportPreviewReportsTotalValidRowsBeyondTheDisplayedLimit() throws {
+        let csv = Data(
+            (["prompt"] + (1...50).map { "Prompt \($0)" }).joined(separator: "\n").utf8
+        )
+        let preview = try EvaluationCaseImporter.preview(
+            data: csv,
+            format: .csv,
+            mapping: .init(nameColumn: nil, promptColumn: "prompt", expectedColumn: nil),
+            limit: 20
+        )
+        #expect(preview.rows.count == 20)
+        #expect(preview.totalValidRowCount == 50)
+        #expect(preview.canImport)
+    }
+
+    @MainActor
+    @Test func importedCasesHonorPlannedSampleCapacityAndRollBackFailedSaves() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.scoringMode = .review
+        store.draftSuite.repetitions = 5
+        #expect(store.saveSuite())
+        #expect(store.remainingCaseImportCapacity == 19)
+
+        let tooMany = (0..<20).map { EvaluationCase(name: "Extra \($0)", prompt: "Prompt \($0)", expected: "") }
+        #expect(throws: EvaluationCaseImportError.self) {
+            try store.appendImportedCases(tooMany)
+        }
+        #expect(store.draftSuite.cases.count == 1)
+
+        try store.appendImportedCases(Array(tooMany.prefix(19)))
+        #expect(store.suite.cases.count == 20)
+        #expect(store.plannedSampleCount == 100)
+
+        let rollbackDirectory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: rollbackDirectory) }
+        let rollbackStore = EvaluationStore(supportDirectory: rollbackDirectory)
+        rollbackStore.draftSuite.scoringMode = .review
+        #expect(rollbackStore.saveSuite())
+        let originalCount = rollbackStore.draftSuite.cases.count
+        let suiteURL = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: rollbackDirectory,
+            projectID: rollbackStore.selectedProjectID,
+            suiteID: rollbackStore.selectedSuiteID
+        ).appending(path: "suite.json")
+        try FileManager.default.removeItem(at: suiteURL)
+        try FileManager.default.createDirectory(at: suiteURL, withIntermediateDirectories: true)
+        #expect(throws: EvaluationStoreError.self) {
+            try rollbackStore.appendImportedCases([
+                EvaluationCase(name: "More", prompt: "Another prompt", expected: "")
+            ])
+        }
+        #expect(rollbackStore.draftSuite.cases.count == originalCount)
+        #expect(!rollbackStore.draftSuite.cases.contains { $0.name == "More" })
+    }
+
+    @MainActor
+    @Test func duplicateProjectFailsWhenAnActiveSuiteCannotBeRead() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalProject = store.selectedProjectID
+        _ = try store.createSuite(name: "Readable")
+        let broken = try store.createSuite(name: "Broken")
+        let brokenDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: originalProject, suiteID: broken
+        )
+        try FileManager.default.removeItem(at: brokenDirectory.appending(path: "suite.json"))
+        try store.switchSuite(id: store.suiteRecords.first { $0.name == "Readable" }?.id ?? store.selectedSuiteID)
+
+        #expect(throws: EvaluationWorkspaceError.self) {
+            _ = try store.duplicateProject(id: originalProject)
+        }
+        #expect(store.projects.filter { $0.name.contains("copy") }.isEmpty)
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.projects.filter { $0.name.contains("copy") }.isEmpty)
+    }
+
+    @MainActor
+    @Test func failedBaselineApprovalDoesNotPublishInMemory() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.scoringMode = .exactMatch
+        #expect(store.saveSuite())
+        var run = makeRun(cases: store.suite.cases, statuses: [[.passed]])
+        run.suiteID = store.suite.id
+        run.scoringMode = .exactMatch
+        run.suiteRevision = store.suiteRevision
+        store.runs = [run]
+        let stateURL = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        ).appending(path: "state.json")
+        if FileManager.default.fileExists(atPath: stateURL.path) {
+            try FileManager.default.removeItem(at: stateURL)
+        }
+        try FileManager.default.createDirectory(at: stateURL, withIntermediateDirectories: true)
+
+        #expect(throws: (any Error).self) {
+            try store.approveBaseline(runID: run.id, assessmentID: nil)
+        }
+        #expect(store.suiteLocalState.baselineApprovals.isEmpty)
+        #expect(store.activeBaselineApproval == nil)
+    }
+
     @MainActor
     @Test func starterPacksAreCompleteRunnableAndUseRelevantScoring() throws {
         let directory = try temporaryDirectory()
@@ -881,6 +987,9 @@ struct EvaluationDevelopmentWorkflowTests {
             approvedConnectionID: connectionID, approvedIncludeReferenceAttachments: false,
             approvedConnectionDigest: connection.disclosureDigest
         )
+        suite.modelConfiguration.coreAISettings.resourcesPath = "/Users/machine-a/Models"
+        suite.modelConfiguration.coreAISettings.resourcesBookmark = Data([1, 2, 3])
+        suite.features.spotlightSearch.fileSource.folderPath = "/Users/machine-a/Search"
 
         let definition = EvaluationSuiteDefinition(suite: suite)
         #expect(definition.judgeConfiguration.mode == .connection)
@@ -889,12 +998,22 @@ struct EvaluationDevelopmentWorkflowTests {
         #expect(definition.judgeConfiguration.approvedConnectionID == nil)
         #expect(definition.judgeConfiguration.approvedIncludeReferenceAttachments == nil)
         #expect(definition.judgeConfiguration.approvedConnectionDigest == nil)
+        #expect(definition.modelConfiguration.coreAI?.resourcesPath.isEmpty == true)
+        #expect(definition.modelConfiguration.coreAI?.resourcesBookmark == nil)
+        #expect(definition.features.spotlightSearch.fileSource.folderPath.isEmpty)
 
-        let reapplied = definition.applyingLocalState(from: suite)
+        var machineB = suite
+        machineB.modelConfiguration.coreAISettings.resourcesPath = "/Users/machine-b/Models"
+        machineB.modelConfiguration.coreAISettings.resourcesBookmark = Data([9, 8, 7])
+        machineB.features.spotlightSearch.fileSource.folderPath = "/Users/machine-b/Search"
+        let reapplied = definition.applyingLocalState(from: machineB)
         #expect(reapplied.judgeConfiguration.connectionID == connectionID)
         #expect(reapplied.judgeConfiguration.externalEvidenceApprovedAt == approvedAt)
         #expect(reapplied.judgeConfiguration.includeReferenceAttachments == false)
         #expect(reapplied.judgeConfiguration.hasCurrentExternalEvidenceApproval(for: connection))
+        #expect(reapplied.modelConfiguration.coreAI?.resourcesPath == "/Users/machine-b/Models")
+        #expect(reapplied.modelConfiguration.coreAI?.resourcesBookmark == Data([9, 8, 7]))
+        #expect(reapplied.features.spotlightSearch.fileSource.folderPath == "/Users/machine-b/Search")
     }
 
     @MainActor
@@ -919,6 +1038,31 @@ struct EvaluationDevelopmentWorkflowTests {
         #expect(saved.lastCheckedAt == nil)
         #expect(saved.lastCheckMessage == nil)
         #expect(!store.draftSuite.judgeConfiguration.hasCurrentExternalEvidenceApproval(for: saved))
+    }
+
+    @MainActor
+    @Test func failedSuiteDefinitionLinkLeavesTheProjectUnlinked() throws {
+        let support = try temporaryDirectory()
+        let repository = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: support)
+            try? FileManager.default.removeItem(at: repository)
+        }
+        try runGit(["init"], in: repository)
+        try FileManager.default.createDirectory(
+            at: repository.appending(path: ".foundation-evals"),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: repository.appending(path: ".foundation-evals/suites"))
+        let store = EvaluationStore(supportDirectory: support)
+
+        #expect(throws: (any Error).self) {
+            try store.linkSelectedProject(toRepository: repository.path)
+        }
+        #expect(store.selectedProject.repository == nil)
+        #expect(store.selectedSuiteRecord.repositoryDefinitionPath == nil)
+        let reloaded = EvaluationStore(supportDirectory: support)
+        #expect(reloaded.selectedProject.repository == nil)
     }
 
     @MainActor

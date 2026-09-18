@@ -18,13 +18,31 @@ enum EvaluationWorkspacePersistence {
     ) throws -> EvaluationWorkspaceBootstrap {
         let catalogURL = supportDirectory.appending(path: catalogFilename)
         if FileManager.default.fileExists(atPath: catalogURL.path) {
-            let catalog = try CanonicalJSON.decode(
-                EvaluationWorkspaceCatalog.self,
-                from: Data(contentsOf: catalogURL)
-            )
-            guard catalog.formatVersion == EvaluationWorkspaceCatalog.currentFormatVersion,
-                  !catalog.projects.isEmpty else {
+            let catalogData = try Data(contentsOf: catalogURL)
+            let decoded: EvaluationWorkspaceCatalog
+            do {
+                decoded = try CanonicalJSON.decode(EvaluationWorkspaceCatalog.self, from: catalogData)
+            } catch {
+                try preserveUnreadableFile(
+                    catalogData,
+                    in: supportDirectory,
+                    prefix: "workspace-v1-unreadable"
+                )
                 throw EvaluationWorkspaceError.unsupportedCatalog
+            }
+            let catalog: EvaluationWorkspaceCatalog
+            do {
+                catalog = try validatedCatalog(decoded)
+            } catch {
+                try preserveUnreadableFile(
+                    catalogData,
+                    in: supportDirectory,
+                    prefix: "workspace-v1-unreadable"
+                )
+                throw error
+            }
+            if catalog != decoded {
+                try save(catalog, in: supportDirectory)
             }
 
             guard let legacySuite,
@@ -137,6 +155,42 @@ enum EvaluationWorkspacePersistence {
             to: supportDirectory.appending(path: catalogFilename),
             options: .atomic
         )
+    }
+
+    static func preserveUnreadableFile(_ data: Data, in directory: URL, prefix: String) throws {
+        try preserveState(data, in: directory, prefix: prefix)
+    }
+
+    private static func validatedCatalog(_ catalog: EvaluationWorkspaceCatalog) throws -> EvaluationWorkspaceCatalog {
+        guard catalog.formatVersion == EvaluationWorkspaceCatalog.currentFormatVersion,
+              !catalog.projects.isEmpty else {
+            throw EvaluationWorkspaceError.unsupportedCatalog
+        }
+        var uniqueProjectIDs = Set<UUID>()
+        for project in catalog.projects {
+            guard uniqueProjectIDs.insert(project.id).inserted, !project.suites.isEmpty else {
+                throw EvaluationWorkspaceError.unsupportedCatalog
+            }
+            var uniqueSuiteIDs = Set<UUID>()
+            for record in project.suites {
+                guard uniqueSuiteIDs.insert(record.id).inserted else {
+                    throw EvaluationWorkspaceError.unsupportedCatalog
+                }
+            }
+        }
+        var repaired = catalog
+        if !repaired.projects.contains(where: { $0.id == repaired.selectedProjectID }) {
+            repaired.selectedProjectID = repaired.projects.first { !$0.isArchived }?.id
+                ?? repaired.projects[0].id
+        }
+        for index in repaired.projects.indices {
+            let project = repaired.projects[index]
+            if !project.suites.contains(where: { $0.id == project.selectedSuiteID }) {
+                repaired.projects[index].selectedSuiteID = project.suites.first { !$0.isArchived }?.id
+                    ?? project.suites[0].id
+            }
+        }
+        return repaired
     }
 
     static func suiteDirectory(

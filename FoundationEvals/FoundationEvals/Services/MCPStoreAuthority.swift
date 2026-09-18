@@ -195,7 +195,7 @@ enum MCPStoreAuthority {
             "revision": .string(try store.currentSuiteRevision()),
             "suite": suiteJSON(suite),
             "attachments": .array(suite.attachments.map(attachmentMetadata)),
-            "readinessBlocker": store.validationIssue(for: suite).map(MCPJSONValue.string) ?? .null,
+            "readinessBlocker": (store.pendingRunSaveMessage ?? store.validationIssue(for: suite)).map(MCPJSONValue.string) ?? .null,
             "model": .object([
                 "available": .bool(modelStatus.isAvailable),
                 "label": .string(modelStatus.label),

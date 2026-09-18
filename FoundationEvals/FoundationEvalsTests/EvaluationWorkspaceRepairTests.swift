@@ -120,6 +120,68 @@ struct EvaluationWorkspaceRepairTests {
         #expect(store.suite.attachments.count == 2)
     }
 
+    @Test func unreadableCatalogIsPreservedAndDoesNotDestroyExistingProjects() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalProjectID = store.selectedProjectID
+        let originalSuiteID = store.selectedSuiteID
+        store.draftSuite.name = "Keep this suite"
+        #expect(store.saveSuite())
+        let catalogURL = directory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        let corrupt = Data("{ damaged catalog".utf8)
+        try corrupt.write(to: catalogURL, options: .atomic)
+        let projectDirectory = directory
+            .appending(path: "Projects/\(originalProjectID.uuidString)", directoryHint: .isDirectory)
+
+        let recovered = EvaluationStore(supportDirectory: directory)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        let backup = try #require(files.first { $0.lastPathComponent.hasPrefix("workspace-v1-unreadable-") })
+        #expect(try Data(contentsOf: backup) == corrupt)
+        #expect(recovered.projects.contains { $0.name == "Recovery workspace" })
+        #expect(FileManager.default.fileExists(atPath: projectDirectory.path))
+        #expect(FileManager.default.fileExists(
+            atPath: EvaluationWorkspacePersistence.suiteDirectory(
+                supportDirectory: directory, projectID: originalProjectID, suiteID: originalSuiteID
+            ).appending(path: "suite.json").path
+        ))
+        #expect(recovered.selectedProjectID == recovered.projects.first { $0.name == "Recovery workspace" }?.id)
+    }
+
+    @Test func catalogWithEmptySuitesDoesNotCrashAndPreservesOriginalBytes() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let catalogURL = directory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        var catalog = try CanonicalJSON.decode(EvaluationWorkspaceCatalog.self, from: Data(contentsOf: catalogURL))
+        catalog.projects[0].suites = []
+        let original = try CanonicalJSON.data(for: catalog)
+        try original.write(to: catalogURL, options: .atomic)
+
+        let recovered = EvaluationStore(supportDirectory: directory)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        let backup = try #require(files.first { $0.lastPathComponent.hasPrefix("workspace-v1-unreadable-") })
+        #expect(try Data(contentsOf: backup) == original)
+        #expect(recovered.projects.contains { !$0.suites.isEmpty })
+        #expect(recovered.selectedSuiteRecord.id == recovered.selectedSuiteID)
+    }
+
+    @Test func missingSelectedProjectIDIsRepairedWithoutCreatingARecoveryWorkspace() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalProjectID = store.selectedProjectID
+        let catalogURL = directory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        var catalog = try CanonicalJSON.decode(EvaluationWorkspaceCatalog.self, from: Data(contentsOf: catalogURL))
+        catalog.selectedProjectID = UUID()
+        try CanonicalJSON.data(for: catalog).write(to: catalogURL, options: .atomic)
+
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.selectedProjectID == originalProjectID)
+        #expect(!reloaded.projects.contains { $0.name == "Recovery workspace" })
+        #expect(reloaded.projects.contains { $0.id == originalProjectID })
+    }
+
     private func makeFixture() throws -> (directory: URL, target: URL, suite: EvaluationSuite, legacyData: Data) {
         let directory = try temporaryDirectory()
         let suite = EvaluationSuite()

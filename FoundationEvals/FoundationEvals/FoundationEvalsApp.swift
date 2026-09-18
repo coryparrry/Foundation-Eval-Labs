@@ -124,7 +124,7 @@ struct FoundationEvalsApp: App {
                     store.cancelRun()
                 }
                 .keyboardShortcut(".", modifiers: [.command])
-                .disabled(!store.isRunning)
+                .disabled(!store.isRunning && !store.hasUnsavedCompletedRun)
             }
         }
 

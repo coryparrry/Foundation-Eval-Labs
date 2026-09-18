@@ -61,6 +61,42 @@ struct WorkspacePresentationTests {
         #expect(draftSummaries.first { $0.id == first }?.name == "Draft name")
     }
 
+    @Test func foreignAndMismatchedRunFilesDoNotReplaceOwnedHistory() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        #expect(store.saveSuite())
+        var owned = fixture()
+        owned.suiteID = store.suite.id
+        owned.projectID = store.selectedProjectID
+        owned.suiteRevision = store.suiteRevision
+        owned.historySequence = 1
+        var foreign = fixture()
+        foreign.suiteID = UUID()
+        foreign.projectID = store.selectedProjectID
+        foreign.historySequence = 99
+        var renamed = fixture()
+        renamed.suiteID = store.suite.id
+        renamed.projectID = store.selectedProjectID
+        renamed.historySequence = 50
+        let root = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory, projectID: store.selectedProjectID, suiteID: store.selectedSuiteID
+        ).appending(path: "Runs")
+        try CanonicalJSON.data(for: owned).write(to: root.appending(path: "\(owned.id.uuidString).json"))
+        try CanonicalJSON.data(for: foreign).write(to: root.appending(path: "\(foreign.id.uuidString).json"))
+        try CanonicalJSON.data(for: renamed).write(to: root.appending(path: "mismatched-name.json"))
+
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.runs.map(\.id) == [owned.id])
+        #expect(reloaded.notice != nil)
+
+        let summaries = await WorkspaceOverviewLoader().load(
+            project: reloaded.selectedProject,
+            directory: directory
+        )
+        #expect(summaries.first?.latestRunID == owned.id)
+    }
+
     @Test func corruptSuiteHistoryDoesNotMasqueradeAsNeverRunOrHideOtherSuites() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
