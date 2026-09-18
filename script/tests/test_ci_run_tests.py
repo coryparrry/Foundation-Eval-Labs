@@ -54,11 +54,14 @@ class SelectionTests(unittest.TestCase):
         )
 
     def test_unknown_swift_suite_fails_before_running_tests(self):
-        with patch.object(
-            runner.subprocess,
-            "run",
-            return_value=subprocess.CompletedProcess([], 0, ""),
-        ) as run, self.assertRaisesRegex(ValueError, "not discovered"):
+        with (
+            patch.object(
+                runner.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0, ""),
+            ) as run,
+            self.assertRaisesRegex(ValueError, "not discovered"),
+        ):
             runner.run_tests("swift", ["RemovedTests"])
         self.assertEqual(run.call_count, 1)
 
@@ -100,7 +103,8 @@ class SelectionTests(unittest.TestCase):
                     runner.subprocess,
                     "run",
                     side_effect=subprocess.CalledProcessError(1, "fixture"),
-                ),self.assertRaises(subprocess.CalledProcessError)
+                ),
+                self.assertRaises(subprocess.CalledProcessError),
             ):
                 runner.run_tests(kind, names)
 

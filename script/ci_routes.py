@@ -286,11 +286,14 @@ def main():
         summary.write(
             f"Native build: **{plan['native']}**. UI test bundle: **{plan['ui']}**.\n\n"
         )
-        summary.writelines(f"- {label}: {', '.join(plan[key]) or 'none'}\n" for label, key in (
-            ("Portable Swift suites", "swift_suites"),
-            ("Linux unit tests", "python_tests"),
-            ("macOS script tests", "macos_tests"),
-        ))
+        summary.writelines(
+            f"- {label}: {', '.join(plan[key]) or 'none'}\n"
+            for label, key in (
+                ("Portable Swift suites", "swift_suites"),
+                ("Linux unit tests", "python_tests"),
+                ("macOS script tests", "macos_tests"),
+            )
+        )
 
 
 if __name__ == "__main__":
