@@ -370,7 +370,7 @@ enum MCPStoreAuthority {
         from declaration: MCPSuiteDeclaration,
         current: EvaluationSuite
     ) -> EvaluationSuite {
-        var suite = EvaluationSuite()
+        var suite = current
         suite.name = declaration.name
         suite.version = declaration.version
         suite.instructions = declaration.instructions
@@ -388,7 +388,7 @@ enum MCPStoreAuthority {
                 fieldAssertions: declaredCase.fieldAssertions ?? currentCase?.fieldAssertions
             )
         }
-        var configuration = EvaluationModelConfiguration()
+        var configuration = current.modelConfiguration
         configuration.customization = declaration.modelConfiguration.customization ?? current.modelConfiguration.customization
         configuration.provider = declaration.modelConfiguration.provider ?? current.modelConfiguration.provider
         configuration.customProvider = declaration.modelConfiguration.customProvider?.evaluationConfiguration
@@ -410,10 +410,6 @@ enum MCPStoreAuthority {
         configuration.maximumToolCalls = declaration.modelConfiguration.maximumToolCalls
         suite.modelConfiguration = configuration
         suite.features = declaration.features ?? current.features
-        // These policies are intentionally not writable through the MCP schema.
-        // Preserve them instead of resetting hidden user configuration.
-        suite.judgeConfiguration = current.judgeConfiguration
-        suite.releasePolicy = current.releasePolicy
         return suite
     }
 
