@@ -88,7 +88,8 @@ struct WorkspacePresentationTests {
 
         let reloaded = EvaluationStore(supportDirectory: directory)
         #expect(reloaded.runs.map(\.id) == [owned.id])
-        #expect(reloaded.notice != nil)
+        #expect(reloaded.notice?.contains("did not belong to this suite and was ignored") == true)
+        #expect(reloaded.notice?.contains("could not be read") == false)
 
         let summaries = await WorkspaceOverviewLoader().load(
             project: reloaded.selectedProject,

@@ -672,8 +672,7 @@ struct EvaluationStorePersistenceTests {
 
         try FileManager.default.removeItem(at: runsDirectory)
         try FileManager.default.createDirectory(at: runsDirectory, withIntermediateDirectories: true)
-        let operation = try store.cancelRun(id: id)
-        #expect(operation.phase == .cancelled)
+        store.retryPendingRunSave()
         #expect(store.activeRun == nil)
         #expect(store.runs.first?.id == id)
         #expect(store.runs.first?.cancelled == true)

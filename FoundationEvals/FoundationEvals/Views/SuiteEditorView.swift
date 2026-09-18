@@ -315,7 +315,6 @@ private struct RunReadinessPanel: View {
                 Button("Retry Save") { store.retryPendingRunSave() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
-                Button("Cancel", role: .cancel) { store.cancelRun() }
             } else {
                 Button("Run \(responseLabel)", systemImage: "play.fill") {
                     store.startRun()
@@ -402,7 +401,6 @@ private struct RunToolbarContent: ToolbarContent {
             } else if store.hasUnsavedCompletedRun {
                 Button("Retry Save") { store.retryPendingRunSave() }
                     .buttonStyle(.borderedProminent)
-                Button("Cancel", role: .cancel) { store.cancelRun() }
             } else {
                 if store.isProcessingFiles {
                     ProgressView("Importing files")

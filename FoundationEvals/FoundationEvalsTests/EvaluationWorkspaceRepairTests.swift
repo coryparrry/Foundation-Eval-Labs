@@ -182,6 +182,35 @@ struct EvaluationWorkspaceRepairTests {
         #expect(reloaded.projects.contains { $0.id == originalProjectID })
     }
 
+    @Test func unsavedSelectionRepairKeepsTheOriginalCatalog() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalProjectID = store.selectedProjectID
+        let originalSuiteID = store.selectedSuiteID
+        let catalogURL = directory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        var catalog = try CanonicalJSON.decode(
+            EvaluationWorkspaceCatalog.self,
+            from: Data(contentsOf: catalogURL)
+        )
+        catalog.selectedProjectID = UUID()
+        catalog.projects[0].selectedSuiteID = UUID()
+        let staleCatalog = try CanonicalJSON.data(for: catalog)
+        try staleCatalog.write(to: catalogURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+        }
+
+        let reloaded = EvaluationStore(supportDirectory: directory)
+
+        #expect(reloaded.selectedProjectID == originalProjectID)
+        #expect(reloaded.selectedSuiteID == originalSuiteID)
+        #expect(!reloaded.projects.contains { $0.name == "Recovery workspace" })
+        #expect(reloaded.notice?.contains("repaired in memory but could not be saved") == true)
+        #expect(try Data(contentsOf: catalogURL) == staleCatalog)
+    }
+
     private func makeFixture() throws -> (directory: URL, target: URL, suite: EvaluationSuite, legacyData: Data) {
         let directory = try temporaryDirectory()
         let suite = EvaluationSuite()

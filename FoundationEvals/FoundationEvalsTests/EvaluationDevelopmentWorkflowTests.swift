@@ -299,13 +299,72 @@ struct EvaluationDevelopmentWorkflowTests {
             supportDirectory: directory, projectID: originalProject, suiteID: broken
         )
         try FileManager.default.removeItem(at: brokenDirectory.appending(path: "suite.json"))
+        let projectsDirectory = directory.appending(path: "Projects", directoryHint: .isDirectory)
+        let directoriesBeforeDuplication = Set(
+            try FileManager.default.contentsOfDirectory(
+                at: projectsDirectory,
+                includingPropertiesForKeys: nil
+            ).map(\.lastPathComponent)
+        )
 
         #expect(throws: EvaluationWorkspaceError.self) {
             _ = try store.duplicateProject(id: originalProject)
         }
         #expect(store.projects.filter { $0.name.contains("copy") }.isEmpty)
+        #expect(
+            Set(
+                try FileManager.default.contentsOfDirectory(
+                    at: projectsDirectory,
+                    includingPropertiesForKeys: nil
+                ).map(\.lastPathComponent)
+            ) == directoriesBeforeDuplication
+        )
         let reloaded = EvaluationStore(supportDirectory: directory)
         #expect(reloaded.projects.filter { $0.name.contains("copy") }.isEmpty)
+    }
+
+    @MainActor
+    @Test func duplicateSuiteRemovesStagedFilesWhenAnAttachmentIsMissing() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let sourceSuiteID = store.selectedSuiteID
+        store.draftSuite.attachments.append(EvaluationAttachment(
+            id: UUID(),
+            name: "reference.txt",
+            kind: .image,
+            text: nil,
+            storedFilename: "missing-reference.png",
+            byteCount: 9,
+            sha256: String(repeating: "0", count: 64)
+        ))
+        #expect(store.saveSuite())
+        let sourceDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: sourceSuiteID
+        )
+        let suitesDirectory = sourceDirectory.deletingLastPathComponent()
+        let directoriesBeforeDuplication = Set(
+            try FileManager.default.contentsOfDirectory(
+                at: suitesDirectory,
+                includingPropertiesForKeys: nil
+            ).map(\.lastPathComponent)
+        )
+
+        #expect(throws: EvaluationStoreError.self) {
+            _ = try store.duplicateSuite(id: sourceSuiteID)
+        }
+
+        #expect(store.suiteRecords.map(\.id) == [sourceSuiteID])
+        #expect(
+            Set(
+                try FileManager.default.contentsOfDirectory(
+                    at: suitesDirectory,
+                    includingPropertiesForKeys: nil
+                ).map(\.lastPathComponent)
+            ) == directoriesBeforeDuplication
+        )
     }
 
     @MainActor
@@ -333,6 +392,37 @@ struct EvaluationDevelopmentWorkflowTests {
         }
         #expect(store.suiteLocalState.baselineApprovals.isEmpty)
         #expect(store.activeBaselineApproval == nil)
+    }
+
+    @MainActor
+    @Test func failedCandidateAdoptionDoesNotPersistTheDecision() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalInstructions = store.suite.instructions
+        let experimentID = try store.createInstructionExperiment(
+            name: "Candidate",
+            candidateInstructions: "Replacement candidate instructions"
+        )
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        )
+        let stateURL = suiteDirectory.appending(path: "state.json")
+        let stateBeforeAdoption = try Data(contentsOf: stateURL)
+        let suiteURL = suiteDirectory.appending(path: "suite.json")
+        try FileManager.default.removeItem(at: suiteURL)
+        try FileManager.default.createDirectory(at: suiteURL, withIntermediateDirectories: true)
+
+        #expect(throws: EvaluationStoreError.self) {
+            try store.decideExperiment(id: experimentID, decision: .adoptCandidate)
+        }
+
+        #expect(store.suite.instructions == originalInstructions)
+        #expect(store.draftSuite.instructions == originalInstructions)
+        #expect(store.suiteLocalState.experiments.first { $0.id == experimentID }?.decision == nil)
+        #expect(try Data(contentsOf: stateURL) == stateBeforeAdoption)
     }
 
     @MainActor
@@ -1055,12 +1145,15 @@ struct EvaluationDevelopmentWorkflowTests {
         )
         try Data().write(to: repository.appending(path: ".foundation-evals/suites"))
         let store = EvaluationStore(supportDirectory: support)
+        let catalogURL = support.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        let catalogBeforeLink = try Data(contentsOf: catalogURL)
 
         #expect(throws: (any Error).self) {
             try store.linkSelectedProject(toRepository: repository.path)
         }
         #expect(store.selectedProject.repository == nil)
         #expect(store.selectedSuiteRecord.repositoryDefinitionPath == nil)
+        #expect(try Data(contentsOf: catalogURL) == catalogBeforeLink)
         let reloaded = EvaluationStore(supportDirectory: support)
         #expect(reloaded.selectedProject.repository == nil)
     }

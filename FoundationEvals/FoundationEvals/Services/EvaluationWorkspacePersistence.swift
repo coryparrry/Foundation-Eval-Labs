@@ -42,7 +42,14 @@ enum EvaluationWorkspacePersistence {
                 throw error
             }
             if catalog != decoded {
-                try save(catalog, in: supportDirectory)
+                do {
+                    try save(catalog, in: supportDirectory)
+                } catch {
+                    return EvaluationWorkspaceBootstrap(
+                        catalog: catalog,
+                        notice: "Workspace selection was repaired in memory but could not be saved: \(error.localizedDescription)"
+                    )
+                }
             }
 
             guard let legacySuite,
