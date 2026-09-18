@@ -224,6 +224,7 @@ struct EvaluationWorkspaceRepairTests {
 
         let recovered = EvaluationStore(supportDirectory: directory)
         let workspaceBeforeMutation = recovered.workspace
+        let draftBeforeMutation = recovered.draftSuite
         let pathsBeforeMutation = try FileManager.default.subpathsOfDirectory(atPath: directory.path).sorted()
 
         #expect(throws: EvaluationStoreError.self) {
@@ -232,11 +233,21 @@ struct EvaluationWorkspaceRepairTests {
         #expect(throws: EvaluationStoreError.self) {
             try recovered.renameProject(id: recovered.selectedProjectID, name: "Must not be renamed")
         }
+        #expect(throws: EvaluationStoreError.self) {
+            _ = try recovered.deleteRunDurably(id: UUID())
+        }
+        recovered.addCase()
+        recovered.editPrompt("Must not be buffered", for: recovered.draftSuite.cases[0].id)
 
         recovered.draftSuite.name = "Must not replace the unreadable catalog"
 
         #expect(!recovered.saveSuite())
         #expect(recovered.workspace == workspaceBeforeMutation)
+        #expect(recovered.draftSuite.cases == draftBeforeMutation.cases)
+        #expect(
+            recovered.promptText(for: recovered.draftSuite.cases[0].id)
+                == draftBeforeMutation.cases[0].prompt
+        )
         #expect(try Data(contentsOf: catalogURL) == corruptCatalog)
         #expect(try FileManager.default.subpathsOfDirectory(atPath: directory.path).sorted() == pathsBeforeMutation)
         #expect(recovered.notice?.contains("could not be preserved") == true)

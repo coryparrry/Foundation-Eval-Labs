@@ -652,9 +652,7 @@ final class EvaluationStore {
     }
 
     private func persistWorkspace() throws {
-        if let workspacePersistenceBlocker {
-            throw EvaluationStoreError.persistence(workspacePersistenceBlocker)
-        }
+        try requireWorkspaceWritable()
         do {
             try EvaluationWorkspacePersistence.save(workspace, in: supportDirectory)
         } catch {
@@ -1103,6 +1101,7 @@ final class EvaluationStore {
     }
 
     func decideExperiment(id: UUID, decision: EvaluationExperimentDecision) throws {
+        try requireWorkspaceWritable()
         guard let index = suiteLocalState.experiments.firstIndex(where: { $0.id == id }) else {
             throw EvaluationStoreError.resourceNotFound("Experiment")
         }
@@ -1891,6 +1890,7 @@ final class EvaluationStore {
     }
 
     func addCase() {
+        guard allowWorkspaceMutation() else { return }
         guard draftSuite.cases.count < Self.maximumCases,
               draftSuite.cases.count < Self.maximumPlannedSamples / max(draftSuite.repetitions, 1) else {
             notice = "This suite has reached its planned-sample limit."
@@ -1907,6 +1907,7 @@ final class EvaluationStore {
     }
 
     func duplicateCase(id: UUID) {
+        guard allowWorkspaceMutation() else { return }
         applyPendingPromptEdits()
         guard draftSuite.cases.count < Self.maximumCases,
               draftSuite.cases.count < Self.maximumPlannedSamples / max(draftSuite.repetitions, 1) else {
@@ -1924,6 +1925,7 @@ final class EvaluationStore {
     }
 
     func removeCase(id: UUID) {
+        guard allowWorkspaceMutation() else { return }
         guard draftSuite.cases.count > 1 else {
             notice = "An evaluation suite needs at least one case."
             return
@@ -1969,6 +1971,7 @@ final class EvaluationStore {
 
     @discardableResult
     func deleteRunDurably(id: UUID) throws -> Bool {
+        try requireWorkspaceWritable()
         if activeRun?.id == id { throw EvaluationStoreError.runBusy }
         guard let location = persistedRunLocation(id: id) ?? pendingRunDeletionLocation(id: id) else {
             return false
@@ -2334,6 +2337,7 @@ final class EvaluationStore {
     }
 
     func editPrompt(_ text: String, for caseID: UUID) {
+        guard allowWorkspaceMutation() else { return }
         guard !isRunning, !isProcessingFiles,
               draftSuite.cases.contains(where: { $0.id == caseID }) else { return }
         guard promptText(for: caseID) != text else { return }
@@ -3530,9 +3534,7 @@ final class EvaluationStore {
     }
 
     private func requireIdle() throws {
-        if let workspacePersistenceBlocker {
-            throw EvaluationStoreError.persistence(workspacePersistenceBlocker)
-        }
+        try requireWorkspaceWritable()
         try retryUnsavedRun()
         if isRunning || activeRun != nil { throw EvaluationStoreError.runBusy }
         if isReassessing {
@@ -3623,6 +3625,7 @@ final class EvaluationStore {
     }
 
     private func persistSuiteLocalState() throws {
+        try requireWorkspaceWritable()
         do {
             try suiteLocalStateWriter(CanonicalJSON.data(for: suiteLocalState), suiteStateURL)
         } catch {
@@ -3642,6 +3645,22 @@ final class EvaluationStore {
             throw EvaluationStoreError.persistence(
                 "\(failureMessage) Draft rollback also failed: \(error.localizedDescription)"
             )
+        }
+    }
+
+    private func requireWorkspaceWritable() throws {
+        if let workspacePersistenceBlocker {
+            throw EvaluationStoreError.persistence(workspacePersistenceBlocker)
+        }
+    }
+
+    private func allowWorkspaceMutation() -> Bool {
+        do {
+            try requireWorkspaceWritable()
+            return true
+        } catch {
+            notice = error.localizedDescription
+            return false
         }
     }
 
