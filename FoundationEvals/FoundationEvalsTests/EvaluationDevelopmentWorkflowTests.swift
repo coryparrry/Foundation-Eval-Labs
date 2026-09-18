@@ -292,13 +292,13 @@ struct EvaluationDevelopmentWorkflowTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
         let originalProject = store.selectedProjectID
-        _ = try store.createSuite(name: "Readable")
+        let readable = try store.createSuite(name: "Readable")
         let broken = try store.createSuite(name: "Broken")
+        try store.switchSuite(id: readable)
         let brokenDirectory = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: directory, projectID: originalProject, suiteID: broken
         )
         try FileManager.default.removeItem(at: brokenDirectory.appending(path: "suite.json"))
-        try store.switchSuite(id: store.suiteRecords.first { $0.name == "Readable" }?.id ?? store.selectedSuiteID)
 
         #expect(throws: EvaluationWorkspaceError.self) {
             _ = try store.duplicateProject(id: originalProject)
