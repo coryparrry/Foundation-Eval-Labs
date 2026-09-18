@@ -426,6 +426,40 @@ struct EvaluationDevelopmentWorkflowTests {
     }
 
     @MainActor
+    @Test func failedExperimentDecisionPersistenceRollsBackCandidateAdoption() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalSuite = store.suite
+        let experimentID = try store.createInstructionExperiment(
+            name: "Candidate",
+            candidateInstructions: "Replacement candidate instructions"
+        )
+        let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: store.selectedSuiteID
+        )
+        let stateURL = suiteDirectory.appending(path: "state.json")
+        try FileManager.default.removeItem(at: stateURL)
+        try FileManager.default.createDirectory(at: stateURL, withIntermediateDirectories: true)
+
+        #expect(throws: (any Error).self) {
+            try store.decideExperiment(id: experimentID, decision: .adoptCandidate)
+        }
+
+        #expect(store.suite == originalSuite)
+        #expect(store.draftSuite == originalSuite)
+        #expect(store.suiteLocalState.experiments.first { $0.id == experimentID }?.decision == nil)
+        #expect(
+            try CanonicalJSON.decode(
+                EvaluationSuite.self,
+                from: Data(contentsOf: suiteDirectory.appending(path: "suite.json"))
+            ) == originalSuite
+        )
+    }
+
+    @MainActor
     @Test func starterPacksAreCompleteRunnableAndUseRelevantScoring() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -1083,13 +1083,13 @@ final class EvaluationStore {
         guard let index = suiteLocalState.experiments.firstIndex(where: { $0.id == id }) else {
             throw EvaluationStoreError.resourceNotFound("Experiment")
         }
+        let previousDraft = draftSuite
         if decision == .adoptCandidate {
             guard suiteLocalState.experiments[index].suiteRevision == suiteRevision else {
                 throw EvaluationStoreError.resourceConflict(
                     "The suite changed after this experiment was frozen. Create a new experiment before adopting a candidate."
                 )
             }
-            let previousDraft = draftSuite
             draftSuite.instructions = suiteLocalState.experiments[index].candidate.instructions
             guard saveSuite() else {
                 draftSuite = previousDraft
@@ -1101,8 +1101,19 @@ final class EvaluationStore {
         do {
             try persistSuiteLocalState()
         } catch {
+            let decisionError = error
             suiteLocalState = previousState
-            throw error
+            if decision == .adoptCandidate {
+                draftSuite = previousDraft
+                guard saveSuite() else {
+                    throw EvaluationStoreError.persistence(
+                        "The experiment decision could not be saved: \(decisionError.localizedDescription) "
+                            + "The candidate adoption also could not be rolled back: "
+                            + (notice ?? "unknown persistence error")
+                    )
+                }
+            }
+            throw decisionError
         }
     }
 

@@ -207,7 +207,7 @@ struct EvaluationWorkspaceRepairTests {
         #expect(reloaded.selectedProjectID == originalProjectID)
         #expect(reloaded.selectedSuiteID == originalSuiteID)
         #expect(!reloaded.projects.contains { $0.name == "Recovery workspace" })
-        #expect(reloaded.notice?.contains("repaired in memory but could not be saved") == true)
+        #expect(reloaded.migrationNotice?.contains("repaired in memory but could not be saved") == true)
         #expect(try Data(contentsOf: catalogURL) == staleCatalog)
     }
 
