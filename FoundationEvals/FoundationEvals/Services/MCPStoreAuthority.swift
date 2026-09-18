@@ -181,9 +181,14 @@ enum MCPStoreAuthority {
         let capabilities = store.selectedModelCapabilities(for: suite)
         let plannedSamples = saturatedProduct(suite.cases.count, suite.repetitions)
         let plannedSubjectRequests = saturatedProduct(
-            suite.cases.reduce(0) { $0 + $1.conversation.setupTurns.count + 1 },
+            suite.cases.reduce(0) {
+                $0.saturatedAdding($1.conversation.setupTurns.count).saturatedAdding(1)
+            },
             suite.repetitions
         )
+        let plannedJudgeRequests = suite.needsModelJudge
+            ? saturatedProduct(plannedSamples, 2)
+            : 0
         let toolCallFamilies = suite.hasConfiguredTools ? 1 : 0
         let active = try store.activeRun.map { try operationJSON(store.runStatus(id: $0.id)!) } ?? .null
         return readPayload([
@@ -200,7 +205,7 @@ enum MCPStoreAuthority {
             "workload": .object([
                 "plannedSamples": .integer(Int64(plannedSamples)),
                 "plannedModelRequests": .integer(Int64(
-                    plannedSubjectRequests + (suite.needsModelJudge ? saturatedProduct(plannedSamples, 2) : 0)
+                    plannedSubjectRequests.saturatedAdding(plannedJudgeRequests)
                 )),
                 "plannedToolCalls": .integer(Int64(
                     saturatedProduct(
@@ -405,6 +410,10 @@ enum MCPStoreAuthority {
         configuration.maximumToolCalls = declaration.modelConfiguration.maximumToolCalls
         suite.modelConfiguration = configuration
         suite.features = declaration.features ?? current.features
+        // These policies are intentionally not writable through the MCP schema.
+        // Preserve them instead of resetting hidden user configuration.
+        suite.judgeConfiguration = current.judgeConfiguration
+        suite.releasePolicy = current.releasePolicy
         return suite
     }
 
@@ -512,12 +521,16 @@ enum MCPStoreAuthority {
         }
         if let customProvider = configuration.customProvider {
             let provider = MCPCustomProviderConfiguration(customProvider)
-            value["customProvider"] = .object([
+            var providerJSON: [String: MCPJSONValue] = [
                 "endpoint": .string(provider.endpoint),
                 "contextSize": .integer(Int64(provider.contextSize)),
                 "capabilities": .array(provider.capabilities.map { .string($0.rawValue) }),
                 "requestTimeoutSeconds": .number(provider.requestTimeoutSeconds)
-            ])
+            ]
+            if let tokenizerEndpoint = provider.tokenizerEndpoint {
+                providerJSON["tokenizerEndpoint"] = .string(tokenizerEndpoint)
+            }
+            value["customProvider"] = .object(providerJSON)
         }
         if let coreAI = configuration.coreAI {
             var coreAIJSON: [String: MCPJSONValue] = [
@@ -802,9 +815,7 @@ enum MCPStoreAuthority {
     }
 
     private static func saturatedProduct(_ lhs: Int, _ rhs: Int) -> Int {
-        guard lhs >= 0, rhs >= 0 else { return 0 }
-        let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
-        return overflow ? Int.max : value
+        lhs.nonnegativeSaturatedMultiplying(rhs)
     }
 
     private static func cursor(_ offset: Int) -> String {

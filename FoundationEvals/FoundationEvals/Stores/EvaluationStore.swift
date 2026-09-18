@@ -1579,18 +1579,28 @@ final class EvaluationStore {
     }
 
     var plannedSampleCount: Int {
-        draftSuite.cases.count * draftSuite.repetitions
+        draftSuite.cases.count.nonnegativeSaturatedMultiplying(draftSuite.repetitions)
     }
 
     var plannedRequestCount: Int {
-        let subjectRequests = draftSuite.repetitions * draftSuite.cases.reduce(0) {
-            $0 + $1.conversation.setupTurns.count + 1
+        let requestsPerRepetition = draftSuite.cases.reduce(0) {
+            $0.saturatedAdding($1.conversation.setupTurns.count).saturatedAdding(1)
         }
-        return subjectRequests + (draftSuite.needsModelJudge ? plannedSampleCount * 2 : 0)
+        let subjectRequests = draftSuite.repetitions.nonnegativeSaturatedMultiplying(
+            requestsPerRepetition
+        )
+        let judgeRequests = draftSuite.needsModelJudge
+            ? plannedSampleCount.nonnegativeSaturatedMultiplying(2)
+            : 0
+        return subjectRequests.saturatedAdding(judgeRequests)
     }
 
     var plannedToolCallLimit: Int {
-        draftSuite.hasConfiguredTools ? plannedSampleCount * draftSuite.modelConfiguration.maximumToolCalls : 0
+        draftSuite.hasConfiguredTools
+            ? plannedSampleCount.nonnegativeSaturatedMultiplying(
+                draftSuite.modelConfiguration.maximumToolCalls
+            )
+            : 0
     }
 
     var runBlocker: String? {
