@@ -1,11 +1,11 @@
 """Release-note policy for squash-merged pull requests."""
+
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "script"))
@@ -28,18 +28,28 @@ class ReleaseNotesTests(unittest.TestCase):
             "feat(judging): reassess saved responses independently",
             "fix(history): retain approved assessment identity",
         )
-        self.assertEqual(validate_pull_request("feat(workflow): add daily checks", body), [
-            "feat(workspace): add projects and saved suites",
-            "feat(judging): reassess saved responses independently",
-            "fix(history): retain approved assessment identity",
-        ])
+        self.assertEqual(
+            validate_pull_request("feat(workflow): add daily checks", body),
+            [
+                "feat(workspace): add projects and saved suites",
+                "feat(judging): reassess saved responses independently",
+                "fix(history): retain approved assessment identity",
+            ],
+        )
 
     def test_override_retains_the_pull_request_release_type(self):
         with self.assertRaises(ValueError):
-            validate_pull_request("feat(workflow): add daily checks", override("fix(ui): align the sidebar"))
+            validate_pull_request(
+                "feat(workflow): add daily checks",
+                override("fix(ui): align the sidebar"),
+            )
 
     def test_non_releasable_pull_request_can_omit_override(self):
-        for title in ("docs: explain releases", "ci: route tests", "chore: update metadata"):
+        for title in (
+            "docs: explain releases",
+            "ci: route tests",
+            "chore: update metadata",
+        ):
             with self.subTest(title=title):
                 self.assertEqual(validate_pull_request(title, ""), [])
 
@@ -81,9 +91,18 @@ class ReleaseNotesTests(unittest.TestCase):
             ["feat(api)!: replace the response contract"],
         )
         invalid_pairs = (
-            ("feat(api)!: replace the response contract", override("feat(api): replace the response contract")),
-            ("feat(api): extend the response contract", override("feat(api)!: replace the response contract")),
-            ("fix(api)!: replace the response contract", override("fix(api): replace the response contract")),
+            (
+                "feat(api)!: replace the response contract",
+                override("feat(api): replace the response contract"),
+            ),
+            (
+                "feat(api): extend the response contract",
+                override("feat(api)!: replace the response contract"),
+            ),
+            (
+                "fix(api)!: replace the response contract",
+                override("fix(api): replace the response contract"),
+            ),
         )
         for title, body in invalid_pairs:
             with self.subTest(title=title), self.assertRaises(ValueError):
@@ -114,13 +133,29 @@ class ReleaseNotesTests(unittest.TestCase):
     def test_cli_reads_the_pull_request_event(self):
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
-            event.write_text(json.dumps({"pull_request": {
-                "title": "fix(release): preserve notes",
-                "body": override("fix(release): preserve curated squash notes"),
-            }}))
+            event.write_text(
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "title": "fix(release): preserve notes",
+                            "body": override(
+                                "fix(release): preserve curated squash notes"
+                            ),
+                        }
+                    }
+                )
+            )
             result = subprocess.run(
-                [sys.executable, str(ROOT / "script/release_notes.py"), "validate-event", "--event", str(event)],
-                text=True, capture_output=True, timeout=10,
+                [
+                    sys.executable,
+                    str(ROOT / "script/release_notes.py"),
+                    "validate-event",
+                    "--event",
+                    str(event),
+                ],
+                text=True,
+                capture_output=True,
+                timeout=10,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Validated 1 curated release note entry.", result.stdout)

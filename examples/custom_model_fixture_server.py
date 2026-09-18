@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Deterministic protocol fixture for EvaluationHTTPLanguageModel.
 
 This is not an inference backend. It emits fixed, bounded NDJSON scenarios so the
@@ -15,7 +14,6 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-
 
 HOST = "127.0.0.1"
 PORT = 19096
@@ -79,15 +77,14 @@ class FixtureServer(ThreadingHTTPServer):
         ).encode("utf-8")
         if len(encoded) > MAX_REQUEST_BYTES:
             raise ValueError("canonical request exceeds the request size limit")
-        with self.request_log_lock:
-            with self.request_log.open("ab") as log:
-                log.write(encoded + b"\n")
+        with self.request_log_lock, self.request_log.open("ab") as log:
+            log.write(encoded + b"\n")
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
     server_version = "FoundationEvalsFixture/2"
 
-    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+    def do_POST(self) -> None:
         if self.path not in ROUTES:
             self.send_error(404, "Unknown fixture route")
             return
@@ -196,7 +193,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return scenario
         if request.get("mode") == "guided":
             return "guided"
-        if request.get("enabledTools") or contains_tool_output(request.get("transcript")):
+        if request.get("enabledTools") or contains_tool_output(
+            request.get("transcript")
+        ):
             return "tool"
         if "reasoning" in request.get("provider", {}).get("capabilities", []):
             return "reasoning"
@@ -327,7 +326,11 @@ class FixtureHandler(BaseHTTPRequestHandler):
             )
             return
         tool = next(
-            (candidate for candidate in tools if candidate.get("name") == "lookupOrder"),
+            (
+                candidate
+                for candidate in tools
+                if candidate.get("name") == "lookupOrder"
+            ),
             tools[0],
         )
         self.emit(
@@ -373,7 +376,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
         )
 
     def emit(self, **event: Any) -> None:
-        self.wfile.write(json.dumps(event, separators=(",", ":")).encode("utf-8") + b"\n")
+        self.wfile.write(
+            json.dumps(event, separators=(",", ":")).encode("utf-8") + b"\n"
+        )
         self.wfile.flush()
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -422,7 +427,9 @@ def tool_arguments(tool: dict[str, Any]) -> dict[str, str]:
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=PORT, help="Loopback port (default: %(default)s)")
+    parser.add_argument(
+        "--port", type=int, default=PORT, help="Loopback port (default: %(default)s)"
+    )
     parser.add_argument(
         "--stream-delay",
         type=float,
@@ -463,8 +470,14 @@ if __name__ == "__main__":
     CANCEL_DELAY_SECONDS = arguments.cancel_delay
     server = FixtureServer((HOST, arguments.port), request_log=arguments.request_log)
     bound_port = server.server_address[1]
-    print(f"Foundation Evals protocol fixture listening on http://{HOST}:{bound_port}", flush=True)
-    print("This server returns fixed events; it does not perform model inference.", flush=True)
+    print(
+        f"Foundation Evals protocol fixture listening on http://{HOST}:{bound_port}",
+        flush=True,
+    )
+    print(
+        "This server returns fixed events; it does not perform model inference.",
+        flush=True,
+    )
     print("Routes: " + ", ".join(sorted(ROUTES)), flush=True)
     try:
         server.serve_forever()

@@ -1,12 +1,13 @@
 """Validate release evidence without executing downloaded metadata."""
+
 import base64
-import xml.etree.ElementTree as ET
 import hashlib
 import json
-from pathlib import Path
 import plistlib
 import re
 import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
 REQUIRED_CHECKS = {
     "Compile app and tests",
@@ -17,7 +18,9 @@ REQUIRED_CHECKS = {
 
 def validate_checks(jobs):
     conclusions = {job["name"]: job["conclusion"] for job in jobs}
-    missing = sorted(name for name in REQUIRED_CHECKS if conclusions.get(name) != "success")
+    missing = sorted(
+        name for name in REQUIRED_CHECKS if conclusions.get(name) != "success"
+    )
     if missing:
         raise ValueError("Release requires successful checks: " + ", ".join(missing))
 
@@ -37,7 +40,9 @@ def validate_app_metadata(info, version, expected_commit=None):
     if info.get("CFBundleShortVersionString") != version:
         raise ValueError("App version does not match the release tag.")
     if expected_commit and info.get("FoundationEvalsSourceCommit") != expected_commit:
-        raise ValueError("Signed app source commit does not match the release tag commit.")
+        raise ValueError(
+            "Signed app source commit does not match the release tag commit."
+        )
 
 
 SPARKLE_NS = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
@@ -47,7 +52,9 @@ PUBLIC_KEY = "fpED/OlsZgCvLG9IgiEI0+/JmGjbwEkxmnwwkwymPgY="
 
 def validate_update_feed(directory, info, tag):
     if info.get("SUFeedURL") != FEED_URL or info.get("SUPublicEDKey") != PUBLIC_KEY:
-        raise ValueError("App updater feed or public key does not match release configuration.")
+        raise ValueError(
+            "App updater feed or public key does not match release configuration."
+        )
     build = str(info.get("CFBundleVersion", ""))
     if not re.fullmatch(r"[1-9][0-9]*", build):
         raise ValueError("Sparkle requires a positive integer build number.")
@@ -76,13 +83,24 @@ if __name__ == "__main__":
         if len(sys.argv) == 3 and sys.argv[1] == "checks":
             validate_checks(json.loads(Path(sys.argv[2]).read_text())["jobs"])
         elif len(sys.argv) == 4 and sys.argv[1] == "checksum":
-            print("Installer checksum verified:", verify_checksum(Path(sys.argv[2]), sys.argv[3]))
+            print(
+                "Installer checksum verified:",
+                verify_checksum(Path(sys.argv[2]), sys.argv[3]),
+            )
         elif len(sys.argv) == 5 and sys.argv[1] == "metadata":
             info = plistlib.loads(Path(sys.argv[2]).read_bytes())
             validate_app_metadata(info, sys.argv[3], sys.argv[4] or None)
         elif len(sys.argv) == 5 and sys.argv[1] == "appcast":
-            print(validate_update_feed(Path(sys.argv[2]), plistlib.loads(Path(sys.argv[3]).read_bytes()), sys.argv[4]))
+            print(
+                validate_update_feed(
+                    Path(sys.argv[2]),
+                    plistlib.loads(Path(sys.argv[3]).read_bytes()),
+                    sys.argv[4],
+                )
+            )
         else:
-            raise ValueError("Usage: release_validation.py checks FILE | checksum DIRECTORY FILENAME | metadata PLIST VERSION COMMIT")
+            raise ValueError(
+                "Usage: release_validation.py checks FILE | checksum DIRECTORY FILENAME | metadata PLIST VERSION COMMIT"
+            )
     except (ValueError, KeyError, OSError, ET.ParseError) as error:
         sys.exit(str(error))

@@ -1,10 +1,3 @@
-//
-//  FoundationEvalsApp.swift
-//  FoundationEvals
-//
-//  Created by Cory Parry on 01/09/2026.
-//
-
 import AppKit
 import SwiftUI
 import Sparkle
