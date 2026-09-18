@@ -1,5 +1,4 @@
 import FoundationModels
-import Vision
 
 struct EvaluationVisionToolConfiguration: Codable, Equatable, Sendable {
     var ocrEnabled: Bool = false

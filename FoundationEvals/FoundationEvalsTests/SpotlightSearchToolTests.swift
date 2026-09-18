@@ -1,4 +1,3 @@
-import CoreSpotlight
 import Foundation
 import Testing
 @testable import FoundationEvals

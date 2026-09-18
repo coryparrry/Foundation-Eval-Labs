@@ -1,8 +1,6 @@
 import CoreGraphics
 import Foundation
 import FoundationModels
-import Vision
-import ImageIO
 import Testing
 @testable import FoundationEvals
 
