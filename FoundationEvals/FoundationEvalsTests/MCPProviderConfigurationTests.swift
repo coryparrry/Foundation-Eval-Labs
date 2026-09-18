@@ -162,7 +162,8 @@ struct MCPProviderConfigurationTests {
         store.draftSuite.modelConfiguration.customProvider = EvaluationCustomProviderConfiguration(
             endpoint: "http://127.0.0.1:19097/v1/generate",
             tokenizerEndpoint: tokenizerEndpoint,
-            contextSize: 32_768
+            contextSize: 32_768,
+            supportsGuidedGeneration: true
         )
         #expect(store.saveSuite())
 
