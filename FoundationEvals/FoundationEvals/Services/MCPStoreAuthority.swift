@@ -391,8 +391,12 @@ enum MCPStoreAuthority {
         var configuration = current.modelConfiguration
         configuration.customization = declaration.modelConfiguration.customization ?? current.modelConfiguration.customization
         configuration.provider = declaration.modelConfiguration.provider ?? current.modelConfiguration.provider
-        configuration.customProvider = declaration.modelConfiguration.customProvider?.evaluationConfiguration
-            ?? current.modelConfiguration.customProvider
+        if let declaredCustomProvider = declaration.modelConfiguration.customProvider {
+            var customProvider = declaredCustomProvider.evaluationConfiguration
+            customProvider.tokenizerEndpoint = declaredCustomProvider.tokenizerEndpoint
+                ?? current.modelConfiguration.customProvider?.tokenizerEndpoint
+            configuration.customProvider = customProvider
+        }
         configuration.coreAI = declaration.modelConfiguration.coreAI?.evaluationConfiguration
             ?? current.modelConfiguration.coreAI
         configuration.reasoningLevel = declaration.modelConfiguration.reasoningLevel ?? current.modelConfiguration.reasoningLevel
