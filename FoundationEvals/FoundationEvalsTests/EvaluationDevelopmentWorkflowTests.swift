@@ -260,6 +260,14 @@ struct EvaluationDevelopmentWorkflowTests {
         #expect(preview.rows.count == 20)
         #expect(preview.totalValidRowCount == 50)
         #expect(preview.canImport)
+        let imported = try EvaluationCaseImporter.cases(
+            data: csv,
+            format: .csv,
+            mapping: .init(nameColumn: nil, promptColumn: "prompt", expectedColumn: nil),
+            maximumCases: 10
+        )
+        #expect(imported.count == 10)
+        #expect(imported.last?.prompt == "Prompt 10")
     }
 
     @MainActor
@@ -288,20 +296,20 @@ struct EvaluationDevelopmentWorkflowTests {
         rollbackStore.draftSuite.scoringMode = .review
         #expect(rollbackStore.saveSuite())
         let originalCount = rollbackStore.draftSuite.cases.count
-        let suiteURL = EvaluationWorkspacePersistence.suiteDirectory(
-            supportDirectory: rollbackDirectory,
-            projectID: rollbackStore.selectedProjectID,
-            suiteID: rollbackStore.selectedSuiteID
-        ).appending(path: "suite.json")
-        try FileManager.default.removeItem(at: suiteURL)
-        try FileManager.default.createDirectory(at: suiteURL, withIntermediateDirectories: true)
         #expect(throws: EvaluationStoreError.self) {
             try rollbackStore.appendImportedCases([
-                EvaluationCase(name: "More", prompt: "Another prompt", expected: "")
+                EvaluationCase(
+                    name: "Invalid import",
+                    prompt: String(repeating: "x", count: EvaluationStore.maximumFieldCharacters + 1),
+                    expected: ""
+                )
             ])
         }
         #expect(rollbackStore.draftSuite.cases.count == originalCount)
-        #expect(!rollbackStore.draftSuite.cases.contains { $0.name == "More" })
+        #expect(!rollbackStore.draftSuite.cases.contains { $0.name == "Invalid import" })
+        let reloadedRollbackStore = EvaluationStore(supportDirectory: rollbackDirectory)
+        #expect(reloadedRollbackStore.draftSuite.cases.count == originalCount)
+        #expect(!reloadedRollbackStore.draftSuite.cases.contains { $0.name == "Invalid import" })
     }
 
     @MainActor
@@ -386,6 +394,65 @@ struct EvaluationDevelopmentWorkflowTests {
     }
 
     @MainActor
+    @Test func duplicationRejectsSuiteDataOwnedByAnotherRecord() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let projectID = store.selectedProjectID
+        let suiteID = store.selectedSuiteID
+        var foreignSuite = store.suite
+        foreignSuite.id = UUID()
+        let projectsDirectory = directory.appending(path: "Projects", directoryHint: .isDirectory)
+        let suitesDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: projectID,
+            suiteID: suiteID
+        ).deletingLastPathComponent()
+        try CanonicalJSON.data(for: foreignSuite).write(
+            to: suitesDirectory.appending(path: "\(suiteID.uuidString)/suite.json"),
+            options: .atomic
+        )
+        let projectDirectoriesBefore = Set(
+            try FileManager.default.contentsOfDirectory(
+                at: projectsDirectory,
+                includingPropertiesForKeys: nil
+            ).map(\.lastPathComponent)
+        )
+        let suiteDirectoriesBefore = Set(
+            try FileManager.default.contentsOfDirectory(
+                at: suitesDirectory,
+                includingPropertiesForKeys: nil
+            ).map(\.lastPathComponent)
+        )
+
+        #expect(throws: EvaluationWorkspaceError.self) {
+            _ = try store.duplicateSuite(id: suiteID)
+        }
+        #expect(throws: EvaluationWorkspaceError.self) {
+            _ = try store.duplicateProject(id: projectID)
+        }
+
+        #expect(store.suiteRecords.map(\.id) == [suiteID])
+        #expect(store.projects.count == 1)
+        #expect(
+            Set(
+                try FileManager.default.contentsOfDirectory(
+                    at: projectsDirectory,
+                    includingPropertiesForKeys: nil
+                ).map(\.lastPathComponent)
+            ) == projectDirectoriesBefore
+        )
+        #expect(
+            Set(
+                try FileManager.default.contentsOfDirectory(
+                    at: suitesDirectory,
+                    includingPropertiesForKeys: nil
+                ).map(\.lastPathComponent)
+            ) == suiteDirectoriesBefore
+        )
+    }
+
+    @MainActor
     @Test func failedBaselineApprovalDoesNotPublishInMemory() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -420,7 +487,10 @@ struct EvaluationDevelopmentWorkflowTests {
         let originalInstructions = store.suite.instructions
         let experimentID = try store.createInstructionExperiment(
             name: "Candidate",
-            candidateInstructions: "Replacement candidate instructions"
+            candidateInstructions: String(
+                repeating: "x",
+                count: EvaluationStore.maximumFieldCharacters + 1
+            )
         )
         let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: directory,
@@ -429,9 +499,6 @@ struct EvaluationDevelopmentWorkflowTests {
         )
         let stateURL = suiteDirectory.appending(path: "state.json")
         let stateBeforeAdoption = try Data(contentsOf: stateURL)
-        let suiteURL = suiteDirectory.appending(path: "suite.json")
-        try FileManager.default.removeItem(at: suiteURL)
-        try FileManager.default.createDirectory(at: suiteURL, withIntermediateDirectories: true)
 
         #expect(throws: EvaluationStoreError.self) {
             try store.decideExperiment(id: experimentID, decision: .adoptCandidate)
@@ -441,6 +508,9 @@ struct EvaluationDevelopmentWorkflowTests {
         #expect(store.draftSuite.instructions == originalInstructions)
         #expect(store.suiteLocalState.experiments.first { $0.id == experimentID }?.decision == nil)
         #expect(try Data(contentsOf: stateURL) == stateBeforeAdoption)
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.suite.instructions == originalInstructions)
+        #expect(reloaded.draftSuite.instructions == originalInstructions)
     }
 
     @MainActor

@@ -186,13 +186,17 @@ enum EvaluationWorkspacePersistence {
             }
         }
         var repaired = catalog
-        if !repaired.projects.contains(where: { $0.id == repaired.selectedProjectID }) {
+        if !repaired.projects.contains(where: {
+            $0.id == repaired.selectedProjectID && !$0.isArchived
+        }) {
             repaired.selectedProjectID = repaired.projects.first { !$0.isArchived }?.id
                 ?? repaired.projects[0].id
         }
         for index in repaired.projects.indices {
             let project = repaired.projects[index]
-            if !project.suites.contains(where: { $0.id == project.selectedSuiteID }) {
+            if !project.suites.contains(where: {
+                $0.id == project.selectedSuiteID && !$0.isArchived
+            }) {
                 repaired.projects[index].selectedSuiteID = project.suites.first { !$0.isArchived }?.id
                     ?? project.suites[0].id
             }

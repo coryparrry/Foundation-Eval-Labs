@@ -65,6 +65,7 @@ struct WorkspacePresentationTests {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.releasePolicy.required = true
         #expect(store.saveSuite())
         var owned = fixture()
         owned.suiteID = store.suite.id
@@ -96,12 +97,18 @@ struct WorkspacePresentationTests {
             directory: directory
         )
         #expect(summaries.first?.latestRunID == owned.id)
+        let releaseReport = try reloaded.projectReleaseCheckReport(projectID: reloaded.selectedProjectID)
+        #expect(releaseReport.suites.first?.report.failures.contains {
+            $0.contains("unreadable run record")
+        } == false)
     }
 
     @Test func corruptSuiteHistoryDoesNotMasqueradeAsNeverRunOrHideOtherSuites() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.releasePolicy.required = true
+        #expect(store.saveSuite())
         let first = store.selectedSuiteID
         let root = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: directory, projectID: store.selectedProjectID, suiteID: first
@@ -112,6 +119,10 @@ struct WorkspacePresentationTests {
         #expect(summaries.first { $0.id == first }?.state == .unavailable)
         #expect(summaries.first { $0.id == first }?.loadError != nil)
         #expect(summaries.first { $0.id == second }?.state == .notRun)
+        let releaseReport = try store.projectReleaseCheckReport(projectID: store.selectedProjectID)
+        #expect(releaseReport.suites.first { $0.suiteID == first }?.report.failures.contains {
+            $0.contains("unreadable run record")
+        } == true)
     }
 
     @Test func approvedComparisonKeepsTheReviewedAssessmentWhenSelectionChanges() {

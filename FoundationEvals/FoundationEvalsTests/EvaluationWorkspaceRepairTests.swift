@@ -211,6 +211,57 @@ struct EvaluationWorkspaceRepairTests {
         #expect(try Data(contentsOf: catalogURL) == staleCatalog)
     }
 
+    @Test func failedCatalogPreservationKeepsRecoveryWorkspaceReadOnly() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = EvaluationStore(supportDirectory: directory)
+        let catalogURL = directory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        let corruptCatalog = Data("{ damaged catalog".utf8)
+        try corruptCatalog.write(to: catalogURL, options: .atomic)
+        let digest = SHA256.hash(data: corruptCatalog).map { String(format: "%02x", $0) }.joined()
+        let backupURL = directory.appending(path: "workspace-v1-unreadable-\(digest).json")
+        try Data("conflicting backup".utf8).write(to: backupURL, options: .atomic)
+
+        let recovered = EvaluationStore(supportDirectory: directory)
+        recovered.draftSuite.name = "Must not replace the unreadable catalog"
+
+        #expect(!recovered.saveSuite())
+        #expect(try Data(contentsOf: catalogURL) == corruptCatalog)
+        #expect(recovered.notice?.contains("could not be preserved") == true)
+    }
+
+    @Test func archivedCatalogSelectionsAreRepairedToActiveRecords() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let activeProjectID = store.selectedProjectID
+        let archivedSuiteID = store.selectedSuiteID
+        let activeSuiteID = try store.createSuite(name: "Active suite")
+        let archivedProjectID = try store.createProject(name: "Archived project")
+        let catalogURL = directory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        var catalog = try CanonicalJSON.decode(
+            EvaluationWorkspaceCatalog.self,
+            from: Data(contentsOf: catalogURL)
+        )
+        let activeProjectIndex = try #require(catalog.projects.firstIndex { $0.id == activeProjectID })
+        let archivedSuiteIndex = try #require(
+            catalog.projects[activeProjectIndex].suites.firstIndex { $0.id == archivedSuiteID }
+        )
+        catalog.projects[activeProjectIndex].suites[archivedSuiteIndex].archivedAt = Date()
+        catalog.projects[activeProjectIndex].selectedSuiteID = archivedSuiteID
+        let archivedProjectIndex = try #require(catalog.projects.firstIndex { $0.id == archivedProjectID })
+        catalog.projects[archivedProjectIndex].archivedAt = Date()
+        catalog.selectedProjectID = archivedProjectID
+        try CanonicalJSON.data(for: catalog).write(to: catalogURL, options: .atomic)
+
+        let reloaded = EvaluationStore(supportDirectory: directory)
+
+        #expect(reloaded.selectedProjectID == activeProjectID)
+        #expect(reloaded.selectedSuiteID == activeSuiteID)
+        #expect(reloaded.selectedProject.isArchived == false)
+        #expect(reloaded.selectedSuiteRecord.isArchived == false)
+    }
+
     private func makeFixture() throws -> (directory: URL, target: URL, suite: EvaluationSuite, legacyData: Data) {
         let directory = try temporaryDirectory()
         let suite = EvaluationSuite()

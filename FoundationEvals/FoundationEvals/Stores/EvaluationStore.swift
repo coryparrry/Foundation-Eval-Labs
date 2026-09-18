@@ -65,6 +65,7 @@ final class EvaluationStore {
     private var activeRunResults: [EvaluationSampleResult] = []
     private var unsavedRun: EvaluationRun?
     private var latestRunHistorySequence: UInt64 = 0
+    private var workspacePersistenceBlocker: String?
 
     private var suiteDirectory: URL {
         EvaluationWorkspacePersistence.suiteDirectory(
@@ -207,6 +208,9 @@ final class EvaluationStore {
         unsavedRun = recovery.pending?.completedRun
         completedSamples = recovery.pending?.summary.completedSamples ?? 0
         totalSamples = recovery.pending?.summary.totalSamples ?? 0
+        workspacePersistenceBlocker = catalogRecoveryAttempted && !catalogRecoveryCanPublish
+            ? "The unreadable workspace catalog could not be preserved. Resolve the storage conflict and reopen the app before saving workspace changes."
+            : nil
         migrationNotice = bootstrap.notice
         notice = initialNotice.isEmpty ? nil : initialNotice
         do {
@@ -329,6 +333,9 @@ final class EvaluationStore {
                 guard var copiedSuite = EvaluationWorkspaceStatePersistence.loadSuite(from: sourceDirectory).suite else {
                     throw EvaluationWorkspaceError.missingSuite
                 }
+                guard copiedSuite.id == sourceRecord.id else {
+                    throw EvaluationWorkspaceError.missingSuite
+                }
                 copiedSuite.id = UUID()
                 copiedSuite.name += " copy"
                 let target = EvaluationWorkspacePersistence.suiteDirectory(
@@ -441,6 +448,9 @@ final class EvaluationStore {
             supportDirectory: supportDirectory, projectID: selectedProjectID, suiteID: id
         )
         guard var copied = EvaluationWorkspaceStatePersistence.loadSuite(from: sourceDirectory).suite else {
+            throw EvaluationWorkspaceError.missingSuite
+        }
+        guard copied.id == sourceRecord.id else {
             throw EvaluationWorkspaceError.missingSuite
         }
         copied.id = UUID()
@@ -581,7 +591,7 @@ final class EvaluationStore {
             isRunning = previousIsRunning
             liveResponse = previousLiveResponse
             draftSaveFailed = previousDraftSaveFailed
-            try? EvaluationWorkspacePersistence.save(previousWorkspace, in: supportDirectory)
+            try? persistWorkspace()
             throw error
         }
     }
@@ -635,6 +645,9 @@ final class EvaluationStore {
     }
 
     private func persistWorkspace() throws {
+        if let workspacePersistenceBlocker {
+            throw EvaluationStoreError.persistence(workspacePersistenceBlocker)
+        }
         do {
             try EvaluationWorkspacePersistence.save(workspace, in: supportDirectory)
         } catch {
@@ -1093,10 +1106,16 @@ final class EvaluationStore {
                     "The suite changed after this experiment was frozen. Create a new experiment before adopting a candidate."
                 )
             }
+            let previousDraftFile = try snapshotFile(at: draftSuiteURL)
             draftSuite.instructions = suiteLocalState.experiments[index].candidate.instructions
             guard saveSuite() else {
-                draftSuite = previousDraft
-                throw EvaluationStoreError.invalidSuite(notice ?? "The candidate could not be saved.")
+                let failure = notice ?? "The candidate could not be saved."
+                try restoreDraftAfterFailedSave(
+                    previousDraft,
+                    fileSnapshot: previousDraftFile,
+                    failureMessage: failure
+                )
+                throw EvaluationStoreError.invalidSuite(failure)
             }
         }
         let previousState = suiteLocalState
@@ -1281,7 +1300,7 @@ final class EvaluationStore {
                 projectID: project.id,
                 suiteID: record.id
             )
-            if loadedRuns.notice != nil {
+            if loadedRuns.hasUnreadableFiles {
                 let unavailable = EvaluationReleaseCheckReport(
                     projectID: project.id,
                     suiteID: record.id,
@@ -1825,11 +1844,18 @@ final class EvaluationStore {
         guard imported.count <= remaining else {
             throw EvaluationCaseImportError.tooManyRows(maximum: remaining)
         }
-        let previousCases = draftSuite.cases
+        applyPendingPromptEdits()
+        let previousDraft = draftSuite
+        let previousDraftFile = try snapshotFile(at: draftSuiteURL)
         draftSuite.cases.append(contentsOf: imported)
         guard saveSuite() else {
-            draftSuite.cases = previousCases
-            throw EvaluationStoreError.invalidSuite(notice ?? "The imported cases could not be saved.")
+            let failure = notice ?? "The imported cases could not be saved."
+            try restoreDraftAfterFailedSave(
+                previousDraft,
+                fileSnapshot: previousDraftFile,
+                failureMessage: failure
+            )
+            throw EvaluationStoreError.invalidSuite(failure)
         }
     }
 
@@ -3586,6 +3612,21 @@ final class EvaluationStore {
         }
     }
 
+    private func restoreDraftAfterFailedSave(
+        _ previousDraft: EvaluationSuite,
+        fileSnapshot: PersistedFileSnapshot,
+        failureMessage: String
+    ) throws {
+        draftSuite = previousDraft
+        do {
+            try restoreFile(fileSnapshot)
+        } catch {
+            throw EvaluationStoreError.persistence(
+                "\(failureMessage) Draft rollback also failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
     private func snapshotFile(at url: URL) throws -> PersistedFileSnapshot {
         let existed = FileManager.default.fileExists(atPath: url.path)
         guard existed else { return PersistedFileSnapshot(url: url, existed: false, data: nil) }
@@ -3764,11 +3805,11 @@ final class EvaluationStore {
         from directory: URL,
         projectID: UUID,
         suiteID: UUID
-    ) -> (runs: [EvaluationRun], notice: String?) {
+    ) -> (runs: [EvaluationRun], notice: String?, hasUnreadableFiles: Bool) {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil
-        ) else { return ([], nil) }
+        ) else { return ([], nil, false) }
 
         var unreadableCount = 0
         var ignoredCount = 0
@@ -3815,7 +3856,7 @@ final class EvaluationStore {
             : "\(ignoredCount) run file\(ignoredCount == 1 ? "" : "s") did not belong to this suite and was ignored."
         let messages = [unreadableNotice, ignoredNotice].compactMap { $0 }
         let notice = messages.isEmpty ? nil : messages.joined(separator: "\n")
-        return (runs, notice)
+        return (runs, notice, unreadableCount > 0)
     }
 
     private static func loadActiveRun(from url: URL) -> ActiveRunRecord? {

@@ -92,14 +92,14 @@ enum EvaluationCaseImporter {
                 data: data,
                 mapping: mapping,
                 limit: maximumCases,
-                maximumCases: maximumCases
+                maximumCases: EvaluationStore.maximumCases
             )
         case .jsonLines:
             preview = try jsonLinesPreview(
                 data: data,
                 mapping: mapping,
                 limit: maximumCases,
-                maximumCases: maximumCases
+                maximumCases: EvaluationStore.maximumCases
             )
         }
         guard preview.issues.isEmpty else { throw EvaluationCaseImportError.validation(preview.issues) }
