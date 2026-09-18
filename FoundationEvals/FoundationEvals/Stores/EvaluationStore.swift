@@ -320,19 +320,28 @@ final class EvaluationStore {
 
     func archiveProject(id: UUID) throws {
         try requireIdle()
-        guard let index = workspace.projects.firstIndex(where: { $0.id == id }) else {
+        guard workspace.projects.contains(where: { $0.id == id }) else {
             throw EvaluationWorkspaceError.missingProject
         }
         guard workspace.projects.count(where: { !$0.isArchived && $0.id != id }) > 0 else {
             throw EvaluationStoreError.resourceConflict("Keep at least one active project.")
         }
-        if selectedProjectID == id { try preserveCurrentDraftBeforeWorkspaceChange() }
-        workspace.projects[index].archivedAt = Date()
         if selectedProjectID == id,
            let replacement = workspace.projects.first(where: { !$0.isArchived && $0.id != id }) {
-            try switchWorkspace(projectID: replacement.id, suiteID: replacement.selectedSuiteID)
+            try switchWorkspace(
+                projectID: replacement.id,
+                suiteID: replacement.selectedSuiteID
+            ) { workspace in
+                guard let index = workspace.projects.firstIndex(where: { $0.id == id }) else { return }
+                workspace.projects[index].archivedAt = Date()
+                workspace.projects[index].updatedAt = Date()
+            }
+        } else {
+            try updateProject(id) { project in
+                project.archivedAt = Date()
+                project.updatedAt = Date()
+            }
         }
-        try persistWorkspace()
     }
 
     @discardableResult
@@ -411,19 +420,37 @@ final class EvaluationStore {
         guard project.suites.count(where: { !$0.isArchived && $0.id != id }) > 0 else {
             throw EvaluationStoreError.resourceConflict("Keep at least one active suite in the project.")
         }
-        if id == selectedSuiteID { try preserveCurrentDraftBeforeWorkspaceChange() }
-        try updateProject(project.id) { project in
-            guard let index = project.suites.firstIndex(where: { $0.id == id }) else { return }
-            project.suites[index].archivedAt = Date()
-            project.updatedAt = Date()
-        }
         if id == selectedSuiteID,
-           let replacement = selectedProject.suites.first(where: { !$0.isArchived && $0.id != id }) {
-            try switchWorkspace(projectID: selectedProjectID, suiteID: replacement.id)
+           let replacement = project.suites.first(where: { !$0.isArchived && $0.id != id }) {
+            try switchWorkspace(
+                projectID: selectedProjectID,
+                suiteID: replacement.id
+            ) { workspace in
+                guard let projectIndex = workspace.projects.firstIndex(where: { $0.id == project.id }),
+                      let suiteIndex = workspace.projects[projectIndex].suites.firstIndex(where: {
+                          $0.id == id
+                      }) else { return }
+                workspace.projects[projectIndex].suites[suiteIndex].archivedAt = Date()
+                workspace.projects[projectIndex].updatedAt = Date()
+            }
+        } else {
+            try updateProject(project.id) { project in
+                guard let index = project.suites.firstIndex(where: { $0.id == id }) else { return }
+                project.suites[index].archivedAt = Date()
+                project.updatedAt = Date()
+            }
         }
     }
 
     func switchWorkspace(projectID: UUID, suiteID: UUID) throws {
+        try switchWorkspace(projectID: projectID, suiteID: suiteID) { _ in }
+    }
+
+    private func switchWorkspace(
+        projectID: UUID,
+        suiteID: UUID,
+        catalogMutation: (inout EvaluationWorkspaceCatalog) -> Void
+    ) throws {
         try requireIdle()
         guard let project = workspace.projects.first(where: { $0.id == projectID }),
               !project.isArchived else { throw EvaluationWorkspaceError.missingProject }
@@ -457,8 +484,12 @@ final class EvaluationStore {
             selectedSuiteID = suiteID
             try EvaluationWorkspacePersistence.createSuiteDirectories(at: suiteDirectory)
             try loadSelectedSuite()
-            try updateProject(projectID) { project in project.selectedSuiteID = suiteID }
+            guard let projectIndex = workspace.projects.firstIndex(where: { $0.id == projectID }) else {
+                throw EvaluationWorkspaceError.missingProject
+            }
+            workspace.projects[projectIndex].selectedSuiteID = suiteID
             workspace.selectedProjectID = projectID
+            catalogMutation(&workspace)
             try persistWorkspace()
             selection = .overview
         } catch {
@@ -1579,18 +1610,28 @@ final class EvaluationStore {
     }
 
     var plannedSampleCount: Int {
-        draftSuite.cases.count * draftSuite.repetitions
+        draftSuite.cases.count.nonnegativeSaturatedMultiplying(draftSuite.repetitions)
     }
 
     var plannedRequestCount: Int {
-        let subjectRequests = draftSuite.repetitions * draftSuite.cases.reduce(0) {
-            $0 + $1.conversation.setupTurns.count + 1
+        let requestsPerRepetition = draftSuite.cases.reduce(0) {
+            $0.saturatedAdding($1.conversation.setupTurns.count).saturatedAdding(1)
         }
-        return subjectRequests + (draftSuite.needsModelJudge ? plannedSampleCount * 2 : 0)
+        let subjectRequests = draftSuite.repetitions.nonnegativeSaturatedMultiplying(
+            requestsPerRepetition
+        )
+        let judgeRequests = draftSuite.needsModelJudge
+            ? plannedSampleCount.nonnegativeSaturatedMultiplying(2)
+            : 0
+        return subjectRequests.saturatedAdding(judgeRequests)
     }
 
     var plannedToolCallLimit: Int {
-        draftSuite.hasConfiguredTools ? plannedSampleCount * draftSuite.modelConfiguration.maximumToolCalls : 0
+        draftSuite.hasConfiguredTools
+            ? plannedSampleCount.nonnegativeSaturatedMultiplying(
+                draftSuite.modelConfiguration.maximumToolCalls
+            )
+            : 0
     }
 
     var runBlocker: String? {

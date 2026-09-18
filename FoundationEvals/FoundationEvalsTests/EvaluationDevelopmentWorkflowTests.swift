@@ -93,6 +93,78 @@ struct EvaluationDevelopmentWorkflowTests {
         #expect(!FileManager.default.fileExists(atPath: brokenDirectory.appending(path: "suite.json").path))
     }
 
+    @MainActor
+    @Test func failedArchiveProjectSwitchLeavesTheCurrentProjectActive() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalProject = store.selectedProjectID
+        let originalSuite = store.selectedSuiteID
+        let replacementProject = try store.createProject(name: "Broken replacement")
+        let replacementSuite = store.selectedSuiteID
+        try store.switchProject(id: originalProject)
+        let replacementDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: replacementProject,
+            suiteID: replacementSuite
+        )
+        try FileManager.default.removeItem(at: replacementDirectory.appending(path: "suite.json"))
+
+        #expect(throws: EvaluationWorkspaceError.self) {
+            try store.archiveProject(id: originalProject)
+        }
+        #expect(store.selectedProjectID == originalProject)
+        #expect(store.selectedSuiteID == originalSuite)
+        #expect(store.projects.first(where: { $0.id == originalProject })?.isArchived == false)
+    }
+
+    @MainActor
+    @Test func selectedArchivesSwitchAndPersistWithOneCatalogCommit() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalProject = store.selectedProjectID
+        let originalSuite = store.selectedSuiteID
+        let replacementSuite = try store.createSuite(name: "Suite replacement")
+        try store.switchSuite(id: originalSuite)
+
+        try store.archiveSuite(id: originalSuite)
+        #expect(store.selectedSuiteID == replacementSuite)
+        #expect(store.suiteRecords.first(where: { $0.id == originalSuite })?.isArchived == true)
+
+        let replacementProject = try store.createProject(name: "Project replacement")
+        try store.switchProject(id: originalProject)
+        try store.archiveProject(id: originalProject)
+        #expect(store.selectedProjectID == replacementProject)
+        #expect(store.projects.first(where: { $0.id == originalProject })?.isArchived == true)
+
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.selectedProjectID == replacementProject)
+        #expect(reloaded.projects.first(where: { $0.id == originalProject })?.isArchived == true)
+    }
+
+    @MainActor
+    @Test func failedArchiveSuiteSwitchLeavesTheCurrentSuiteActive() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalSuite = store.selectedSuiteID
+        let replacementSuite = try store.createSuite(name: "Broken replacement")
+        try store.switchSuite(id: originalSuite)
+        let replacementDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+            supportDirectory: directory,
+            projectID: store.selectedProjectID,
+            suiteID: replacementSuite
+        )
+        try FileManager.default.removeItem(at: replacementDirectory.appending(path: "suite.json"))
+
+        #expect(throws: EvaluationWorkspaceError.self) {
+            try store.archiveSuite(id: originalSuite)
+        }
+        #expect(store.selectedSuiteID == originalSuite)
+        #expect(store.suiteRecords.first(where: { $0.id == originalSuite })?.isArchived == false)
+    }
+
     @Test func csvAndJSONLinesImportMapPreviewAndRejectBadRows() throws {
         let csv = Data("title,input,want\nBlue,Why blue?,Rayleigh\nQuoted,\"a,b\",ok\n".utf8)
         let mapping = EvaluationCaseImportMapping(

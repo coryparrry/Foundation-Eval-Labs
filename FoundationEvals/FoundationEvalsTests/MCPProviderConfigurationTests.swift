@@ -40,6 +40,7 @@ struct MCPProviderConfigurationTests {
         let authority = MCPStoreAuthority.make(store: store)
         let customProvider = EvaluationCustomProviderConfiguration(
             endpoint: "http://127.0.0.1:19097/v1/generate",
+            tokenizerEndpoint: "http://127.0.0.1:19097/v1/tokenize",
             contextSize: 32_768,
             supportsVision: true,
             supportsGuidedGeneration: true,
@@ -72,6 +73,7 @@ struct MCPProviderConfigurationTests {
         let reportedCustomization = try #require(model["customization"]?.objectValue)
         #expect(model["provider"] == .string("customHTTP"))
         #expect(custom["endpoint"] == .string(customProvider.endpoint))
+        #expect(custom["tokenizerEndpoint"] == .string(customProvider.tokenizerEndpoint!))
         #expect(custom["contextSize"] == .integer(32_768))
         #expect(custom["capabilities"] == .array([
             .string("vision"),
