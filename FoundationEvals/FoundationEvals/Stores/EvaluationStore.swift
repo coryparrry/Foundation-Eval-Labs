@@ -483,6 +483,9 @@ final class EvaluationStore {
     func archiveSuite(id: UUID) throws {
         try requireIdle()
         let project = selectedProject
+        guard project.suites.contains(where: { $0.id == id }) else {
+            throw EvaluationWorkspaceError.missingSuite
+        }
         guard project.suites.count(where: { !$0.isArchived && $0.id != id }) > 0 else {
             throw EvaluationStoreError.resourceConflict("Keep at least one active suite in the project.")
         }
