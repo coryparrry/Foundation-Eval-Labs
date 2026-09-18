@@ -523,6 +523,9 @@ struct EvaluationDevelopmentWorkflowTests {
             name: "Candidate",
             candidateInstructions: "Replacement candidate instructions"
         )
+        var previousDraft = originalSuite
+        previousDraft.name = "Uncommitted draft"
+        store.draftSuite = previousDraft
         let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: directory,
             projectID: store.selectedProjectID,
@@ -537,7 +540,7 @@ struct EvaluationDevelopmentWorkflowTests {
         }
 
         #expect(store.suite == originalSuite)
-        #expect(store.draftSuite == originalSuite)
+        #expect(store.draftSuite == previousDraft)
         #expect(store.suiteLocalState.experiments.first { $0.id == experimentID }?.decision == nil)
         #expect(
             try CanonicalJSON.decode(

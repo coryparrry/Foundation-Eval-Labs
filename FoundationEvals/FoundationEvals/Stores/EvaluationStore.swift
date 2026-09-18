@@ -1100,19 +1100,21 @@ final class EvaluationStore {
             throw EvaluationStoreError.resourceNotFound("Experiment")
         }
         let previousDraft = draftSuite
+        var adoptionSnapshot: CandidateAdoptionSnapshot?
         if decision == .adoptCandidate {
             guard suiteLocalState.experiments[index].suiteRevision == suiteRevision else {
                 throw EvaluationStoreError.resourceConflict(
                     "The suite changed after this experiment was frozen. Create a new experiment before adopting a candidate."
                 )
             }
-            let previousDraftFile = try snapshotFile(at: draftSuiteURL)
+            let snapshot = try candidateAdoptionSnapshot()
+            adoptionSnapshot = snapshot
             draftSuite.instructions = suiteLocalState.experiments[index].candidate.instructions
             guard saveSuite() else {
                 let failure = notice ?? "The candidate could not be saved."
                 try restoreDraftAfterFailedSave(
                     previousDraft,
-                    fileSnapshot: previousDraftFile,
+                    fileSnapshot: snapshot.draftFile,
                     failureMessage: failure
                 )
                 throw EvaluationStoreError.invalidSuite(failure)
@@ -1125,15 +1127,11 @@ final class EvaluationStore {
         } catch {
             let decisionError = error
             suiteLocalState = previousState
-            if decision == .adoptCandidate {
-                draftSuite = previousDraft
-                guard saveSuite() else {
-                    throw EvaluationStoreError.persistence(
-                        "The experiment decision could not be saved: \(decisionError.localizedDescription) "
-                            + "The candidate adoption also could not be rolled back: "
-                            + (notice ?? "unknown persistence error")
-                    )
-                }
+            if let adoptionSnapshot {
+                try restoreCandidateAdoption(
+                    adoptionSnapshot,
+                    failureMessage: "The experiment decision could not be saved: \(decisionError.localizedDescription)"
+                )
             }
             throw decisionError
         }
@@ -3627,6 +3625,61 @@ final class EvaluationStore {
         }
     }
 
+    private func candidateAdoptionSnapshot() throws -> CandidateAdoptionSnapshot {
+        let suiteFile = try snapshotFile(at: suiteDirectory.appending(path: "suite.json"))
+        let draftFile = try snapshotFile(at: draftSuiteURL)
+        let catalogFile = try snapshotFile(
+            at: supportDirectory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        )
+        let stateFile = try snapshotFile(at: suiteStateURL)
+        let repositoryURL = EvaluationWorkspacePersistence.repositoryDefinitionURL(
+            project: selectedProject,
+            suite: selectedSuiteRecord
+        )
+        let repositoryFile = try repositoryURL.map { try snapshotFile(at: $0) }
+        return CandidateAdoptionSnapshot(
+            suite: suite,
+            draft: draftSuite,
+            workspace: workspace,
+            notice: notice,
+            draftSaveFailed: draftSaveFailed,
+            suiteFile: suiteFile,
+            draftFile: draftFile,
+            catalogFile: catalogFile,
+            stateFile: stateFile,
+            repositoryFile: repositoryFile
+        )
+    }
+
+    private func restoreCandidateAdoption(
+        _ snapshot: CandidateAdoptionSnapshot,
+        failureMessage: String
+    ) throws {
+        suite = snapshot.suite
+        draftSuite = snapshot.draft
+        workspace = snapshot.workspace
+        notice = snapshot.notice
+        draftSaveFailed = snapshot.draftSaveFailed
+        var rollbackErrors: [String] = []
+        do { try restoreFile(snapshot.catalogFile) }
+        catch { rollbackErrors.append("workspace catalog: \(error.localizedDescription)") }
+        do { try restoreFile(snapshot.suiteFile) }
+        catch { rollbackErrors.append("suite metadata: \(error.localizedDescription)") }
+        if let repositoryFile = snapshot.repositoryFile {
+            do { try restoreFile(repositoryFile) }
+            catch { rollbackErrors.append("repository definition: \(error.localizedDescription)") }
+        }
+        do { try restoreFile(snapshot.draftFile) }
+        catch { rollbackErrors.append("suite draft: \(error.localizedDescription)") }
+        do { try restoreFile(snapshot.stateFile) }
+        catch { rollbackErrors.append("experiment state: \(error.localizedDescription)") }
+        guard rollbackErrors.isEmpty else {
+            throw EvaluationStoreError.persistence(
+                "\(failureMessage) Rollback also failed for \(rollbackErrors.joined(separator: "; "))."
+            )
+        }
+    }
+
     private func snapshotFile(at url: URL) throws -> PersistedFileSnapshot {
         let existed = FileManager.default.fileExists(atPath: url.path)
         guard existed else { return PersistedFileSnapshot(url: url, existed: false, data: nil) }
@@ -4015,6 +4068,19 @@ private struct PersistedFileSnapshot {
     let url: URL
     let existed: Bool
     let data: Data?
+}
+
+private struct CandidateAdoptionSnapshot {
+    let suite: EvaluationSuite
+    let draft: EvaluationSuite
+    let workspace: EvaluationWorkspaceCatalog
+    let notice: String?
+    let draftSaveFailed: Bool
+    let suiteFile: PersistedFileSnapshot
+    let draftFile: PersistedFileSnapshot
+    let catalogFile: PersistedFileSnapshot
+    let stateFile: PersistedFileSnapshot
+    let repositoryFile: PersistedFileSnapshot?
 }
 
 private struct ActiveRunRecord: Codable, Sendable {
