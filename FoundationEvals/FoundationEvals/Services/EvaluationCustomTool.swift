@@ -1,5 +1,7 @@
+import CoreGraphics
 import Foundation
 import FoundationModels
+import ImageIO
 
 enum EvaluationCustomToolCallOutcome: String, Codable, Equatable, Sendable {
     case running

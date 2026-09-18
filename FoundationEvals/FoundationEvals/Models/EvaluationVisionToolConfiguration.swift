@@ -1,3 +1,4 @@
+import Foundation
 import FoundationModels
 
 struct EvaluationVisionToolConfiguration: Codable, Equatable, Sendable {
