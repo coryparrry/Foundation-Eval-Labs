@@ -223,10 +223,22 @@ struct EvaluationWorkspaceRepairTests {
         try Data("conflicting backup".utf8).write(to: backupURL, options: .atomic)
 
         let recovered = EvaluationStore(supportDirectory: directory)
+        let workspaceBeforeMutation = recovered.workspace
+        let pathsBeforeMutation = try FileManager.default.subpathsOfDirectory(atPath: directory.path).sorted()
+
+        #expect(throws: EvaluationStoreError.self) {
+            _ = try recovered.createProject(name: "Must not be created")
+        }
+        #expect(throws: EvaluationStoreError.self) {
+            try recovered.renameProject(id: recovered.selectedProjectID, name: "Must not be renamed")
+        }
+
         recovered.draftSuite.name = "Must not replace the unreadable catalog"
 
         #expect(!recovered.saveSuite())
+        #expect(recovered.workspace == workspaceBeforeMutation)
         #expect(try Data(contentsOf: catalogURL) == corruptCatalog)
+        #expect(try FileManager.default.subpathsOfDirectory(atPath: directory.path).sorted() == pathsBeforeMutation)
         #expect(recovered.notice?.contains("could not be preserved") == true)
     }
 

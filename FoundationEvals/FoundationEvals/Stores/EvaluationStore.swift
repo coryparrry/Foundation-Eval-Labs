@@ -54,6 +54,7 @@ final class EvaluationStore {
     private let featureAdapterRunner = EvaluationFeatureAdapterRunner()
     private let reassessmentService = EvaluationReassessmentService()
     private let supportDirectory: URL
+    private let suiteLocalStateWriter: (Data, URL) throws -> Void
     var overviewStorageDirectory: URL { supportDirectory }
     @ObservationIgnored private var pendingPromptEdits: [UUID: String] = [:]
     @ObservationIgnored private var draftSaveTask: Task<Void, Never>?
@@ -81,11 +82,17 @@ final class EvaluationStore {
     private var suiteStateURL: URL { suiteDirectory.appending(path: "state.json") }
     private var judgeConnectionsURL: URL { supportDirectory.appending(path: "judge-connections.json") }
 
-    init(supportDirectory customSupportDirectory: URL? = nil) {
+    init(
+        supportDirectory customSupportDirectory: URL? = nil,
+        suiteLocalStateWriter: @escaping (Data, URL) throws -> Void = {
+            try $0.write(to: $1, options: .atomic)
+        }
+    ) {
         let base = customSupportDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appending(path: "FoundationEvals", directoryHint: .isDirectory)
         supportDirectory = base
+        self.suiteLocalStateWriter = suiteLocalStateWriter
 
         var startupNotice: String?
         do {
@@ -1099,7 +1106,7 @@ final class EvaluationStore {
         guard let index = suiteLocalState.experiments.firstIndex(where: { $0.id == id }) else {
             throw EvaluationStoreError.resourceNotFound("Experiment")
         }
-        let previousDraft = draftSuite
+        var previousDraft = draftSuite
         var adoptionSnapshot: CandidateAdoptionSnapshot?
         if decision == .adoptCandidate {
             guard suiteLocalState.experiments[index].suiteRevision == suiteRevision else {
@@ -1107,6 +1114,8 @@ final class EvaluationStore {
                     "The suite changed after this experiment was frozen. Create a new experiment before adopting a candidate."
                 )
             }
+            applyPendingPromptEdits()
+            previousDraft = draftSuite
             let snapshot = try candidateAdoptionSnapshot()
             adoptionSnapshot = snapshot
             draftSuite.instructions = suiteLocalState.experiments[index].candidate.instructions
@@ -1117,6 +1126,9 @@ final class EvaluationStore {
                     fileSnapshot: snapshot.draftFile,
                     failureMessage: failure
                 )
+                if snapshot.hadPendingDraftSave {
+                    scheduleSuiteSave()
+                }
                 throw EvaluationStoreError.invalidSuite(failure)
             }
         }
@@ -2373,6 +2385,11 @@ final class EvaluationStore {
 
     @discardableResult
     func saveSuite() -> Bool {
+        if let workspacePersistenceBlocker {
+            notice = workspacePersistenceBlocker
+            draftSaveFailed = true
+            return false
+        }
         applyPendingPromptEdits()
         draftSaveTask?.cancel()
         draftSaveTask = nil
@@ -3513,6 +3530,9 @@ final class EvaluationStore {
     }
 
     private func requireIdle() throws {
+        if let workspacePersistenceBlocker {
+            throw EvaluationStoreError.persistence(workspacePersistenceBlocker)
+        }
         try retryUnsavedRun()
         if isRunning || activeRun != nil { throw EvaluationStoreError.runBusy }
         if isReassessing {
@@ -3604,7 +3624,7 @@ final class EvaluationStore {
 
     private func persistSuiteLocalState() throws {
         do {
-            try CanonicalJSON.data(for: suiteLocalState).write(to: suiteStateURL, options: .atomic)
+            try suiteLocalStateWriter(CanonicalJSON.data(for: suiteLocalState), suiteStateURL)
         } catch {
             throw EvaluationStoreError.persistence(error.localizedDescription)
         }
@@ -3643,6 +3663,7 @@ final class EvaluationStore {
             workspace: workspace,
             notice: notice,
             draftSaveFailed: draftSaveFailed,
+            hadPendingDraftSave: isDraftSavePending,
             suiteFile: suiteFile,
             draftFile: draftFile,
             catalogFile: catalogFile,
@@ -3655,14 +3676,7 @@ final class EvaluationStore {
         _ snapshot: CandidateAdoptionSnapshot,
         failureMessage: String
     ) throws {
-        suite = snapshot.suite
-        draftSuite = snapshot.draft
-        workspace = snapshot.workspace
-        notice = snapshot.notice
-        draftSaveFailed = snapshot.draftSaveFailed
         var rollbackErrors: [String] = []
-        do { try restoreFile(snapshot.catalogFile) }
-        catch { rollbackErrors.append("workspace catalog: \(error.localizedDescription)") }
         do { try restoreFile(snapshot.suiteFile) }
         catch { rollbackErrors.append("suite metadata: \(error.localizedDescription)") }
         if let repositoryFile = snapshot.repositoryFile {
@@ -3673,10 +3687,24 @@ final class EvaluationStore {
         catch { rollbackErrors.append("suite draft: \(error.localizedDescription)") }
         do { try restoreFile(snapshot.stateFile) }
         catch { rollbackErrors.append("experiment state: \(error.localizedDescription)") }
-        guard rollbackErrors.isEmpty else {
-            throw EvaluationStoreError.persistence(
-                "\(failureMessage) Rollback also failed for \(rollbackErrors.joined(separator: "; "))."
-            )
+        if rollbackErrors.isEmpty {
+            do { try restoreFile(snapshot.catalogFile) }
+            catch { rollbackErrors.append("workspace catalog: \(error.localizedDescription)") }
+        }
+        if !rollbackErrors.isEmpty {
+            let blocker = "\(failureMessage) Rollback also failed for \(rollbackErrors.joined(separator: "; "))."
+            workspacePersistenceBlocker = blocker
+            notice = blocker
+            draftSaveFailed = true
+            throw EvaluationStoreError.persistence(blocker)
+        }
+        suite = snapshot.suite
+        draftSuite = snapshot.draft
+        workspace = snapshot.workspace
+        notice = snapshot.notice
+        draftSaveFailed = snapshot.draftSaveFailed
+        if snapshot.hadPendingDraftSave {
+            scheduleSuiteSave()
         }
     }
 
@@ -4076,6 +4104,7 @@ private struct CandidateAdoptionSnapshot {
     let workspace: EvaluationWorkspaceCatalog
     let notice: String?
     let draftSaveFailed: Bool
+    let hadPendingDraftSave: Bool
     let suiteFile: PersistedFileSnapshot
     let draftFile: PersistedFileSnapshot
     let catalogFile: PersistedFileSnapshot

@@ -517,7 +517,16 @@ struct EvaluationDevelopmentWorkflowTests {
     @Test func failedExperimentDecisionPersistenceRollsBackCandidateAdoption() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = EvaluationStore(supportDirectory: directory)
+        var shouldFailStateWrites = false
+        let store = EvaluationStore(
+            supportDirectory: directory,
+            suiteLocalStateWriter: { data, url in
+                if shouldFailStateWrites {
+                    throw CocoaError(.fileWriteNoPermission)
+                }
+                try data.write(to: url, options: .atomic)
+            }
+        )
         let originalSuite = store.suite
         let experimentID = try store.createInstructionExperiment(
             name: "Candidate",
@@ -526,21 +535,25 @@ struct EvaluationDevelopmentWorkflowTests {
         var previousDraft = originalSuite
         previousDraft.name = "Uncommitted draft"
         store.draftSuite = previousDraft
+        let pendingPrompt = "Pending prompt edit"
+        store.editPrompt(pendingPrompt, for: originalSuite.cases[0].id)
         let suiteDirectory = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: directory,
             projectID: store.selectedProjectID,
             suiteID: store.selectedSuiteID
         )
         let stateURL = suiteDirectory.appending(path: "state.json")
-        try FileManager.default.removeItem(at: stateURL)
-        try FileManager.default.createDirectory(at: stateURL, withIntermediateDirectories: true)
+        shouldFailStateWrites = true
 
         #expect(throws: (any Error).self) {
             try store.decideExperiment(id: experimentID, decision: .adoptCandidate)
         }
 
         #expect(store.suite == originalSuite)
-        #expect(store.draftSuite == previousDraft)
+        #expect(store.draftSuite.name == previousDraft.name)
+        #expect(store.draftSuite.cases[0].prompt == pendingPrompt)
+        #expect(store.promptText(for: originalSuite.cases[0].id) == pendingPrompt)
+        #expect(store.isDraftSavePending)
         #expect(store.suiteLocalState.experiments.first { $0.id == experimentID }?.decision == nil)
         #expect(
             try CanonicalJSON.decode(
@@ -548,6 +561,13 @@ struct EvaluationDevelopmentWorkflowTests {
                 from: Data(contentsOf: suiteDirectory.appending(path: "suite.json"))
             ) == originalSuite
         )
+        let persistedState = try CanonicalJSON.decode(
+            EvaluationSuiteLocalState.self,
+            from: Data(contentsOf: stateURL)
+        )
+        #expect(persistedState.experiments.first { $0.id == experimentID }?.decision == nil)
+        shouldFailStateWrites = false
+        #expect(store.saveSuite())
     }
 
     @MainActor
