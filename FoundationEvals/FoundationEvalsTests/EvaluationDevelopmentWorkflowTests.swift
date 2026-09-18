@@ -144,6 +144,24 @@ struct EvaluationDevelopmentWorkflowTests {
     }
 
     @MainActor
+    @Test func archivingAnUnknownSuiteFailsWithoutPersisting() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        _ = try store.createSuite(name: "Keep")
+        let workspaceBeforeArchive = store.workspace
+        let catalogURL = directory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        let catalogBeforeArchive = try Data(contentsOf: catalogURL)
+
+        #expect(throws: EvaluationWorkspaceError.self) {
+            try store.archiveSuite(id: UUID())
+        }
+
+        #expect(store.workspace == workspaceBeforeArchive)
+        #expect(try Data(contentsOf: catalogURL) == catalogBeforeArchive)
+    }
+
+    @MainActor
     @Test func failedArchiveSuiteSwitchLeavesTheCurrentSuiteActive() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
