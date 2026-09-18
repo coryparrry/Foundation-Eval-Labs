@@ -328,11 +328,19 @@ final class EvaluationStore {
         }
         if selectedProjectID == id,
            let replacement = workspace.projects.first(where: { !$0.isArchived && $0.id != id }) {
-            try switchWorkspace(projectID: replacement.id, suiteID: replacement.selectedSuiteID)
-        }
-        try updateProject(id) { project in
-            project.archivedAt = Date()
-            project.updatedAt = Date()
+            try switchWorkspace(
+                projectID: replacement.id,
+                suiteID: replacement.selectedSuiteID
+            ) { workspace in
+                guard let index = workspace.projects.firstIndex(where: { $0.id == id }) else { return }
+                workspace.projects[index].archivedAt = Date()
+                workspace.projects[index].updatedAt = Date()
+            }
+        } else {
+            try updateProject(id) { project in
+                project.archivedAt = Date()
+                project.updatedAt = Date()
+            }
         }
     }
 
@@ -414,16 +422,35 @@ final class EvaluationStore {
         }
         if id == selectedSuiteID,
            let replacement = project.suites.first(where: { !$0.isArchived && $0.id != id }) {
-            try switchWorkspace(projectID: selectedProjectID, suiteID: replacement.id)
-        }
-        try updateProject(project.id) { project in
-            guard let index = project.suites.firstIndex(where: { $0.id == id }) else { return }
-            project.suites[index].archivedAt = Date()
-            project.updatedAt = Date()
+            try switchWorkspace(
+                projectID: selectedProjectID,
+                suiteID: replacement.id
+            ) { workspace in
+                guard let projectIndex = workspace.projects.firstIndex(where: { $0.id == project.id }),
+                      let suiteIndex = workspace.projects[projectIndex].suites.firstIndex(where: {
+                          $0.id == id
+                      }) else { return }
+                workspace.projects[projectIndex].suites[suiteIndex].archivedAt = Date()
+                workspace.projects[projectIndex].updatedAt = Date()
+            }
+        } else {
+            try updateProject(project.id) { project in
+                guard let index = project.suites.firstIndex(where: { $0.id == id }) else { return }
+                project.suites[index].archivedAt = Date()
+                project.updatedAt = Date()
+            }
         }
     }
 
     func switchWorkspace(projectID: UUID, suiteID: UUID) throws {
+        try switchWorkspace(projectID: projectID, suiteID: suiteID) { _ in }
+    }
+
+    private func switchWorkspace(
+        projectID: UUID,
+        suiteID: UUID,
+        catalogMutation: (inout EvaluationWorkspaceCatalog) -> Void
+    ) throws {
         try requireIdle()
         guard let project = workspace.projects.first(where: { $0.id == projectID }),
               !project.isArchived else { throw EvaluationWorkspaceError.missingProject }
@@ -457,8 +484,12 @@ final class EvaluationStore {
             selectedSuiteID = suiteID
             try EvaluationWorkspacePersistence.createSuiteDirectories(at: suiteDirectory)
             try loadSelectedSuite()
-            try updateProject(projectID) { project in project.selectedSuiteID = suiteID }
+            guard let projectIndex = workspace.projects.firstIndex(where: { $0.id == projectID }) else {
+                throw EvaluationWorkspaceError.missingProject
+            }
+            workspace.projects[projectIndex].selectedSuiteID = suiteID
             workspace.selectedProjectID = projectID
+            catalogMutation(&workspace)
             try persistWorkspace()
             selection = .overview
         } catch {

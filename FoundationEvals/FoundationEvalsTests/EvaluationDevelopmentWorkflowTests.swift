@@ -119,6 +119,31 @@ struct EvaluationDevelopmentWorkflowTests {
     }
 
     @MainActor
+    @Test func selectedArchivesSwitchAndPersistWithOneCatalogCommit() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let originalProject = store.selectedProjectID
+        let originalSuite = store.selectedSuiteID
+        let replacementSuite = try store.createSuite(name: "Suite replacement")
+        try store.switchSuite(id: originalSuite)
+
+        try store.archiveSuite(id: originalSuite)
+        #expect(store.selectedSuiteID == replacementSuite)
+        #expect(store.suiteRecords.first(where: { $0.id == originalSuite })?.isArchived == true)
+
+        let replacementProject = try store.createProject(name: "Project replacement")
+        try store.switchProject(id: originalProject)
+        try store.archiveProject(id: originalProject)
+        #expect(store.selectedProjectID == replacementProject)
+        #expect(store.projects.first(where: { $0.id == originalProject })?.isArchived == true)
+
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.selectedProjectID == replacementProject)
+        #expect(reloaded.projects.first(where: { $0.id == originalProject })?.isArchived == true)
+    }
+
+    @MainActor
     @Test func failedArchiveSuiteSwitchLeavesTheCurrentSuiteActive() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
