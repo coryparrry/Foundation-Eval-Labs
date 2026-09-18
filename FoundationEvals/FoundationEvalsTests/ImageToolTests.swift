@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import FoundationModels
 import Testing
+import Vision
 @testable import FoundationEvals
 
 struct ImageToolTests {
