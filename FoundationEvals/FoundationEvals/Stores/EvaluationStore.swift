@@ -320,19 +320,20 @@ final class EvaluationStore {
 
     func archiveProject(id: UUID) throws {
         try requireIdle()
-        guard let index = workspace.projects.firstIndex(where: { $0.id == id }) else {
+        guard workspace.projects.contains(where: { $0.id == id }) else {
             throw EvaluationWorkspaceError.missingProject
         }
         guard workspace.projects.count(where: { !$0.isArchived && $0.id != id }) > 0 else {
             throw EvaluationStoreError.resourceConflict("Keep at least one active project.")
         }
-        if selectedProjectID == id { try preserveCurrentDraftBeforeWorkspaceChange() }
-        workspace.projects[index].archivedAt = Date()
         if selectedProjectID == id,
            let replacement = workspace.projects.first(where: { !$0.isArchived && $0.id != id }) {
             try switchWorkspace(projectID: replacement.id, suiteID: replacement.selectedSuiteID)
         }
-        try persistWorkspace()
+        try updateProject(id) { project in
+            project.archivedAt = Date()
+            project.updatedAt = Date()
+        }
     }
 
     @discardableResult
@@ -411,15 +412,14 @@ final class EvaluationStore {
         guard project.suites.count(where: { !$0.isArchived && $0.id != id }) > 0 else {
             throw EvaluationStoreError.resourceConflict("Keep at least one active suite in the project.")
         }
-        if id == selectedSuiteID { try preserveCurrentDraftBeforeWorkspaceChange() }
+        if id == selectedSuiteID,
+           let replacement = project.suites.first(where: { !$0.isArchived && $0.id != id }) {
+            try switchWorkspace(projectID: selectedProjectID, suiteID: replacement.id)
+        }
         try updateProject(project.id) { project in
             guard let index = project.suites.firstIndex(where: { $0.id == id }) else { return }
             project.suites[index].archivedAt = Date()
             project.updatedAt = Date()
-        }
-        if id == selectedSuiteID,
-           let replacement = selectedProject.suites.first(where: { !$0.isArchived && $0.id != id }) {
-            try switchWorkspace(projectID: selectedProjectID, suiteID: replacement.id)
         }
     }
 
