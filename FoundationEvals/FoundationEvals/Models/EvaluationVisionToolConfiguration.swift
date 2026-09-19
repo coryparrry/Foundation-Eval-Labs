@@ -1,3 +1,4 @@
+import Foundation
 import FoundationModels
 import Vision
 

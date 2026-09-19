@@ -136,16 +136,12 @@ struct QuickActionsPill: View {
             separator
             controlButtons
         }
-        // Both drivers of this swap get the same curve, declared here rather
-        // than wrapped around the mutation.
         .animation(menuSwapAnimation, value: isPromptMode)
         .animation(menuSwapAnimation, value: isExpanded)
     }
 
     private var compactEntryControls: some View {
         HStack(spacing: 0) {
-            // This flexible field consumes the content region left after the
-            // intrinsic action widths and trailing control have resolved.
             promptField(maxWidth: .infinity)
 
             if isPromptMode {
@@ -230,9 +226,6 @@ struct QuickActionsPill: View {
         .animation(contentAnimation, value: isPromptMode)
     }
 
-    /// The compact row enters and leaves through the leading edge, the expanded
-    /// scroller through the trailing edge. Together they read as one strip
-    /// sliding sideways rather than as two views crossfading in place.
     private var compactTransition: AnyTransition {
         .move(edge: .leading).combined(with: .opacity)
     }

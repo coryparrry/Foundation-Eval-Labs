@@ -296,7 +296,6 @@ final class WorkflowTraceUITests: XCTestCase {
         let storage = try UITestStorage.makeDirectory(prefix: "workflow-trace")
         defer { try? FileManager.default.removeItem(at: storage) }
         try WorkflowTraceFixture.write(to: storage, longJudgeEvidence: longJudgeEvidence)
-        try UITestStorage.verifyWritable(storage)
 
         let app = XCUIApplication()
         app.launchArguments += [

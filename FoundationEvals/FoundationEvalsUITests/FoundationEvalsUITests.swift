@@ -32,7 +32,6 @@ final class FoundationEvalsUITests: XCTestCase {
         app.menuItems["Show Suite Editor"].click()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 5), "The editor command must recover a closed main window")
         XCTAssertTrue(app.buttons["Run"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Run"].exists)
         XCTAssertTrue(app.buttons["Add Case"].exists)
         XCTAssertTrue(app.buttons["Add Case"].isHittable)
         XCTAssertTrue(
