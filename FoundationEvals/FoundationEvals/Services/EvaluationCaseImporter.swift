@@ -31,8 +31,9 @@ struct EvaluationCaseImportPreview: Sendable {
     var columns: [String]
     var rows: [EvaluationCaseImportRow]
     var issues: [EvaluationCaseImportIssue]
+    var totalValidRowCount: Int
 
-    var canImport: Bool { !rows.isEmpty && issues.isEmpty }
+    var canImport: Bool { totalValidRowCount > 0 && issues.isEmpty }
 }
 
 enum EvaluationCaseImporter {
@@ -91,14 +92,14 @@ enum EvaluationCaseImporter {
                 data: data,
                 mapping: mapping,
                 limit: maximumCases,
-                maximumCases: maximumCases
+                maximumCases: EvaluationStore.maximumCases
             )
         case .jsonLines:
             preview = try jsonLinesPreview(
                 data: data,
                 mapping: mapping,
                 limit: maximumCases,
-                maximumCases: maximumCases
+                maximumCases: EvaluationStore.maximumCases
             )
         }
         guard preview.issues.isEmpty else { throw EvaluationCaseImportError.validation(preview.issues) }
@@ -119,6 +120,7 @@ enum EvaluationCaseImporter {
         try validate(mapping: mapping, columns: columns)
         var rows: [EvaluationCaseImportRow] = []
         var issues: [EvaluationCaseImportIssue] = []
+        var totalValidRowCount = 0
         for row in parsed.dropFirst() {
             if row.fields.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { continue }
             guard row.fields.count == columns.count else {
@@ -126,9 +128,14 @@ enum EvaluationCaseImporter {
                 continue
             }
             let object = Dictionary(uniqueKeysWithValues: zip(columns, row.fields))
-            append(object: object, line: row.line, mapping: mapping, rows: &rows, issues: &issues, limit: limit)
+            append(
+                object: object, line: row.line, mapping: mapping, rows: &rows, issues: &issues,
+                limit: limit, totalValidRowCount: &totalValidRowCount
+            )
         }
-        return EvaluationCaseImportPreview(columns: columns, rows: rows, issues: issues)
+        return EvaluationCaseImportPreview(
+            columns: columns, rows: rows, issues: issues, totalValidRowCount: totalValidRowCount
+        )
     }
 
     private static func jsonLinesPreview(
@@ -142,6 +149,7 @@ enum EvaluationCaseImporter {
         try validate(mapping: mapping, columns: columns)
         var rows: [EvaluationCaseImportRow] = []
         var issues: [EvaluationCaseImportIssue] = []
+        var totalValidRowCount = 0
         for record in records {
             var object: [String: String] = [:]
             for (key, value) in record.object {
@@ -153,9 +161,14 @@ enum EvaluationCaseImporter {
                     issues.append(.init(line: record.line, message: "Column '\(key)' must be a string or null."))
                 }
             }
-            append(object: object, line: record.line, mapping: mapping, rows: &rows, issues: &issues, limit: limit)
+            append(
+                object: object, line: record.line, mapping: mapping, rows: &rows, issues: &issues,
+                limit: limit, totalValidRowCount: &totalValidRowCount
+            )
         }
-        return EvaluationCaseImportPreview(columns: columns, rows: rows, issues: issues)
+        return EvaluationCaseImportPreview(
+            columns: columns, rows: rows, issues: issues, totalValidRowCount: totalValidRowCount
+        )
     }
 
     private static func append(
@@ -164,7 +177,8 @@ enum EvaluationCaseImporter {
         mapping: EvaluationCaseImportMapping,
         rows: inout [EvaluationCaseImportRow],
         issues: inout [EvaluationCaseImportIssue],
-        limit: Int
+        limit: Int,
+        totalValidRowCount: inout Int
     ) {
         let prompt = object[mapping.promptColumn]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !prompt.isEmpty else {
@@ -183,6 +197,7 @@ enum EvaluationCaseImporter {
             issues.append(.init(line: line, message: "The expected answer exceeds \(EvaluationStore.maximumFieldCharacters) characters."))
             return
         }
+        totalValidRowCount += 1
         if rows.count < limit {
             rows.append(.init(sourceLine: line, name: name, prompt: prompt, expected: expected))
         }

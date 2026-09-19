@@ -64,6 +64,15 @@ class CoreSchemeTests(unittest.TestCase):
             r"xcodebuild test[\s\S]*-scheme FoundationEvals(?:\s|$)",
         )
 
+    def test_push_ci_is_not_cancelled_by_later_commits_on_the_same_branch(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("group: ci-${{ github.ref }}", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
+        self.assertNotRegex(
+            workflow,
+            r"concurrency:\n  group: ci-\$\{\{ github\.ref \}\}\n  cancel-in-progress: true\n",
+        )
+
     def test_real_scheme_excludes_ui_and_preserves_core_and_build_settings(self):
         source = ROOT / scheme.SCHEMES / "FoundationEvals.xcscheme"
         before = source.read_bytes()

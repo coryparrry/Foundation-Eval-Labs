@@ -311,6 +311,10 @@ private struct RunReadinessPanel: View {
                     .frame(width: 150)
                 }
                 Button("Cancel", role: .cancel) { store.cancelRun() }
+            } else if store.hasUnsavedCompletedRun {
+                Button("Retry Save") { store.retryPendingRunSave() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
             } else {
                 Button("Run \(responseLabel)", systemImage: "play.fill") {
                     store.startRun()
@@ -332,6 +336,7 @@ private struct RunReadinessPanel: View {
 
     private func statusTitle(blocker: String?) -> LocalizedStringResource {
         if store.isRunning { return "Evaluation in progress" }
+        if store.hasUnsavedCompletedRun { return "Run could not be saved" }
         if store.isProcessingFiles { return "Importing reference files" }
         return blocker == nil ? "Ready to run" : "Needs attention"
     }
@@ -339,6 +344,9 @@ private struct RunReadinessPanel: View {
     private func statusDetail(blocker: String?) -> String {
         if store.isRunning {
             return "You can review the suite while the current run finishes."
+        }
+        if store.hasUnsavedCompletedRun {
+            return blocker ?? "Restore storage access, then retry saving this run to history."
         }
         if store.isProcessingFiles {
             return "The suite will be ready when every selected file has been processed."
@@ -368,12 +376,15 @@ private struct RunReadinessPanel: View {
 
     private func statusSymbol(blocker: String?) -> String {
         if store.isRunning { return "waveform.circle.fill" }
+        if store.hasUnsavedCompletedRun { return "exclamationmark.triangle.fill" }
         if store.isProcessingFiles { return "arrow.down.doc.fill" }
         return blocker == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
     }
 
     private func statusColor(blocker: String?) -> Color {
-        if store.isRunning || store.isProcessingFiles { return .accentColor }
+        if store.isRunning { return .accentColor }
+        if store.hasUnsavedCompletedRun { return .orange }
+        if store.isProcessingFiles { return .accentColor }
         return blocker == nil ? .secondary : .orange
     }
 }
@@ -387,6 +398,9 @@ private struct RunToolbarContent: ToolbarContent {
             if store.isRunning {
                 RunToolbarProgress(completed: store.completedSamples, total: store.totalSamples)
                 Button("Cancel", role: .cancel) { store.cancelRun() }
+            } else if store.hasUnsavedCompletedRun {
+                Button("Retry Save") { store.retryPendingRunSave() }
+                    .buttonStyle(.borderedProminent)
             } else {
                 if store.isProcessingFiles {
                     ProgressView("Importing files")

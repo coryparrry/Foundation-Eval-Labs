@@ -652,6 +652,9 @@ struct EvaluationStorePersistenceTests {
         #expect(store.runs.isEmpty)
         if restart { store = EvaluationStore(supportDirectory: directory) }
         #expect(store.activeRun?.id == id)
+        #expect(store.hasUnsavedCompletedRun)
+        #expect(store.runBlocker?.contains("saved to history") == true)
+        #expect(store.pendingRunSaveMessage != nil)
         #expect(throws: EvaluationStoreError.self) {
             _ = try store.cancelRun(id: id)
         }
@@ -662,8 +665,7 @@ struct EvaluationStorePersistenceTests {
 
         try FileManager.default.removeItem(at: runsDirectory)
         try FileManager.default.createDirectory(at: runsDirectory, withIntermediateDirectories: true)
-        let operation = try store.cancelRun(id: id)
-        #expect(operation.phase == .cancelled)
+        store.retryPendingRunSave()
         #expect(store.activeRun == nil)
         #expect(store.runs.first?.id == id)
         #expect(store.runs.first?.cancelled == true)

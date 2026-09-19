@@ -153,6 +153,23 @@ struct WorkspaceResetTests {
         #expect(store.draftSuite == original)
     }
 
+    @Test func importAttachmentRejectsAnOpenFileImporter() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.isImportingFiles = true
+        await #expect(throws: EvaluationStoreError.self) {
+            _ = try await store.importAttachment(
+                id: UUID(),
+                name: "reference.txt",
+                mediaType: "text/plain",
+                data: Data("body".utf8),
+                expectedRevision: store.suiteRevision
+            )
+        }
+        #expect(store.suite.attachments.isEmpty)
+    }
+
     @Test func failedResetWritePreservesCurrentSuite() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

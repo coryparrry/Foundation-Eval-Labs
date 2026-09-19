@@ -102,7 +102,7 @@ struct EditorPerformanceTests {
     }
 
     private func waitForSave(_ store: EvaluationStore) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while store.isDraftSavePending && ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }

@@ -23,7 +23,13 @@ actor WorkspaceOverviewLoader {
                 var runs: [EvaluationRun] = []
                 for url in urls {
                     try Task.checkCancellation()
-                    runs.append(try CanonicalJSON.decode(EvaluationRun.self, from: Data(contentsOf: url)))
+                    let run = try CanonicalJSON.decode(EvaluationRun.self, from: Data(contentsOf: url))
+                    guard url.deletingPathExtension().lastPathComponent == run.id.uuidString,
+                          run.suiteID == record.id,
+                          run.projectID == nil || run.projectID == project.id else {
+                        continue
+                    }
+                    runs.append(run)
                 }
                 let revision = try EvaluationStore.revision(for: suite)
                 summary = SuiteOverviewSummary(record: record, suite: suite, currentRevision: revision,
