@@ -39,8 +39,16 @@ final class FoundationEvalsUITests: XCTestCase {
         selectSetup("Instructions", in: app)
         XCTAssertTrue(app.textViews["Model instructions"].exists)
         XCTAssertFalse(app.buttons["Add Files"].exists)
-        app.disclosureTriangles.matching(NSPredicate(format: "label BEGINSWITH %@", "Reference files")).firstMatch.click()
-        XCTAssertTrue(app.buttons["Add Files"].exists)
+        let referenceFiles = app.disclosureTriangles
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Reference files"))
+            .firstMatch
+        referenceFiles.click()
+        let addFiles = app.buttons["Add Files"]
+        if !addFiles.waitForExistence(timeout: 2) {
+            referenceFiles.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+                .withOffset(CGVector(dx: 27, dy: 0)).click()
+        }
+        XCTAssertTrue(addFiles.waitForExistence(timeout: 3))
 
         selectSetup("Model", in: app)
         XCTAssertTrue(app.popUpButtons["Model provider"].exists)
@@ -70,10 +78,64 @@ final class FoundationEvalsUITests: XCTestCase {
             XCTAssertEqual(app.textViews.matching(identifier: "Scoring expected text").count, expectedCount)
         }
 
+        selectSetup("Tools", in: app)
+        XCTAssertTrue(app.buttons["Add Tool"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Add Sample"].exists)
+
+        selectSetup("Structured output", in: app)
+        XCTAssertTrue(app.buttons["Add Field"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Add Definition"].exists)
+
+        selectSetup("Session profile", in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["Use an evaluation profile"].waitForExistence(timeout: 3))
+
+        selectSetup("Performance", in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["Prewarm the model before each sample"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["Stream the response"].exists)
+
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Refined suite editor"
         screenshot.lifetime = .keepAlways
         add(screenshot)
+    }
+
+    @MainActor
+    func testSetupPagesRenderInDarkAppearance() throws {
+        let app = XCUIApplication()
+        let storageName = UUID().uuidString
+        let storage = uiTestStorage(name: storageName)
+        defer { try? FileManager.default.removeItem(at: storage) }
+        app.launchArguments += [
+            "--disable-mcp-autostart",
+            "--evaluation-storage-name", storageName,
+            "-AppleInterfaceStyle", "Dark",
+            "-AppleInterfaceStyleSwitchesAutomatically", "NO"
+        ]
+        app.launch()
+        defer { app.terminate() }
+
+        app.activate()
+        app.menuBars.menuBarItems["Evaluation"].click()
+        app.menuItems["Show Suite Editor"].click()
+        XCTAssertTrue(app.buttons["Run evaluation"].waitForExistence(timeout: 5))
+
+        app.buttons["Setup"].click()
+
+        for title in ["Scoring", "Tools", "Structured output", "Session profile", "Performance"] {
+            selectSetup(title, in: app)
+            XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 3), "Missing setup page: \(title)")
+            let screenshot = app.screenshot()
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = "Dark setup - \(title)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            try screenshot.pngRepresentation.write(
+                to: UITestStorage.screenshotURL(
+                    name: "pr47-dark-\(title.lowercased().replacingOccurrences(of: " ", with: "-"))"
+                ),
+                options: .atomic
+            )
+        }
     }
 
     @MainActor
