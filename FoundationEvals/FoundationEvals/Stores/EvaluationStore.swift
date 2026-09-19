@@ -54,6 +54,7 @@ final class EvaluationStore {
     private let featureAdapterRunner = EvaluationFeatureAdapterRunner()
     private let reassessmentService = EvaluationReassessmentService()
     private let supportDirectory: URL
+    private let suiteLocalStateWriter: (Data, URL) throws -> Void
     var overviewStorageDirectory: URL { supportDirectory }
     @ObservationIgnored private var pendingPromptEdits: [UUID: String] = [:]
     @ObservationIgnored private var draftSaveTask: Task<Void, Never>?
@@ -65,6 +66,7 @@ final class EvaluationStore {
     private var activeRunResults: [EvaluationSampleResult] = []
     private var unsavedRun: EvaluationRun?
     private var latestRunHistorySequence: UInt64 = 0
+    private var workspacePersistenceBlocker: String?
 
     private var suiteDirectory: URL {
         EvaluationWorkspacePersistence.suiteDirectory(
@@ -80,11 +82,17 @@ final class EvaluationStore {
     private var suiteStateURL: URL { suiteDirectory.appending(path: "state.json") }
     private var judgeConnectionsURL: URL { supportDirectory.appending(path: "judge-connections.json") }
 
-    init(supportDirectory customSupportDirectory: URL? = nil) {
+    init(
+        supportDirectory customSupportDirectory: URL? = nil,
+        suiteLocalStateWriter: @escaping (Data, URL) throws -> Void = {
+            try $0.write(to: $1, options: .atomic)
+        }
+    ) {
         let base = customSupportDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appending(path: "FoundationEvals", directoryHint: .isDirectory)
         supportDirectory = base
+        self.suiteLocalStateWriter = suiteLocalStateWriter
 
         var startupNotice: String?
         do {
@@ -95,9 +103,26 @@ final class EvaluationStore {
 
         let legacySuite = EvaluationWorkspaceStatePersistence.loadSuite(from: base)
         let bootstrap: EvaluationWorkspaceBootstrap
+        var catalogRecoveryAttempted = false
+        var catalogRecoveryCanPublish = false
         do {
             bootstrap = try EvaluationWorkspacePersistence.bootstrap(in: base, legacySuite: legacySuite.suite)
         } catch {
+            catalogRecoveryAttempted = true
+            let catalogURL = base.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+            catalogRecoveryCanPublish = !FileManager.default.fileExists(atPath: catalogURL.path)
+            if let originalCatalog = try? Data(contentsOf: catalogURL) {
+                do {
+                    try EvaluationWorkspacePersistence.preserveUnreadableFile(
+                        originalCatalog,
+                        in: base,
+                        prefix: "workspace-v1-unreadable"
+                    )
+                    catalogRecoveryCanPublish = true
+                } catch {
+                    catalogRecoveryCanPublish = false
+                }
+            }
             let seed = legacySuite.suite ?? EvaluationSuite()
             let now = Date()
             let record = EvaluationSuiteRecord(
@@ -113,12 +138,13 @@ final class EvaluationStore {
                 notice: "The workspace catalog could not be loaded: \(error.localizedDescription)"
             )
         }
-        let initialProjectID = bootstrap.catalog.selectedProjectID
         let selectedProject = bootstrap.catalog.projects.first { $0.id == bootstrap.catalog.selectedProjectID }
+            ?? bootstrap.catalog.projects.first { !$0.isArchived }
             ?? bootstrap.catalog.projects[0]
-        let initialSuiteID = selectedProject.suites.contains { $0.id == selectedProject.selectedSuiteID }
-            ? selectedProject.selectedSuiteID
-            : selectedProject.suites[0].id
+        let initialProjectID = selectedProject.id
+        let initialSuiteID = selectedProject.suites.first { $0.id == selectedProject.selectedSuiteID }?.id
+            ?? selectedProject.suites.first { !$0.isArchived }?.id
+            ?? selectedProject.suites[0].id
         let activeDirectory = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: base,
             projectID: initialProjectID,
@@ -129,6 +155,15 @@ final class EvaluationStore {
         } catch {
             startupNotice = [startupNotice, "Could not create suite storage: \(error.localizedDescription)"]
                 .compactMap { $0 }.joined(separator: "\n")
+        }
+        if catalogRecoveryAttempted, catalogRecoveryCanPublish {
+            do {
+                try EvaluationWorkspacePersistence.save(bootstrap.catalog, in: base)
+            } catch {
+                catalogRecoveryCanPublish = false
+                startupNotice = [startupNotice, "The recovery workspace could not be saved: \(error.localizedDescription)"]
+                    .compactMap { $0 }.joined(separator: "\n")
+            }
         }
 
         let loadedSuite = EvaluationWorkspaceStatePersistence.loadSuite(from: activeDirectory)
@@ -143,7 +178,11 @@ final class EvaluationStore {
             }
         }
         let loadedDraft = Self.loadDraft(from: activeDirectory, canonicalSuite: initialSuite)
-        var loadedRuns = Self.loadRuns(from: activeDirectory.appending(path: "Runs", directoryHint: .isDirectory))
+        var loadedRuns = Self.loadRuns(
+            from: activeDirectory.appending(path: "Runs", directoryHint: .isDirectory),
+            projectID: initialProjectID,
+            suiteID: initialSuiteID
+        )
         let recovery = Self.recoverInterruptedRun(
             from: activeDirectory.appending(path: "active-run.json"),
             runsDirectory: activeDirectory.appending(path: "Runs", directoryHint: .isDirectory),
@@ -176,6 +215,9 @@ final class EvaluationStore {
         unsavedRun = recovery.pending?.completedRun
         completedSamples = recovery.pending?.summary.completedSamples ?? 0
         totalSamples = recovery.pending?.summary.totalSamples ?? 0
+        workspacePersistenceBlocker = catalogRecoveryAttempted && !catalogRecoveryCanPublish
+            ? "The unreadable workspace catalog could not be preserved. Resolve the storage conflict and reopen the app before saving workspace changes."
+            : nil
         migrationNotice = bootstrap.notice
         notice = initialNotice.isEmpty ? nil : initialNotice
         do {
@@ -189,19 +231,27 @@ final class EvaluationStore {
                 .compactMap { $0 }
                 .joined(separator: "\n")
         }
-        if migratedRubric || (loadedSuite.suite == nil && loadedSuite.notice == nil) { saveSuite() }
+        if migratedRubric || (loadedSuite.suite == nil && loadedSuite.notice == nil) {
+            if !catalogRecoveryAttempted || catalogRecoveryCanPublish {
+                saveSuite()
+            }
+        }
     }
 
     var projects: [EvaluationProject] { workspace.projects }
 
     var selectedProject: EvaluationProject {
-        workspace.projects.first { $0.id == selectedProjectID } ?? workspace.projects[0]
+        workspace.projects.first { $0.id == selectedProjectID }
+            ?? workspace.projects.first { !$0.isArchived }
+            ?? workspace.projects[0]
     }
 
     var suiteRecords: [EvaluationSuiteRecord] { selectedProject.suites }
 
     var selectedSuiteRecord: EvaluationSuiteRecord {
-        selectedProject.suites.first { $0.id == selectedSuiteID } ?? selectedProject.suites[0]
+        selectedProject.suites.first { $0.id == selectedSuiteID }
+            ?? selectedProject.suites.first { !$0.isArchived }
+            ?? selectedProject.suites[0]
     }
 
     var activeBaselineApproval: EvaluationBaselineApproval? {
@@ -217,7 +267,11 @@ final class EvaluationStore {
                     supportDirectory: supportDirectory, projectID: project.id, suiteID: record.id
                 )
                 let suite = EvaluationWorkspaceStatePersistence.loadSuite(from: directory).suite
-                let runs = Self.loadRuns(from: directory.appending(path: "Runs", directoryHint: .isDirectory)).runs
+                let runs = Self.loadRuns(
+                    from: directory.appending(path: "Runs", directoryHint: .isDirectory),
+                    projectID: project.id,
+                    suiteID: record.id
+                ).runs
                 latest = [latest, runs.first?.startedAt].compactMap { $0 }.max()
                 if let suite,
                    runs.first?.suiteRevision != (try? Self.revision(for: suite)) {
@@ -273,37 +327,57 @@ final class EvaluationStore {
         let newProjectID = UUID()
         let now = Date()
         var copiedRecords: [EvaluationSuiteRecord] = []
-        for sourceRecord in source.suites where !sourceRecord.isArchived {
-            let sourceDirectory = EvaluationWorkspacePersistence.suiteDirectory(
-                supportDirectory: supportDirectory, projectID: source.id, suiteID: sourceRecord.id
-            )
-            guard var copiedSuite = EvaluationWorkspaceStatePersistence.loadSuite(from: sourceDirectory).suite else {
-                continue
+        let stagedProjectDirectory = supportDirectory
+            .appending(path: "Projects", directoryHint: .isDirectory)
+            .appending(path: newProjectID.uuidString, directoryHint: .isDirectory)
+        do {
+            let activeRecords = source.suites.filter { !$0.isArchived }
+            guard !activeRecords.isEmpty else { throw EvaluationWorkspaceError.missingSuite }
+            for sourceRecord in activeRecords {
+                let sourceDirectory = EvaluationWorkspacePersistence.suiteDirectory(
+                    supportDirectory: supportDirectory, projectID: source.id, suiteID: sourceRecord.id
+                )
+                guard var copiedSuite = EvaluationWorkspaceStatePersistence.loadSuite(from: sourceDirectory).suite else {
+                    throw EvaluationWorkspaceError.missingSuite
+                }
+                guard copiedSuite.id == sourceRecord.id else {
+                    throw EvaluationWorkspaceError.missingSuite
+                }
+                copiedSuite.id = UUID()
+                copiedSuite.name += " copy"
+                let target = EvaluationWorkspacePersistence.suiteDirectory(
+                    supportDirectory: supportDirectory, projectID: newProjectID, suiteID: copiedSuite.id
+                )
+                try EvaluationWorkspacePersistence.createSuiteDirectories(at: target)
+                try CanonicalJSON.data(for: copiedSuite).write(to: target.appending(path: "suite.json"), options: .atomic)
+                try Self.copyAttachmentFiles(
+                    from: sourceDirectory.appending(path: "Attachments", directoryHint: .isDirectory),
+                    to: target.appending(path: "Attachments", directoryHint: .isDirectory),
+                    suite: copiedSuite
+                )
+                copiedRecords.append(.init(
+                    id: copiedSuite.id, name: copiedSuite.name, createdAt: now, updatedAt: now,
+                    archivedAt: nil, repositoryDefinitionPath: nil, lastRepositoryRevision: nil
+                ))
             }
-            copiedSuite.id = UUID()
-            copiedSuite.name += " copy"
-            let target = EvaluationWorkspacePersistence.suiteDirectory(
-                supportDirectory: supportDirectory, projectID: newProjectID, suiteID: copiedSuite.id
+            guard let first = copiedRecords.first else { throw EvaluationWorkspaceError.missingSuite }
+            let project = EvaluationProject(
+                id: newProjectID, name: source.name + " copy", createdAt: now, updatedAt: now,
+                archivedAt: nil, repository: nil, selectedSuiteID: first.id, suites: copiedRecords
             )
-            try EvaluationWorkspacePersistence.createSuiteDirectories(at: target)
-            try CanonicalJSON.data(for: copiedSuite).write(to: target.appending(path: "suite.json"), options: .atomic)
-            try Self.copyAttachmentFiles(
-                from: sourceDirectory.appending(path: "Attachments", directoryHint: .isDirectory),
-                to: target.appending(path: "Attachments", directoryHint: .isDirectory)
-            )
-            copiedRecords.append(.init(
-                id: copiedSuite.id, name: copiedSuite.name, createdAt: now, updatedAt: now,
-                archivedAt: nil, repositoryDefinitionPath: nil, lastRepositoryRevision: nil
-            ))
+            let previousWorkspace = workspace
+            workspace.projects.append(project)
+            do {
+                try persistWorkspace()
+            } catch {
+                workspace = previousWorkspace
+                throw error
+            }
+            return newProjectID
+        } catch {
+            try? FileManager.default.removeItem(at: stagedProjectDirectory)
+            throw error
         }
-        guard let first = copiedRecords.first else { throw EvaluationWorkspaceError.missingSuite }
-        let project = EvaluationProject(
-            id: newProjectID, name: source.name + " copy", createdAt: now, updatedAt: now,
-            archivedAt: nil, repository: nil, selectedSuiteID: first.id, suites: copiedRecords
-        )
-        workspace.projects.append(project)
-        try persistWorkspace()
-        return newProjectID
     }
 
     func renameProject(id: UUID, name: String) throws {
@@ -320,19 +394,28 @@ final class EvaluationStore {
 
     func archiveProject(id: UUID) throws {
         try requireIdle()
-        guard let index = workspace.projects.firstIndex(where: { $0.id == id }) else {
+        guard workspace.projects.contains(where: { $0.id == id }) else {
             throw EvaluationWorkspaceError.missingProject
         }
         guard workspace.projects.count(where: { !$0.isArchived && $0.id != id }) > 0 else {
             throw EvaluationStoreError.resourceConflict("Keep at least one active project.")
         }
-        if selectedProjectID == id { try preserveCurrentDraftBeforeWorkspaceChange() }
-        workspace.projects[index].archivedAt = Date()
         if selectedProjectID == id,
            let replacement = workspace.projects.first(where: { !$0.isArchived && $0.id != id }) {
-            try switchWorkspace(projectID: replacement.id, suiteID: replacement.selectedSuiteID)
+            try switchWorkspace(
+                projectID: replacement.id,
+                suiteID: replacement.selectedSuiteID
+            ) { workspace in
+                guard let index = workspace.projects.firstIndex(where: { $0.id == id }) else { return }
+                workspace.projects[index].archivedAt = Date()
+                workspace.projects[index].updatedAt = Date()
+            }
+        } else {
+            try updateProject(id) { project in
+                project.archivedAt = Date()
+                project.updatedAt = Date()
+            }
         }
-        try persistWorkspace()
     }
 
     @discardableResult
@@ -374,24 +457,33 @@ final class EvaluationStore {
         guard var copied = EvaluationWorkspaceStatePersistence.loadSuite(from: sourceDirectory).suite else {
             throw EvaluationWorkspaceError.missingSuite
         }
+        guard copied.id == sourceRecord.id else {
+            throw EvaluationWorkspaceError.missingSuite
+        }
         copied.id = UUID()
         copied.name = sourceRecord.name + " copy"
         let target = EvaluationWorkspacePersistence.suiteDirectory(
             supportDirectory: supportDirectory, projectID: selectedProjectID, suiteID: copied.id
         )
-        try EvaluationWorkspacePersistence.createSuiteDirectories(at: target)
-        try CanonicalJSON.data(for: copied).write(to: target.appending(path: "suite.json"), options: .atomic)
-        try Self.copyAttachmentFiles(
-            from: sourceDirectory.appending(path: "Attachments", directoryHint: .isDirectory),
-            to: target.appending(path: "Attachments", directoryHint: .isDirectory)
-        )
-        let now = Date()
-        try updateProject(selectedProjectID) { project in
-            project.suites.append(.init(
-                id: copied.id, name: copied.name, createdAt: now, updatedAt: now,
-                archivedAt: nil, repositoryDefinitionPath: nil, lastRepositoryRevision: nil
-            ))
-            project.updatedAt = now
+        do {
+            try EvaluationWorkspacePersistence.createSuiteDirectories(at: target)
+            try CanonicalJSON.data(for: copied).write(to: target.appending(path: "suite.json"), options: .atomic)
+            try Self.copyAttachmentFiles(
+                from: sourceDirectory.appending(path: "Attachments", directoryHint: .isDirectory),
+                to: target.appending(path: "Attachments", directoryHint: .isDirectory),
+                suite: copied
+            )
+            let now = Date()
+            try updateProject(selectedProjectID) { project in
+                project.suites.append(.init(
+                    id: copied.id, name: copied.name, createdAt: now, updatedAt: now,
+                    archivedAt: nil, repositoryDefinitionPath: nil, lastRepositoryRevision: nil
+                ))
+                project.updatedAt = now
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: target)
+            throw error
         }
         return copied.id
     }
@@ -408,22 +500,43 @@ final class EvaluationStore {
     func archiveSuite(id: UUID) throws {
         try requireIdle()
         let project = selectedProject
+        guard project.suites.contains(where: { $0.id == id }) else {
+            throw EvaluationWorkspaceError.missingSuite
+        }
         guard project.suites.count(where: { !$0.isArchived && $0.id != id }) > 0 else {
             throw EvaluationStoreError.resourceConflict("Keep at least one active suite in the project.")
         }
-        if id == selectedSuiteID { try preserveCurrentDraftBeforeWorkspaceChange() }
-        try updateProject(project.id) { project in
-            guard let index = project.suites.firstIndex(where: { $0.id == id }) else { return }
-            project.suites[index].archivedAt = Date()
-            project.updatedAt = Date()
-        }
         if id == selectedSuiteID,
-           let replacement = selectedProject.suites.first(where: { !$0.isArchived && $0.id != id }) {
-            try switchWorkspace(projectID: selectedProjectID, suiteID: replacement.id)
+           let replacement = project.suites.first(where: { !$0.isArchived && $0.id != id }) {
+            try switchWorkspace(
+                projectID: selectedProjectID,
+                suiteID: replacement.id
+            ) { workspace in
+                guard let projectIndex = workspace.projects.firstIndex(where: { $0.id == project.id }),
+                      let suiteIndex = workspace.projects[projectIndex].suites.firstIndex(where: {
+                          $0.id == id
+                      }) else { return }
+                workspace.projects[projectIndex].suites[suiteIndex].archivedAt = Date()
+                workspace.projects[projectIndex].updatedAt = Date()
+            }
+        } else {
+            try updateProject(project.id) { project in
+                guard let index = project.suites.firstIndex(where: { $0.id == id }) else { return }
+                project.suites[index].archivedAt = Date()
+                project.updatedAt = Date()
+            }
         }
     }
 
     func switchWorkspace(projectID: UUID, suiteID: UUID) throws {
+        try switchWorkspace(projectID: projectID, suiteID: suiteID) { _ in }
+    }
+
+    private func switchWorkspace(
+        projectID: UUID,
+        suiteID: UUID,
+        catalogMutation: (inout EvaluationWorkspaceCatalog) -> Void
+    ) throws {
         try requireIdle()
         guard let project = workspace.projects.first(where: { $0.id == projectID }),
               !project.isArchived else { throw EvaluationWorkspaceError.missingProject }
@@ -457,8 +570,12 @@ final class EvaluationStore {
             selectedSuiteID = suiteID
             try EvaluationWorkspacePersistence.createSuiteDirectories(at: suiteDirectory)
             try loadSelectedSuite()
-            try updateProject(projectID) { project in project.selectedSuiteID = suiteID }
+            guard let projectIndex = workspace.projects.firstIndex(where: { $0.id == projectID }) else {
+                throw EvaluationWorkspaceError.missingProject
+            }
+            workspace.projects[projectIndex].selectedSuiteID = suiteID
             workspace.selectedProjectID = projectID
+            catalogMutation(&workspace)
             try persistWorkspace()
             selection = .overview
         } catch {
@@ -481,7 +598,7 @@ final class EvaluationStore {
             isRunning = previousIsRunning
             liveResponse = previousLiveResponse
             draftSaveFailed = previousDraftSaveFailed
-            try? EvaluationWorkspacePersistence.save(previousWorkspace, in: supportDirectory)
+            try? persistWorkspace()
             throw error
         }
     }
@@ -535,6 +652,7 @@ final class EvaluationStore {
     }
 
     private func persistWorkspace() throws {
+        try requireWorkspaceWritable()
         do {
             try EvaluationWorkspacePersistence.save(workspace, in: supportDirectory)
         } catch {
@@ -556,7 +674,11 @@ final class EvaluationStore {
         let draft = repositoryConflict
             ? localDraft
             : Self.loadDraft(from: suiteDirectory, canonicalSuite: canonical)
-        var loadedRuns = Self.loadRuns(from: runsDirectory)
+        var loadedRuns = Self.loadRuns(
+            from: runsDirectory,
+            projectID: selectedProjectID,
+            suiteID: selectedSuiteID
+        )
         let recovery = Self.recoverInterruptedRun(
             from: activeRunURL,
             runsDirectory: runsDirectory,
@@ -737,9 +859,11 @@ final class EvaluationStore {
                     subjectEvidenceDigest: context.evidence.digest
                 )
                 guard let currentIndex = runs.firstIndex(where: { $0.id == id }) else { return }
-                runs[currentIndex].assessments = (runs[currentIndex].assessments ?? []) + [assessment]
-                runs[currentIndex].selectedAssessmentID = assessment.id
-                try persistRun(runs[currentIndex])
+                var candidate = runs[currentIndex]
+                candidate.assessments = (candidate.assessments ?? []) + [assessment]
+                candidate.selectedAssessmentID = assessment.id
+                try persistRun(candidate)
+                runs[currentIndex] = candidate
                 selection = .run(id)
             } catch {
                 notice = "Could not reassess the saved responses: \(error.localizedDescription)"
@@ -752,8 +876,14 @@ final class EvaluationStore {
               runs[index].assessments?.contains(where: { $0.id == assessmentID }) == true else {
             throw EvaluationStoreError.resourceNotFound("Assessment")
         }
+        let previousSelectedAssessmentID = runs[index].selectedAssessmentID
         runs[index].selectedAssessmentID = assessmentID
-        try persistRun(runs[index])
+        do {
+            try persistRun(runs[index])
+        } catch {
+            runs[index].selectedAssessmentID = previousSelectedAssessmentID
+            throw error
+        }
     }
 
     func markJudgmentIncorrect(
@@ -911,15 +1041,23 @@ final class EvaluationStore {
             scoringContract = try EvaluationScoringContract(run: run)
         }
         let now = Date()
-        for index in suiteLocalState.baselineApprovals.indices where suiteLocalState.baselineApprovals[index].isCurrent {
-            suiteLocalState.baselineApprovals[index].revokedAt = now
+        var candidateState = suiteLocalState
+        for index in candidateState.baselineApprovals.indices where candidateState.baselineApprovals[index].isCurrent {
+            candidateState.baselineApprovals[index].revokedAt = now
         }
-        suiteLocalState.baselineApprovals.append(.init(
+        candidateState.baselineApprovals.append(.init(
             id: UUID(), runID: runID, assessmentID: assessmentID,
             suiteRevision: run.suiteRevision ?? "legacy", approvedAt: now,
             note: note, revokedAt: nil, scoringContract: scoringContract
         ))
-        try persistSuiteLocalState()
+        let previousState = suiteLocalState
+        suiteLocalState = candidateState
+        do {
+            try persistSuiteLocalState()
+        } catch {
+            suiteLocalState = previousState
+            throw error
+        }
     }
 
     func createInstructionExperiment(name: String, candidateInstructions: String) throws -> UUID {
@@ -951,26 +1089,63 @@ final class EvaluationStore {
             ),
             runIDs: [], decision: nil
         )
+        let previousState = suiteLocalState
         suiteLocalState.experiments.append(experiment)
-        try persistSuiteLocalState()
+        do {
+            try persistSuiteLocalState()
+        } catch {
+            suiteLocalState = previousState
+            throw error
+        }
         return experiment.id
     }
 
     func decideExperiment(id: UUID, decision: EvaluationExperimentDecision) throws {
+        try requireWorkspaceWritable()
         guard let index = suiteLocalState.experiments.firstIndex(where: { $0.id == id }) else {
             throw EvaluationStoreError.resourceNotFound("Experiment")
         }
+        var previousDraft = draftSuite
+        var adoptionSnapshot: CandidateAdoptionSnapshot?
         if decision == .adoptCandidate {
             guard suiteLocalState.experiments[index].suiteRevision == suiteRevision else {
                 throw EvaluationStoreError.resourceConflict(
                     "The suite changed after this experiment was frozen. Create a new experiment before adopting a candidate."
                 )
             }
+            applyPendingPromptEdits()
+            previousDraft = draftSuite
+            let snapshot = try candidateAdoptionSnapshot()
+            adoptionSnapshot = snapshot
             draftSuite.instructions = suiteLocalState.experiments[index].candidate.instructions
-            guard saveSuite() else { throw EvaluationStoreError.invalidSuite(notice ?? "The candidate could not be saved.") }
+            guard saveSuite() else {
+                let failure = notice ?? "The candidate could not be saved."
+                try restoreDraftAfterFailedSave(
+                    previousDraft,
+                    fileSnapshot: snapshot.draftFile,
+                    failureMessage: failure
+                )
+                if snapshot.hadPendingDraftSave {
+                    scheduleSuiteSave()
+                }
+                throw EvaluationStoreError.invalidSuite(failure)
+            }
         }
+        let previousState = suiteLocalState
         suiteLocalState.experiments[index].decision = decision
-        try persistSuiteLocalState()
+        do {
+            try persistSuiteLocalState()
+        } catch {
+            let decisionError = error
+            suiteLocalState = previousState
+            if let adoptionSnapshot {
+                try restoreCandidateAdoption(
+                    adoptionSnapshot,
+                    failureMessage: "The experiment decision could not be saved: \(decisionError.localizedDescription)"
+                )
+            }
+            throw decisionError
+        }
     }
 
     func runExperiment(id: UUID) {
@@ -1130,9 +1305,11 @@ final class EvaluationStore {
             let revision = resolved.revision
             guard storedSuite.releasePolicy.required else { continue }
             let loadedRuns = Self.loadRuns(
-                from: directory.appending(path: "Runs", directoryHint: .isDirectory)
+                from: directory.appending(path: "Runs", directoryHint: .isDirectory),
+                projectID: project.id,
+                suiteID: record.id
             )
-            if loadedRuns.notice != nil {
+            if loadedRuns.hasUnreadableFiles {
                 let unavailable = EvaluationReleaseCheckReport(
                     projectID: project.id,
                     suiteID: record.id,
@@ -1355,11 +1532,57 @@ final class EvaluationStore {
               FileManager.default.fileExists(atPath: root.appending(path: ".git").path) else {
             throw EvaluationStoreError.resourceConflict("Choose the root of a Git repository.")
         }
-        try updateProject(selectedProjectID) { project in
-            project.repository = EvaluationRepositoryLink(rootPath: root.path)
-            project.updatedAt = Date()
+        let repository = EvaluationRepositoryLink(rootPath: root.path)
+        let filename = "\(Self.repositorySlug(suite.name))-\(suite.id.uuidString.lowercased()).json"
+        let relativePath = repository.definitionsDirectory + "/" + filename
+        guard EvaluationWorkspacePersistence.safeRelativePath(relativePath) else {
+            throw EvaluationWorkspaceError.invalidRepositoryPath
         }
-        try linkSelectedSuiteDefinition(filename: "\(Self.repositorySlug(suite.name))-\(suite.id.uuidString.lowercased()).json")
+        let definitionURL = root.appending(path: relativePath)
+        let definition = EvaluationSuiteDefinition(suite: suite)
+        let revision = try EvaluationWorkspacePersistence.definitionRevision(definition)
+        var createdDefinition = false
+        if FileManager.default.fileExists(atPath: definitionURL.path) {
+            let existing = try CanonicalJSON.decode(
+                EvaluationSuiteDefinition.self,
+                from: Data(contentsOf: definitionURL)
+            )
+            guard existing == definition else {
+                throw EvaluationStoreError.resourceConflict(
+                    "A repository definition already exists at \(relativePath). Import or rename it explicitly."
+                )
+            }
+        } else {
+            try FileManager.default.createDirectory(
+                at: definitionURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try CanonicalJSON.data(for: definition).write(to: definitionURL, options: .atomic)
+            createdDefinition = true
+        }
+
+        let previousWorkspace = workspace
+        do {
+            guard let projectIndex = workspace.projects.firstIndex(where: { $0.id == selectedProjectID }),
+                  let suiteIndex = workspace.projects[projectIndex].suites.firstIndex(where: {
+                      $0.id == selectedSuiteID
+                  }) else {
+                throw EvaluationWorkspaceError.missingSuite
+            }
+            let now = Date()
+            workspace.projects[projectIndex].repository = repository
+            workspace.projects[projectIndex].updatedAt = now
+            workspace.projects[projectIndex].suites[suiteIndex].repositoryDefinitionPath = relativePath
+            workspace.projects[projectIndex].suites[suiteIndex].lastRepositoryRevision = revision
+            workspace.projects[projectIndex].suites[suiteIndex].updatedAt = now
+            try persistWorkspace()
+        } catch {
+            workspace = previousWorkspace
+            if createdDefinition {
+                try? FileManager.default.removeItem(at: definitionURL)
+            }
+            throw error
+        }
     }
 
     func linkSelectedSuiteDefinition(filename: String) throws {
@@ -1373,16 +1596,30 @@ final class EvaluationStore {
         }
         let url = URL(filePath: repository.rootPath, directoryHint: .isDirectory).appending(path: relativePath)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard !FileManager.default.fileExists(atPath: url.path) else {
-            throw EvaluationStoreError.resourceConflict("A repository definition already exists at \(relativePath). Import or rename it explicitly.")
-        }
         let definition = EvaluationSuiteDefinition(suite: suite)
-        try CanonicalJSON.data(for: definition).write(to: url, options: .atomic)
         let revision = try EvaluationWorkspacePersistence.definitionRevision(definition)
-        try updateSelectedSuiteRecord { record in
-            record.repositoryDefinitionPath = relativePath
-            record.lastRepositoryRevision = revision
-            record.updatedAt = Date()
+        if FileManager.default.fileExists(atPath: url.path) {
+            let existing = try CanonicalJSON.decode(EvaluationSuiteDefinition.self, from: Data(contentsOf: url))
+            guard existing == definition else {
+                throw EvaluationStoreError.resourceConflict("A repository definition already exists at \(relativePath). Import or rename it explicitly.")
+            }
+            try updateSelectedSuiteRecord { record in
+                record.repositoryDefinitionPath = relativePath
+                record.lastRepositoryRevision = revision
+                record.updatedAt = Date()
+            }
+            return
+        }
+        try CanonicalJSON.data(for: definition).write(to: url, options: .atomic)
+        do {
+            try updateSelectedSuiteRecord { record in
+                record.repositoryDefinitionPath = relativePath
+                record.lastRepositoryRevision = revision
+                record.updatedAt = Date()
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
         }
     }
 
@@ -1579,22 +1816,69 @@ final class EvaluationStore {
     }
 
     var plannedSampleCount: Int {
-        draftSuite.cases.count * draftSuite.repetitions
+        draftSuite.cases.count.nonnegativeSaturatedMultiplying(draftSuite.repetitions)
     }
 
     var plannedRequestCount: Int {
-        let subjectRequests = draftSuite.repetitions * draftSuite.cases.reduce(0) {
-            $0 + $1.conversation.setupTurns.count + 1
+        let requestsPerRepetition = draftSuite.cases.reduce(0) {
+            $0.saturatedAdding($1.conversation.setupTurns.count).saturatedAdding(1)
         }
-        return subjectRequests + (draftSuite.needsModelJudge ? plannedSampleCount * 2 : 0)
+        let subjectRequests = draftSuite.repetitions.nonnegativeSaturatedMultiplying(
+            requestsPerRepetition
+        )
+        let judgeRequests = draftSuite.needsModelJudge
+            ? plannedSampleCount.nonnegativeSaturatedMultiplying(2)
+            : 0
+        return subjectRequests.saturatedAdding(judgeRequests)
     }
 
     var plannedToolCallLimit: Int {
-        draftSuite.hasConfiguredTools ? plannedSampleCount * draftSuite.modelConfiguration.maximumToolCalls : 0
+        draftSuite.hasConfiguredTools
+            ? plannedSampleCount.nonnegativeSaturatedMultiplying(
+                draftSuite.modelConfiguration.maximumToolCalls
+            )
+            : 0
+    }
+
+    var remainingCaseImportCapacity: Int {
+        let remainingCases = Self.maximumCases - draftSuite.cases.count
+        let maximumCasesBySamples = Self.maximumPlannedSamples / max(draftSuite.repetitions, 1)
+        return max(0, min(remainingCases, maximumCasesBySamples - draftSuite.cases.count))
+    }
+
+    func appendImportedCases(_ imported: [EvaluationCase]) throws {
+        try requireIdle()
+        guard !imported.isEmpty else { return }
+        let remaining = remainingCaseImportCapacity
+        guard imported.count <= remaining else {
+            throw EvaluationCaseImportError.tooManyRows(maximum: remaining)
+        }
+        applyPendingPromptEdits()
+        let previousDraft = draftSuite
+        let previousDraftFile = try snapshotFile(at: draftSuiteURL)
+        draftSuite.cases.append(contentsOf: imported)
+        guard saveSuite() else {
+            let failure = notice ?? "The imported cases could not be saved."
+            try restoreDraftAfterFailedSave(
+                previousDraft,
+                fileSnapshot: previousDraftFile,
+                failureMessage: failure
+            )
+            throw EvaluationStoreError.invalidSuite(failure)
+        }
+    }
+
+    var hasUnsavedCompletedRun: Bool {
+        unsavedRun != nil || (activeRun != nil && !isRunning)
+    }
+
+    var pendingRunSaveMessage: String? {
+        guard hasUnsavedCompletedRun else { return nil }
+        return "A finished run still needs to be saved to history. Restore storage access, then retry."
     }
 
     var runBlocker: String? {
-        validationIssue(for: draftSuite)
+        pendingRunSaveMessage ?? validationIssue(for: draftSuite)
     }
 
     var suiteRevision: String {
@@ -1606,6 +1890,7 @@ final class EvaluationStore {
     }
 
     func addCase() {
+        guard allowWorkspaceMutation() else { return }
         guard draftSuite.cases.count < Self.maximumCases,
               draftSuite.cases.count < Self.maximumPlannedSamples / max(draftSuite.repetitions, 1) else {
             notice = "This suite has reached its planned-sample limit."
@@ -1622,6 +1907,7 @@ final class EvaluationStore {
     }
 
     func duplicateCase(id: UUID) {
+        guard allowWorkspaceMutation() else { return }
         applyPendingPromptEdits()
         guard draftSuite.cases.count < Self.maximumCases,
               draftSuite.cases.count < Self.maximumPlannedSamples / max(draftSuite.repetitions, 1) else {
@@ -1639,6 +1925,7 @@ final class EvaluationStore {
     }
 
     func removeCase(id: UUID) {
+        guard allowWorkspaceMutation() else { return }
         guard draftSuite.cases.count > 1 else {
             notice = "An evaluation suite needs at least one case."
             return
@@ -1684,6 +1971,7 @@ final class EvaluationStore {
 
     @discardableResult
     func deleteRunDurably(id: UUID) throws -> Bool {
+        try requireWorkspaceWritable()
         if activeRun?.id == id { throw EvaluationStoreError.runBusy }
         guard let location = persistedRunLocation(id: id) ?? pendingRunDeletionLocation(id: id) else {
             return false
@@ -1877,7 +2165,11 @@ final class EvaluationStore {
             at: runsDirectory, includingPropertiesForKeys: nil
         ).filter { $0.pathExtension == "json" }
         defer {
-            runs = Self.loadRuns(from: runsDirectory).runs
+            runs = Self.loadRuns(
+                from: runsDirectory,
+                projectID: selectedProjectID,
+                suiteID: selectedSuiteID
+            ).runs
             if case .run(let id) = selection, !runs.contains(where: { $0.id == id }) {
                 selection = .suite
             }
@@ -2045,6 +2337,7 @@ final class EvaluationStore {
     }
 
     func editPrompt(_ text: String, for caseID: UUID) {
+        guard allowWorkspaceMutation() else { return }
         guard !isRunning, !isProcessingFiles,
               draftSuite.cases.contains(where: { $0.id == caseID }) else { return }
         guard promptText(for: caseID) != text else { return }
@@ -2096,6 +2389,11 @@ final class EvaluationStore {
 
     @discardableResult
     func saveSuite() -> Bool {
+        if let workspacePersistenceBlocker {
+            notice = workspacePersistenceBlocker
+            draftSaveFailed = true
+            return false
+        }
         applyPendingPromptEdits()
         draftSaveTask?.cancel()
         draftSaveTask = nil
@@ -2149,8 +2447,17 @@ final class EvaluationStore {
         }
     }
 
+    func retryPendingRunSave() {
+        do {
+            try retryUnsavedRun()
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
     func run(with id: UUID) -> EvaluationRun? {
-        runs.first { $0.id == id } ?? persistedRunLocation(id: id)?.run
+        if let unsavedRun, unsavedRun.id == id { return unsavedRun }
+        return runs.first { $0.id == id } ?? persistedRunLocation(id: id)?.run
     }
 
     @discardableResult
@@ -2291,7 +2598,11 @@ final class EvaluationStore {
 
     @discardableResult
     func cancelRun(id: UUID) throws -> EvaluationRunOperation {
-        try retryUnsavedRun()
+        if hasUnsavedCompletedRun {
+            throw EvaluationStoreError.resourceConflict(
+                "The run has finished and is waiting to be saved. Retry saving instead of cancelling it."
+            )
+        }
         if let finished = runStatus(id: id), finished.phase != .running, finished.phase != .cancellationRequested {
             return finished
         }
@@ -2309,6 +2620,15 @@ final class EvaluationStore {
             ))
             activeRun = active
             runTask?.cancel()
+        }
+        if !isRunning {
+            try retryUnsavedRun()
+            if let finished = runStatus(id: id), finished.phase != .running, finished.phase != .cancellationRequested {
+                return finished
+            }
+            if unsavedRun != nil {
+                throw EvaluationStoreError.persistence("The completed run still needs to be saved.")
+            }
         }
         return operation(for: active)
     }
@@ -3214,6 +3534,7 @@ final class EvaluationStore {
     }
 
     private func requireIdle() throws {
+        try requireWorkspaceWritable()
         try retryUnsavedRun()
         if isRunning || activeRun != nil { throw EvaluationStoreError.runBusy }
         if isReassessing {
@@ -3221,7 +3542,7 @@ final class EvaluationStore {
                 "Wait for the reassessment or judge check to finish before switching or changing this suite."
             )
         }
-        if isProcessingFiles { throw EvaluationStoreError.fileOperationBusy }
+        if isProcessingFiles || isImportingFiles { throw EvaluationStoreError.fileOperationBusy }
     }
 
     private func flushPendingSuiteSave() throws {
@@ -3241,16 +3562,32 @@ final class EvaluationStore {
     }
 
     private func operation(for active: EvaluationActiveRun) -> EvaluationRunOperation {
-        EvaluationRunOperation(
+        let phase: EvaluationRunPhase
+        if let unsavedRun, unsavedRun.id == active.id, !isRunning {
+            if unsavedRun.cancelled {
+                phase = .cancelled
+            } else if unsavedRun.terminationReason == "interrupted" {
+                phase = .interrupted
+            } else if unsavedRun.stoppedEarly {
+                phase = .stopped
+            } else {
+                phase = .completed
+            }
+        } else if active.cancellationRequested {
+            phase = .cancellationRequested
+        } else if isRunning {
+            phase = .running
+        } else {
+            phase = .stopped
+        }
+        return EvaluationRunOperation(
             id: active.id,
             suiteRevision: active.suiteRevision,
-            phase: active.cancellationRequested
-                ? .cancellationRequested
-                : (isRunning ? .running : .stopped),
+            phase: phase,
             completedSamples: active.completedSamples,
             totalSamples: active.totalSamples,
             startedAt: active.startedAt,
-            completedAt: nil,
+            completedAt: unsavedRun?.id == active.id ? unsavedRun?.completedAt : nil,
             projectID: active.projectID,
             suiteID: active.suiteID
         )
@@ -3288,10 +3625,105 @@ final class EvaluationStore {
     }
 
     private func persistSuiteLocalState() throws {
+        try requireWorkspaceWritable()
         do {
-            try CanonicalJSON.data(for: suiteLocalState).write(to: suiteStateURL, options: .atomic)
+            try suiteLocalStateWriter(CanonicalJSON.data(for: suiteLocalState), suiteStateURL)
         } catch {
             throw EvaluationStoreError.persistence(error.localizedDescription)
+        }
+    }
+
+    private func restoreDraftAfterFailedSave(
+        _ previousDraft: EvaluationSuite,
+        fileSnapshot: PersistedFileSnapshot,
+        failureMessage: String
+    ) throws {
+        draftSuite = previousDraft
+        do {
+            try restoreFile(fileSnapshot)
+        } catch {
+            throw EvaluationStoreError.persistence(
+                "\(failureMessage) Draft rollback also failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func requireWorkspaceWritable() throws {
+        if let workspacePersistenceBlocker {
+            throw EvaluationStoreError.persistence(workspacePersistenceBlocker)
+        }
+    }
+
+    private func allowWorkspaceMutation() -> Bool {
+        do {
+            try requireWorkspaceWritable()
+            return true
+        } catch {
+            notice = error.localizedDescription
+            return false
+        }
+    }
+
+    private func candidateAdoptionSnapshot() throws -> CandidateAdoptionSnapshot {
+        let suiteFile = try snapshotFile(at: suiteDirectory.appending(path: "suite.json"))
+        let draftFile = try snapshotFile(at: draftSuiteURL)
+        let catalogFile = try snapshotFile(
+            at: supportDirectory.appending(path: EvaluationWorkspacePersistence.catalogFilename)
+        )
+        let stateFile = try snapshotFile(at: suiteStateURL)
+        let repositoryURL = EvaluationWorkspacePersistence.repositoryDefinitionURL(
+            project: selectedProject,
+            suite: selectedSuiteRecord
+        )
+        let repositoryFile = try repositoryURL.map { try snapshotFile(at: $0) }
+        return CandidateAdoptionSnapshot(
+            suite: suite,
+            draft: draftSuite,
+            workspace: workspace,
+            notice: notice,
+            draftSaveFailed: draftSaveFailed,
+            hadPendingDraftSave: isDraftSavePending,
+            suiteFile: suiteFile,
+            draftFile: draftFile,
+            catalogFile: catalogFile,
+            stateFile: stateFile,
+            repositoryFile: repositoryFile
+        )
+    }
+
+    private func restoreCandidateAdoption(
+        _ snapshot: CandidateAdoptionSnapshot,
+        failureMessage: String
+    ) throws {
+        var rollbackErrors: [String] = []
+        do { try restoreFile(snapshot.suiteFile) }
+        catch { rollbackErrors.append("suite metadata: \(error.localizedDescription)") }
+        if let repositoryFile = snapshot.repositoryFile {
+            do { try restoreFile(repositoryFile) }
+            catch { rollbackErrors.append("repository definition: \(error.localizedDescription)") }
+        }
+        do { try restoreFile(snapshot.draftFile) }
+        catch { rollbackErrors.append("suite draft: \(error.localizedDescription)") }
+        do { try restoreFile(snapshot.stateFile) }
+        catch { rollbackErrors.append("experiment state: \(error.localizedDescription)") }
+        if rollbackErrors.isEmpty {
+            do { try restoreFile(snapshot.catalogFile) }
+            catch { rollbackErrors.append("workspace catalog: \(error.localizedDescription)") }
+        }
+        if !rollbackErrors.isEmpty {
+            let blocker = "\(failureMessage) Rollback also failed for \(rollbackErrors.joined(separator: "; "))."
+            workspacePersistenceBlocker = blocker
+            notice = blocker
+            draftSaveFailed = true
+            throw EvaluationStoreError.persistence(blocker)
+        }
+        suite = snapshot.suite
+        draftSuite = snapshot.draft
+        workspace = snapshot.workspace
+        notice = snapshot.notice
+        draftSaveFailed = snapshot.draftSaveFailed
+        if snapshot.hadPendingDraftSave {
+            scheduleSuiteSave()
         }
     }
 
@@ -3388,15 +3820,44 @@ final class EvaluationStore {
         try updateSelectedSuiteRecord { record in record.lastRepositoryRevision = candidateRevision }
     }
 
-    private static func copyAttachmentFiles(from source: URL, to target: URL) throws {
-        guard let children = try? FileManager.default.contentsOfDirectory(
-            at: source, includingPropertiesForKeys: nil
-        ) else { return }
+    private static func copyAttachmentFiles(
+        from source: URL,
+        to target: URL,
+        suite: EvaluationSuite
+    ) throws {
+        let referencedFilenames = suite.attachments.compactMap(\.storedFilename)
+        let sourceExists = FileManager.default.fileExists(atPath: source.path)
+        if !sourceExists {
+            if !referencedFilenames.isEmpty {
+                throw EvaluationStoreError.persistence(
+                    "Referenced attachments are missing from the source suite."
+                )
+            }
+            return
+        }
+        let children: [URL]
+        do {
+            children = try FileManager.default.contentsOfDirectory(
+                at: source, includingPropertiesForKeys: nil
+            )
+        } catch {
+            throw EvaluationStoreError.persistence(
+                "Could not copy referenced attachments: \(error.localizedDescription)"
+            )
+        }
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         for child in children {
             let destination = target.appending(path: child.lastPathComponent)
             if !FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.copyItem(at: child, to: destination)
+            }
+        }
+        for filename in referencedFilenames {
+            let destination = target.appending(path: filename)
+            guard FileManager.default.fileExists(atPath: destination.path) else {
+                throw EvaluationStoreError.persistence(
+                    "Duplication is missing referenced attachment \(filename)."
+                )
             }
         }
     }
@@ -3440,19 +3901,30 @@ final class EvaluationStore {
         }
     }
 
-    private static func loadRuns(from directory: URL) -> (runs: [EvaluationRun], notice: String?) {
+    private static func loadRuns(
+        from directory: URL,
+        projectID: UUID,
+        suiteID: UUID
+    ) -> (runs: [EvaluationRun], notice: String?, hasUnreadableFiles: Bool) {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil
-        ) else { return ([], nil) }
+        ) else { return ([], nil, false) }
 
         var unreadableCount = 0
+        var ignoredCount = 0
         let runs = urls
             .filter { $0.pathExtension == "json" }
             .compactMap { url -> (run: EvaluationRun, modifiedAt: Date, filename: String)? in
                 guard let data = try? Data(contentsOf: url),
                       let run = try? CanonicalJSON.decode(EvaluationRun.self, from: data) else {
                     unreadableCount += 1
+                    return nil
+                }
+                guard url.deletingPathExtension().lastPathComponent == run.id.uuidString,
+                      run.suiteID == suiteID,
+                      run.projectID == nil || run.projectID == projectID else {
+                    ignoredCount += 1
                     return nil
                 }
                 let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
@@ -3476,10 +3948,15 @@ final class EvaluationStore {
                 return lhs.filename > rhs.filename
             }
             .map(\.run)
-        let notice = unreadableCount == 0
+        let unreadableNotice = unreadableCount == 0
             ? nil
             : "\(unreadableCount) saved run\(unreadableCount == 1 ? "" : "s") could not be read and was left unchanged on disk."
-        return (runs, notice)
+        let ignoredNotice = ignoredCount == 0
+            ? nil
+            : "\(ignoredCount) run file\(ignoredCount == 1 ? "" : "s") did not belong to this suite and was ignored."
+        let messages = [unreadableNotice, ignoredNotice].compactMap { $0 }
+        let notice = messages.isEmpty ? nil : messages.joined(separator: "\n")
+        return (runs, notice, unreadableCount > 0)
     }
 
     private static func loadActiveRun(from url: URL) -> ActiveRunRecord? {
@@ -3638,6 +4115,20 @@ private struct PersistedFileSnapshot {
     let url: URL
     let existed: Bool
     let data: Data?
+}
+
+private struct CandidateAdoptionSnapshot {
+    let suite: EvaluationSuite
+    let draft: EvaluationSuite
+    let workspace: EvaluationWorkspaceCatalog
+    let notice: String?
+    let draftSaveFailed: Bool
+    let hadPendingDraftSave: Bool
+    let suiteFile: PersistedFileSnapshot
+    let draftFile: PersistedFileSnapshot
+    let catalogFile: PersistedFileSnapshot
+    let stateFile: PersistedFileSnapshot
+    let repositoryFile: PersistedFileSnapshot?
 }
 
 private struct ActiveRunRecord: Codable, Sendable {

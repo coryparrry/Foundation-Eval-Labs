@@ -272,6 +272,12 @@ extension Int {
         guard overflowed else { return sum }
         return other >= 0 ? .max : .min
     }
+
+    func nonnegativeSaturatedMultiplying(_ other: Int) -> Int {
+        guard self >= 0, other >= 0 else { return 0 }
+        let (product, overflowed) = multipliedReportingOverflow(by: other)
+        return overflowed ? .max : product
+    }
 }
 
 struct EvaluationSampleTiming: Codable, Sendable {

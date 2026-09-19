@@ -65,8 +65,16 @@ struct EvaluationSuiteDefinition: Codable, Equatable, Sendable {
         criteria = suite.criteria
         scoringMode = suite.scoringMode
         repetitions = suite.repetitions
-        modelConfiguration = suite.modelConfiguration
-        features = suite.features
+        var portableConfiguration = suite.modelConfiguration
+        if var coreAI = portableConfiguration.coreAI {
+            coreAI.resourcesPath = ""
+            coreAI.resourcesBookmark = nil
+            portableConfiguration.coreAI = coreAI
+        }
+        var portableFeatures = suite.features
+        portableFeatures.spotlightSearch.fileSource.folderPath = ""
+        modelConfiguration = portableConfiguration
+        features = portableFeatures
         cases = suite.cases
         var definitionJudge = suite.judgeConfiguration
         definitionJudge.connectionID = nil
@@ -88,7 +96,9 @@ struct EvaluationSuiteDefinition: Codable, Equatable, Sendable {
         result.scoringMode = scoringMode
         result.repetitions = repetitions
         result.modelConfiguration = modelConfiguration
+        result.modelConfiguration.coreAI = suite.modelConfiguration.coreAI ?? modelConfiguration.coreAI
         result.features = features
+        result.features.spotlightSearch.fileSource.folderPath = suite.features.spotlightSearch.fileSource.folderPath
         result.cases = cases
         var appliedJudge = judgeConfiguration
         appliedJudge.connectionID = suite.judgeConfiguration.connectionID

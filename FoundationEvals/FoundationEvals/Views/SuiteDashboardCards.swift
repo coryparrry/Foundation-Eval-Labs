@@ -123,7 +123,13 @@ struct WorkbenchStatusBar: View {
             Circle()
                 .fill(store.isRunning ? Color.accentColor : Color.secondary)
                 .frame(width: 5, height: 5)
-            Text(store.isRunning ? "Evaluation in progress" : "\(store.runs.count) saved runs")
+            Text(
+                store.isRunning
+                    ? "Evaluation in progress"
+                    : store.hasUnsavedCompletedRun
+                        ? "Run waiting to be saved"
+                        : "\(store.runs.count) saved runs"
+            )
             Spacer()
             Text(provider)
             Text("·")
