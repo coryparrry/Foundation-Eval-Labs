@@ -1429,6 +1429,47 @@ struct EvaluationDevelopmentWorkflowTests {
     }
 
     @MainActor
+    @Test func developerRunnerCancellationRetainsExecutionIdentityUntilTeardown() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = DeveloperRunnerStore(evaluationStore: EvaluationStore(supportDirectory: directory))
+
+        let cancelledRunID = UUID()
+        let cancelGate = DeveloperTrackedExecutionGate()
+        store.startTrackedExecution(runID: cancelledRunID) {
+            await cancelGate.markStarted()
+            try? await Task.sleep(for: .seconds(60))
+        }
+        await cancelGate.waitUntilStarted()
+
+        #expect(store.executingRunID == cancelledRunID)
+        store.cancelRun(cancelledRunID)
+        #expect(store.executingRunID == cancelledRunID)
+        await waitForDeveloperExecutionTeardown(store)
+        #expect(store.executingRunID == nil)
+
+        let stoppedRunID = UUID()
+        let stopGate = DeveloperTrackedExecutionGate()
+        store.startTrackedExecution(runID: stoppedRunID) {
+            await stopGate.markStarted()
+            try? await Task.sleep(for: .seconds(60))
+        }
+        await stopGate.waitUntilStarted()
+
+        store.stop()
+        #expect(store.executingRunID == stoppedRunID)
+        await waitForDeveloperExecutionTeardown(store)
+        #expect(store.executingRunID == nil)
+    }
+
+    @MainActor
+    private func waitForDeveloperExecutionTeardown(_ store: DeveloperRunnerStore) async {
+        for _ in 0..<100 where store.executingRunID != nil {
+            await Task.yield()
+        }
+    }
+
+    @MainActor
     @Test func reassessmentRetainsOriginalInstructionsAndRunOwnedImageBytes() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -2155,6 +2196,26 @@ private struct DisconnectedDeveloperFixtureAdapter: EvaluationFeatureAdapter {
 
     func evaluate(_ input: EvaluationFeatureInput) async throws -> EvaluationFeatureOutput {
         throw DeveloperExecutionFailure(code: .disconnected, message: "Fixture runner disconnected.")
+    }
+}
+
+private actor DeveloperTrackedExecutionGate {
+    private var started = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func markStarted() {
+        started = true
+        for waiter in waiters {
+            waiter.resume()
+        }
+        waiters.removeAll()
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
     }
 }
 

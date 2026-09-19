@@ -21,6 +21,7 @@ enum EvaluationRunTarget: Hashable, Identifiable, Sendable {
 final class DeveloperRunnerStore {
     let client: DeveloperRunnerClient
     private(set) var activeRuns: [UUID: DeveloperRunStatus] = [:]
+    private(set) var executingRunID: UUID?
     var selectedFeatureID: String?
 
     @ObservationIgnored private let evaluationStore: EvaluationStore
@@ -69,7 +70,9 @@ final class DeveloperRunnerStore {
         for task in runTasks.values {
             task.cancel()
         }
-        runTasks.removeAll()
+        if runTasks.isEmpty {
+            executingRunID = nil
+        }
         client.shutdown()
     }
 
@@ -101,7 +104,7 @@ final class DeveloperRunnerStore {
         featureID: String,
         timeout: Duration = .seconds(120)
     ) throws -> UUID {
-        guard runTasks.isEmpty, !evaluationStore.isRunning else {
+        guard executingRunID == nil, !evaluationStore.isRunning else {
             throw EvaluationStoreError.resourceConflict("Another evaluation is already running.")
         }
         guard let runner = runners.first(where: { $0.id == runnerID && $0.state == .connected }) else {
@@ -128,7 +131,7 @@ final class DeveloperRunnerStore {
         selectedRunnerID = runnerID
         selectedFeatureID = featureID
 
-        let task = Task { @MainActor [weak self] in
+        startTrackedExecution(runID: runID) { [weak self] in
             guard let self else { return }
             self.activeRuns[runID]?.phase = .dispatching
             do {
@@ -166,9 +169,7 @@ final class DeveloperRunnerStore {
                 self.activeRuns[runID]?.phase = .failed
                 self.activeRuns[runID]?.detail = error.localizedDescription
             }
-            self.runTasks[runID] = nil
         }
-        runTasks[runID] = task
         return runID
     }
 
@@ -180,6 +181,25 @@ final class DeveloperRunnerStore {
 
     func status(for runID: UUID) -> DeveloperRunStatus? {
         activeRuns[runID]
+    }
+
+    func startTrackedExecution(
+        runID: UUID,
+        operation: @escaping @MainActor @Sendable () async -> Void
+    ) {
+        precondition(executingRunID == nil, "Only one developer runner execution may be active.")
+        executingRunID = runID
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.runTasks[runID] = nil
+                if self.executingRunID == runID {
+                    self.executingRunID = nil
+                }
+            }
+            await operation()
+        }
+        runTasks[runID] = task
     }
 
     private func updateProgress(runID: UUID, completed: Int, total: Int) {
