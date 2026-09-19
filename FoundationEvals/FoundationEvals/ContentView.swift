@@ -35,7 +35,8 @@ struct ContentView: View {
         .onChange(of: runners.activeRuns) { previous, current in
             for status in current.values where [.failed, .timedOut, .disconnected].contains(status.phase) {
                 guard previous[status.id] != status else { continue }
-                store.notice = status.detail ?? "The device run could not finish. Check its connection and try again."
+                let sampleMessage = store.run(with: status.id)?.results.last { $0.errorMessage != nil }?.errorMessage
+                store.notice = DeveloperRunPresentation.failureMessage(for: status, sampleMessage: sampleMessage)
             }
         }
         .alert(

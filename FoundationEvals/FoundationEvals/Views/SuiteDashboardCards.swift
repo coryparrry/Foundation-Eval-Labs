@@ -111,7 +111,7 @@ struct WorkbenchStatusBar: View {
 
     private var provider: String {
         guard let run = selectedRun else { return store.draftSuite.modelConfiguration.provider.title }
-        return run.execution?.configuration.provider.title ?? "Provider not recorded"
+        return DeveloperRunPresentation.providerLabel(for: run)
     }
 
     var body: some View {

@@ -100,3 +100,24 @@ explicitly authorized build with automatic provisioning/device registration,
 followed by real iPhone pairing, execution, cancellation/disconnect checks, and
 saved-run comparison. iPad execution remains unverified until an iPad is
 available.
+
+
+## Presentation corrections after verification
+
+The footer now identifies the persisted app-feature runner instead of showing
+`Provider not recorded`. Terminal-run alerts prefer the readable saved sample
+error, preserve specific unsaved failure messages, and use readable transport
+fallbacks instead of exposing `developerRunner:` keys.
+
+Validation on the integrated dashboard branch:
+- `DeveloperRunPresentationTests`: 3 tests passed.
+- `WorkspacePresentationTests`: 12 tests passed, including the app-feature footer
+  regression and a rendered SwiftUI footer inspected using an explicitly named
+  UI fixture. This render is presentation evidence, not a physical-device run.
+- Both invocations used `xcodebuild test -project FoundationEvals/FoundationEvals.xcodeproj -scheme FoundationEvals -destination 'platform=macOS' -derivedDataPath /private/tmp/FoundationEvals-PR47-UIFixes CODE_SIGNING_ALLOWED=NO`, selecting the respective suites with `-only-testing`.
+
+The physical provisioning boundary is an actual automatic approval rejection:
+registering the connected device and creating/updating Apple Developer signing
+profiles requires informed user approval before retrying. The request is pending.
+The configured AI-rubric judge path and reconnect finding remain with Sol for
+backend correction and verification.

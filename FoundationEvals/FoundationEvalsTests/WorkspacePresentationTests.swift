@@ -1,9 +1,49 @@
 import Foundation
 import Testing
+import SwiftUI
+import AppKit
 @testable import FoundationEvals
 
 @MainActor
 struct WorkspacePresentationTests {
+    @Test func appFeatureFooterUsesPersistedRunnerIdentity() {
+        var run = fixture()
+        run.execution = nil
+        run.developerExecution = .init(
+            runnerID: UUID(), runnerName: "Verification Mac", platform: "mac",
+            operatingSystem: "macOS 27", hardwareModel: "Mac",
+            appBundleIdentifier: "test.runner", appVersion: "1",
+            featureID: "verification.echo", featureVersion: "1",
+            protocolMajorVersion: 1, protocolMinorVersion: 0
+        )
+        #expect(DeveloperRunPresentation.providerLabel(for: run) == "App feature · Verification Mac")
+        run.developerExecution = nil
+        #expect(DeveloperRunPresentation.providerLabel(for: run) == "Provider not recorded")
+    }
+
+    @Test func renderAppFeatureFooterForVisualInspection() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        var run = fixture()
+        run.execution = nil
+        run.developerExecution = .init(
+            runnerID: UUID(), runnerName: "UI fixture Mac", platform: "mac",
+            operatingSystem: "macOS 27", hardwareModel: "Mac",
+            appBundleIdentifier: "test.runner", appVersion: "1", featureID: "fixture.echo",
+            featureVersion: "1", protocolMajorVersion: 1, protocolMinorVersion: 0
+        )
+        store.runs = [run]
+        store.selection = .run(run.id)
+        let renderer = ImageRenderer(content: WorkbenchStatusBar(store: store).frame(width: 1100))
+        renderer.scale = 2
+        let image = try #require(renderer.cgImage)
+        let data = try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+        let output = FileManager.default.temporaryDirectory.appending(path: "foundation-evals-runner-footer.png")
+        try data.write(to: output)
+        print("Footer UI fixture: \(output.path)")
+    }
+
     @Test func savedResultsDistinguishPassingFailingAndUnassessedRuns() {
         for (status, expected) in [(EvaluationResultStatus.passed, SuiteCheckState.passed),
                                    (.failed, .failed), (.unscored, .collected), (.error, .incomplete)] {
