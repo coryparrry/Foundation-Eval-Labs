@@ -24,8 +24,15 @@ let portableTestSources = [
 
 let package = Package(
     name: "FoundationEvalsPortable",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v26), .iOS(.v26)],
+    products: [
+        .library(name: "FoundationEvalsDeveloper", targets: ["FoundationEvalsDeveloper"]),
+    ],
     targets: [
+        .target(
+            name: "FoundationEvalsDeveloper",
+            path: "Sources/FoundationEvalsDeveloper"
+        ),
         .target(
             name: "FoundationEvals",
             path: "FoundationEvals/FoundationEvals",
@@ -124,6 +131,11 @@ let package = Package(
                 "TranscriptTraceTests.swift",
             ],
             sources: portableTestSources
+        ),
+        .testTarget(
+            name: "FoundationEvalsDeveloperTests",
+            dependencies: ["FoundationEvalsDeveloper"],
+            path: "Tests/FoundationEvalsDeveloperTests"
         ),
     ]
 )

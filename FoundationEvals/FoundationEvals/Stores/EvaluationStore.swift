@@ -1,6 +1,9 @@
 import CryptoKit
 import Foundation
 import FoundationModels
+#if canImport(FoundationEvalsDeveloper)
+import FoundationEvalsDeveloper
+#endif
 import ImageIO
 import Observation
 import PDFKit
@@ -1425,7 +1428,8 @@ final class EvaluationStore {
     func runFeatureAdapter(
         id: UUID = UUID(),
         expectedRevision: String,
-        adapter: any EvaluationFeatureAdapter
+        adapter: any EvaluationFeatureAdapter,
+        progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }
     ) async throws -> EvaluationRun {
         if let existing = run(with: id) {
             guard existing.projectID == selectedProjectID,
@@ -1476,6 +1480,7 @@ final class EvaluationStore {
             adapter: adapter
         ) { [weak self] _, completed, total in
             await self?.updateFeatureAdapterProgress(completed: completed, total: total)
+            await progress(completed, total)
         }
         run.subjectEvidence = evidence
         run = runPreparedForHistory(run)
@@ -1493,6 +1498,30 @@ final class EvaluationStore {
         runs.insert(run, at: 0)
         selection = .run(run.id)
         return run
+    }
+
+    func runDeveloperFeature(
+        id: UUID = UUID(),
+        expectedRevision: String,
+        runner: DeveloperRunnerSnapshot,
+        feature: DeveloperFeatureDescriptor,
+        client: DeveloperRunnerClient,
+        timeout: Duration = .seconds(120),
+        progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }
+    ) async throws -> EvaluationRun {
+        let adapter = EvaluationDeveloperFeatureAdapter(
+            runID: id,
+            runner: runner,
+            feature: feature,
+            client: client,
+            timeout: timeout
+        )
+        return try await runFeatureAdapter(
+            id: id,
+            expectedRevision: expectedRevision,
+            adapter: adapter,
+            progress: progress
+        )
     }
 
     private func updateFeatureAdapterProgress(completed: Int, total: Int) {

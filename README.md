@@ -30,6 +30,7 @@ Foundation Evals is a native macOS workbench for testing Apple's Foundation Mode
 | **Saved comparisons** | Run history, baseline comparisons, and JSON reports. |
 | **Models and tools** | Apple's on-device model, compatible Core AI models, custom HTTP providers, and configurable tools. |
 | **Agent integration** | An included MCP server for managing suites, running evaluations, and inspecting results. |
+| **App feature runners** | A public Swift package for evaluating real app closures on a paired iPhone, iPad, or Mac. [Integration guide](docs/DEVELOPER_SWIFT_INTEGRATION.md). |
 
 ## Install
 
@@ -69,6 +70,12 @@ For AI rubrics, write one observable requirement per line and provide a verified
 The default provider is Apple's on-device Foundation Model. You can also load a compatible [Core AI model](docs/coreai-provider.md) or connect a [custom local HTTP provider](docs/custom-provider-protocol.md).
 
 Use the **Features** page to configure custom tools, structured output, streaming, and tool workflows. The [tools and structured output guide](docs/foundation-model-features.md) includes a runnable local HTTP example.
+
+To evaluate the production Swift feature inside another app, add the
+`FoundationEvalsDeveloper` package product and host its explicitly paired runner.
+The [developer integration guide](docs/DEVELOPER_SWIFT_INTEGRATION.md) covers typed
+closures, `@Generable` results and tools, iPhone/iPad/Mac setup, trust, cancellation,
+saved run evidence, and the boundary with Apple's development-only Evaluations framework.
 
 ## Connect an agent
 

@@ -4,7 +4,22 @@ import Foundation
 /// result, analysis, and release-report types used by the native model runner.
 protocol EvaluationFeatureAdapter: Sendable {
     var displayName: String { get }
+    var environment: EvaluationEnvironment { get }
+    var developerExecution: EvaluationDeveloperExecution? { get }
     func evaluate(_ input: EvaluationFeatureInput) async throws -> EvaluationFeatureOutput
+}
+
+extension EvaluationFeatureAdapter {
+    var environment: EvaluationEnvironment {
+        .init(
+            operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+            locale: Locale.current.identifier,
+            model: "Feature adapter · \(displayName)",
+            modelContextSize: 0
+        )
+    }
+
+    var developerExecution: EvaluationDeveloperExecution? { nil }
 }
 
 struct EvaluationFeatureInput: Sendable {
@@ -18,6 +33,15 @@ struct EvaluationFeatureInput: Sendable {
 struct EvaluationFeatureOutput: Sendable {
     var response: String
     var usage = EvaluationUsage()
+}
+
+struct EvaluationFeatureAdapterTermination: Sendable {
+    var reason: String
+    var cancelled: Bool
+}
+
+protocol EvaluationFeatureAdapterTerminalError: Error {
+    var evaluationTermination: EvaluationFeatureAdapterTermination? { get }
 }
 
 actor EvaluationFeatureAdapterRunner {
@@ -34,11 +58,13 @@ actor EvaluationFeatureAdapterRunner {
         let total = suite.cases.count * suite.repetitions
         var results: [EvaluationSampleResult] = []
         var cancelled = false
+        var terminationReason: String?
 
         outer: for repetition in 1...suite.repetitions {
             for evaluationCase in suite.cases {
                 if Task.isCancelled {
                     cancelled = true
+                    terminationReason = "cancelled"
                     break outer
                 }
                 let clock = ContinuousClock.now
@@ -76,7 +102,38 @@ actor EvaluationFeatureAdapterRunner {
                     )
                 } catch is CancellationError {
                     cancelled = true
+                    terminationReason = "cancelled"
                     break outer
+                } catch let error as any EvaluationFeatureAdapterTerminalError {
+                    if let termination = error.evaluationTermination {
+                        result = sample(
+                            evaluationCase: evaluationCase,
+                            repetition: repetition,
+                            response: "",
+                            status: .error,
+                            rationale: nil,
+                            usage: .init(),
+                            duration: milliseconds(since: clock),
+                            errorCategory: "featureAdapterFailure",
+                            errorMessage: error.localizedDescription
+                        )
+                        results.append(result)
+                        await progress(result, results.count, total)
+                        cancelled = termination.cancelled
+                        terminationReason = termination.reason
+                        break outer
+                    }
+                    result = sample(
+                        evaluationCase: evaluationCase,
+                        repetition: repetition,
+                        response: "",
+                        status: .error,
+                        rationale: nil,
+                        usage: .init(),
+                        duration: milliseconds(since: clock),
+                        errorCategory: "featureAdapterFailure",
+                        errorMessage: error.localizedDescription
+                    )
                 } catch {
                     result = sample(
                         evaluationCase: evaluationCase,
@@ -112,20 +169,16 @@ actor EvaluationFeatureAdapterRunner {
             startedAt: startedAt,
             completedAt: Date(),
             cancelled: cancelled,
-            terminationReason: cancelled ? "cancelled" : nil,
-            environment: .init(
-                operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
-                locale: Locale.current.identifier,
-                model: "Feature adapter · \(adapter.displayName)",
-                modelContextSize: 0
-            ),
+            terminationReason: terminationReason,
+            environment: adapter.environment,
             attachments: suite.attachments.map {
                 .init(name: $0.name, kind: $0.kind, byteCount: $0.byteCount, sha256: $0.sha256)
             },
             results: results,
             projectID: projectID,
             suiteDefinition: EvaluationSuiteDefinition(suite: suite),
-            repository: repository
+            repository: repository,
+            developerExecution: adapter.developerExecution
         )
     }
 

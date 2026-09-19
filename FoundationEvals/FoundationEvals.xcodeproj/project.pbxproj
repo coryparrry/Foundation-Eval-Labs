@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DA0000000000000000000020 /* DeveloperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000010 /* DeveloperProtocol.swift */; };
+		DA0000000000000000000021 /* DeveloperFeatureRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000011 /* DeveloperFeatureRegistry.swift */; };
+		DA0000000000000000000022 /* DeveloperRunnerHostEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000012 /* DeveloperRunnerHostEngine.swift */; };
+		DA0000000000000000000023 /* DeveloperRunnerIdentity+Current.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000013 /* DeveloperRunnerIdentity+Current.swift */; };
+		DA0000000000000000000024 /* DeveloperRunnerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000014 /* DeveloperRunnerService.swift */; };
+		DA0000000000000000000025 /* DeveloperRunnerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000015 /* DeveloperRunnerClient.swift */; };
+		DA0000000000000000000026 /* DeveloperRunnerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000016 /* DeveloperRunnerView.swift */; };
 		AFC28B6E304A00010023273E /* Hummingbird in Frameworks */ = {isa = PBXBuildFile; productRef = AFC28B6D304A00010023273E /* Hummingbird */; };
 		AFC28B70304B00010023273E /* CoreAILM in Frameworks */ = {isa = PBXBuildFile; productRef = AFC28B72304B00010023273E /* CoreAILM */; };
 		FE0000000000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FE0000000000000000000002 /* Sparkle */; };
@@ -31,6 +38,13 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DA0000000000000000000010 /* DeveloperProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperProtocol.swift; sourceTree = "<group>"; };
+		DA0000000000000000000011 /* DeveloperFeatureRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperFeatureRegistry.swift; sourceTree = "<group>"; };
+		DA0000000000000000000012 /* DeveloperRunnerHostEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperRunnerHostEngine.swift; sourceTree = "<group>"; };
+		DA0000000000000000000013 /* DeveloperRunnerIdentity+Current.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DeveloperRunnerIdentity+Current.swift"; sourceTree = "<group>"; };
+		DA0000000000000000000014 /* DeveloperRunnerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperRunnerService.swift; sourceTree = "<group>"; };
+		DA0000000000000000000015 /* DeveloperRunnerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperRunnerClient.swift; sourceTree = "<group>"; };
+		DA0000000000000000000016 /* DeveloperRunnerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperRunnerView.swift; sourceTree = "<group>"; };
 		AFC28B46304733170023273E /* FoundationEvals.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FoundationEvals.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AFC28B533047331D0023273E /* FoundationEvalsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FoundationEvalsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AFC28B5D3047331D0023273E /* FoundationEvalsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FoundationEvalsUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -80,11 +94,27 @@
 		AFC28B3D304733160023273E = {
 			isa = PBXGroup;
 			children = (
+				DA0000000000000000000030 /* FoundationEvalsDeveloper */,
 				AFC28B48304733170023273E /* FoundationEvals */,
 				AFC28B563047331D0023273E /* FoundationEvalsTests */,
 				AFC28B603047331D0023273E /* FoundationEvalsUITests */,
 				AFC28B47304733170023273E /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		DA0000000000000000000030 /* FoundationEvalsDeveloper */ = {
+			isa = PBXGroup;
+			children = (
+				DA0000000000000000000010 /* DeveloperProtocol.swift */,
+				DA0000000000000000000011 /* DeveloperFeatureRegistry.swift */,
+				DA0000000000000000000012 /* DeveloperRunnerHostEngine.swift */,
+				DA0000000000000000000013 /* DeveloperRunnerIdentity+Current.swift */,
+				DA0000000000000000000014 /* DeveloperRunnerService.swift */,
+				DA0000000000000000000015 /* DeveloperRunnerClient.swift */,
+				DA0000000000000000000016 /* DeveloperRunnerView.swift */,
+			);
+			name = FoundationEvalsDeveloper;
+			path = ../Sources/FoundationEvalsDeveloper;
 			sourceTree = "<group>";
 		};
 		AFC28B47304733170023273E /* Products */ = {
@@ -238,6 +268,13 @@
 		AFC28B42304733170023273E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				DA0000000000000000000020 /* DeveloperProtocol.swift in Sources */,
+				DA0000000000000000000021 /* DeveloperFeatureRegistry.swift in Sources */,
+				DA0000000000000000000022 /* DeveloperRunnerHostEngine.swift in Sources */,
+				DA0000000000000000000023 /* DeveloperRunnerIdentity+Current.swift in Sources */,
+				DA0000000000000000000024 /* DeveloperRunnerService.swift in Sources */,
+				DA0000000000000000000025 /* DeveloperRunnerClient.swift in Sources */,
+				DA0000000000000000000026 /* DeveloperRunnerView.swift in Sources */,
 			);
 		};
 		AFC28B4F3047331D0023273E /* Sources */ = {

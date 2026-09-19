@@ -16,5 +16,11 @@
 	<string>phc_r7Y2URVyeAbu5eyZJjPHCU7RGDX4aTVCJqsUZrqSgahN</string>
 	<key>PostHogHost</key>
 	<string>https://eu.i.posthog.com</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Discover and run explicitly paired development builds on your local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_fnd-evals._tcp</string>
+	</array>
 </dict>
 </plist>

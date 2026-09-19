@@ -1380,6 +1380,55 @@ struct EvaluationDevelopmentWorkflowTests {
     }
 
     @MainActor
+    @Test func developerRunnerIdentityPersistsWithNormalRunEvidence() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.scoringMode = .exactMatch
+        store.draftSuite.cases = [EvaluationCase(name: "Device", prompt: "ready", expected: "READY")]
+        #expect(store.saveSuite())
+        let runnerID = UUID()
+        let adapter = PersistedDeveloperFixtureAdapter(runnerID: runnerID)
+
+        let run = try await store.runFeatureAdapter(
+            expectedRevision: store.suiteRevision,
+            adapter: adapter
+        )
+
+        #expect(run.results.first?.status == .passed)
+        #expect(run.environment.operatingSystem == "iOS 27.0")
+        #expect(run.developerExecution?.runnerID == runnerID)
+        #expect(run.developerExecution?.featureID == "com.example.actual-feature")
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.run(with: run.id)?.developerExecution == run.developerExecution)
+        #expect(reloaded.run(with: run.id)?.subjectEvidence?.hasValidDigest == true)
+    }
+
+    @MainActor
+    @Test func developerRunnerDisconnectTerminatesAndPersistsIncompleteRun() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.cases = [
+            EvaluationCase(name: "First", prompt: "one", expected: "ONE"),
+            EvaluationCase(name: "Second", prompt: "two", expected: "TWO"),
+        ]
+        #expect(store.saveSuite())
+
+        let run = try await store.runFeatureAdapter(
+            expectedRevision: store.suiteRevision,
+            adapter: DisconnectedDeveloperFixtureAdapter()
+        )
+
+        #expect(run.terminationReason == "developerRunner:disconnected")
+        #expect(run.cancelled == false)
+        #expect(run.results.count == 1)
+        #expect(run.results.first?.status == .error)
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        #expect(reloaded.run(with: run.id)?.terminationReason == "developerRunner:disconnected")
+    }
+
+    @MainActor
     @Test func reassessmentRetainsOriginalInstructionsAndRunOwnedImageBytes() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -2065,6 +2114,47 @@ struct EvaluationDevelopmentWorkflowTests {
             .appending(path: "EvaluationDevelopmentWorkflowTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+}
+
+private struct PersistedDeveloperFixtureAdapter: EvaluationFeatureAdapter {
+    let runnerID: UUID
+
+    var displayName: String { "Actual app feature" }
+    var environment: EvaluationEnvironment {
+        .init(
+            operatingSystem: "iOS 27.0",
+            locale: "en_GB",
+            model: "App feature · Actual app feature",
+            modelContextSize: 0
+        )
+    }
+    var developerExecution: EvaluationDeveloperExecution? {
+        .init(
+            runnerID: runnerID,
+            runnerName: "Fixture iPhone",
+            platform: "iPhone",
+            operatingSystem: "iOS 27.0",
+            hardwareModel: "iPhone fixture",
+            appBundleIdentifier: "com.example.fixture",
+            appVersion: "1.0",
+            featureID: "com.example.actual-feature",
+            featureVersion: "1",
+            protocolMajorVersion: 1,
+            protocolMinorVersion: 0
+        )
+    }
+
+    func evaluate(_ input: EvaluationFeatureInput) async throws -> EvaluationFeatureOutput {
+        .init(response: input.prompt.uppercased())
+    }
+}
+
+private struct DisconnectedDeveloperFixtureAdapter: EvaluationFeatureAdapter {
+    var displayName: String { "Disconnected runner" }
+
+    func evaluate(_ input: EvaluationFeatureInput) async throws -> EvaluationFeatureOutput {
+        throw DeveloperExecutionFailure(code: .disconnected, message: "Fixture runner disconnected.")
     }
 }
 
