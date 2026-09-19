@@ -1,6 +1,9 @@
 import CryptoKit
 import Foundation
 import FoundationModels
+#if canImport(FoundationEvalsDeveloper)
+import FoundationEvalsDeveloper
+#endif
 import ImageIO
 import Observation
 import PDFKit
@@ -1425,7 +1428,8 @@ final class EvaluationStore {
     func runFeatureAdapter(
         id: UUID = UUID(),
         expectedRevision: String,
-        adapter: any EvaluationFeatureAdapter
+        adapter: any EvaluationFeatureAdapter,
+        progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }
     ) async throws -> EvaluationRun {
         if let existing = run(with: id) {
             guard existing.projectID == selectedProjectID,
@@ -1446,6 +1450,7 @@ final class EvaluationStore {
             )
         }
         let suiteSnapshot = suite
+        let featureJudge = try resolvedFeatureJudge(for: suiteSnapshot)
         let ownerProjectID = selectedProjectID
         let ownerSuiteID = selectedSuiteID
         let evidence = try snapshotSubjectEvidence(
@@ -1476,10 +1481,36 @@ final class EvaluationStore {
             adapter: adapter
         ) { [weak self] _, completed, total in
             await self?.updateFeatureAdapterProgress(completed: completed, total: total)
+            await progress(completed, total)
         }
-        run.subjectEvidence = evidence
-        run = runPreparedForHistory(run)
         do {
+            run.subjectEvidence = evidence
+            if suiteSnapshot.scoringMode == .modelJudge,
+               !run.cancelled,
+               run.terminationReason == nil {
+                let images = try imageInputs(
+                    for: evidence,
+                    projectID: ownerProjectID,
+                    suiteID: ownerSuiteID,
+                    runID: id
+                )
+                let assessment = try await reassessmentService.reassess(
+                    run: run,
+                    suite: suiteSnapshot,
+                    images: images,
+                    resolved: featureJudge,
+                    scoringContract: try? EvaluationScoringContract(suite: suiteSnapshot),
+                    subjectEvidenceDigest: evidence.digest,
+                    origin: .initialRun
+                )
+                run.assessments = [assessment]
+                run.selectedAssessmentID = assessment.id
+                if assessment.samples.contains(where: { $0.errorCategory == "cancelled" }) {
+                    run.cancelled = true
+                    run.terminationReason = "cancelled"
+                }
+            }
+            run = runPreparedForHistory(run)
             try persistRun(run)
         } catch {
             try? FileManager.default.removeItem(at: runEvidenceDirectory(
@@ -1495,9 +1526,45 @@ final class EvaluationStore {
         return run
     }
 
+    func runDeveloperFeature(
+        id: UUID = UUID(),
+        expectedRevision: String,
+        runner: DeveloperRunnerSnapshot,
+        feature: DeveloperFeatureDescriptor,
+        client: DeveloperRunnerClient,
+        timeout: Duration = .seconds(120),
+        progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }
+    ) async throws -> EvaluationRun {
+        let adapter = EvaluationDeveloperFeatureAdapter(
+            runID: id,
+            runner: runner,
+            feature: feature,
+            client: client,
+            timeout: timeout
+        )
+        return try await runFeatureAdapter(
+            id: id,
+            expectedRevision: expectedRevision,
+            adapter: adapter,
+            progress: progress
+        )
+    }
+
     private func updateFeatureAdapterProgress(completed: Int, total: Int) {
         completedSamples = completed
         totalSamples = total
+    }
+
+    private func resolvedFeatureJudge(
+        for suite: EvaluationSuite
+    ) throws -> EvaluationResolvedJudgeConnection? {
+        guard suite.scoringMode == .modelJudge, suite.needsModelJudge else { return nil }
+        guard suite.judgeConfiguration.usesExternalConnection else {
+            throw EvaluationStoreError.invalidSuite(
+                "Choose an independent judge connection for AI-rubric app feature runs."
+            )
+        }
+        return try resolvedJudge(for: suite)
     }
 
     private func updateExperimentProgress(completed: Int, total: Int) {

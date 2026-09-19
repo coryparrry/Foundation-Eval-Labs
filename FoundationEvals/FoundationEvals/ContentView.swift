@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var store: EvaluationStore
+    @Environment(DeveloperRunnerStore.self) private var runners
+    @State private var showsDevices = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -13,7 +15,12 @@ struct ContentView: View {
         }
         .frame(minWidth: 1_000, minHeight: 700)
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $showsDevices) { DeveloperDevicesView(runners: runners) }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Devices", systemImage: "laptopcomputer.and.iphone") { showsDevices = true }
+                    .help("Connect your app and manage device runners")
+            }
             ToolbarItem(placement: .primaryAction) {
                 WorkspaceResetControl(store: store)
             }
@@ -25,6 +32,13 @@ struct ContentView: View {
             }
         }
         .background { SuiteAutosaveObserver(store: store) }
+        .onChange(of: runners.activeRuns) { previous, current in
+            for status in current.values where [.failed, .timedOut, .disconnected].contains(status.phase) {
+                guard previous[status.id] != status else { continue }
+                let sampleMessage = store.run(with: status.id)?.results.last { $0.errorMessage != nil }?.errorMessage
+                store.notice = DeveloperRunPresentation.failureMessage(for: status, sampleMessage: sampleMessage)
+            }
+        }
         .alert(
             "Foundation Evals",
             isPresented: Binding(

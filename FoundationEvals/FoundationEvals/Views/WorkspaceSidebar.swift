@@ -50,7 +50,8 @@ struct WorkspaceSidebar: View {
 
     var body: some View {
         SidebarNavigationList(selection: destination) {
-            Label("Project overview", systemImage: "square.grid.2x2")
+            Label("Overview", systemImage: "square.grid.2x2.fill")
+                .fontWeight(.medium)
                 .tag(WorkspaceDestination.overview)
 
             Section("Suites") {
@@ -91,6 +92,10 @@ struct WorkspaceSidebar: View {
         .searchable(text: $runSearch, placement: .sidebar, prompt: "Search run history")
         .onChange(of: store.selectedSuiteID) { _, _ in runSearch = "" }
         .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("FOUNDATION EVALS", systemImage: "square.stack.3d.up.fill")
+                    .font(.system(size: 9, weight: .bold)).tracking(1.2)
+                    .foregroundStyle(.secondary)
             Menu {
                 ForEach(store.projects.filter { $0.archivedAt == nil }) { project in
                     Button {
@@ -109,14 +114,14 @@ struct WorkspaceSidebar: View {
                 Button("Manage projects…", systemImage: "folder.badge.gearshape") { isManagingWorkspace = true }
             } label: {
                 Label(store.selectedProject.name, systemImage: "folder")
-                    .font(.headline)
-                    .lineLimit(1)
+                    .font(.callout.weight(.semibold)).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .menuStyle(.borderlessButton)
-            .padding(14)
             .disabled(isBusy)
             .accessibilityLabel("Choose project")
+            }
+            .padding(.horizontal, 18).padding(.vertical, 18)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack {

@@ -389,6 +389,20 @@ struct EvaluationExecutionTrace: Codable, Sendable {
     var features: EvaluationFeatureConfiguration? = nil
 }
 
+struct EvaluationDeveloperExecution: Codable, Equatable, Sendable {
+    var runnerID: UUID
+    var runnerName: String
+    var platform: String
+    var operatingSystem: String
+    var hardwareModel: String
+    var appBundleIdentifier: String
+    var appVersion: String
+    var featureID: String
+    var featureVersion: String
+    var protocolMajorVersion: Int
+    var protocolMinorVersion: Int
+}
+
 struct EvaluationRun: Identifiable, Codable, Sendable {
     var id: UUID
     var suiteID: UUID
@@ -419,6 +433,7 @@ struct EvaluationRun: Identifiable, Codable, Sendable {
     var assessments: [EvaluationAssessment]? = nil
     var selectedAssessmentID: UUID? = nil
     var subjectEvidence: EvaluationSubjectEvidenceSnapshot? = nil
+    var developerExecution: EvaluationDeveloperExecution? = nil
 
     var effectiveResults: [EvaluationSampleResult] {
         let assessment = selectedAssessment

@@ -60,17 +60,9 @@ private enum SuiteEditorPage: String, CaseIterable, Identifiable {
         case .cases: "Cases"
         case .results: "Results"
         case .compare: "Compare"
-        case .configure: "Configure"
+        case .configure: "Setup"
         }
     }
-}
-
-private enum SuiteConfigurationPage: String, CaseIterable, Identifiable {
-    case instructions = "Instructions"
-    case scoring = "Scoring"
-    case model = "Model"
-    case features = "Features"
-    var id: Self { self }
 }
 
 enum SuiteCasePickerSelection {
@@ -87,41 +79,37 @@ enum SuiteCasePickerSelection {
 struct SuiteEditorView: View {
     @Bindable var store: EvaluationStore
     @State private var selectedPage = SuiteEditorPage.cases
-    @State private var configurationPage = SuiteConfigurationPage.instructions
+    @State private var configurationPage = SuiteSetupPage.instructions
+    @State private var availableWidth: CGFloat = 900
     @State private var selectedCaseID: UUID?
     @FocusState private var isEditorFocused: Bool
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 18) {
-                    SuiteOverviewHeader(store: store)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 22) {
+                SuiteOverviewHeader(store: store)
+                pageNavigation
+            }
+            .padding(.horizontal, 28).padding(.top, 22)
+            .background(WorkspaceStyle.surface)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
                     if let migrationNotice = store.migrationNotice {
                         Label(migrationNotice, systemImage: "tray.and.arrow.down")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    if selectedPage == .cases {
-                        SuiteDashboardCards(store: store)
-                        RunReadinessPanel(store: store)
+                            .font(.callout).foregroundStyle(.secondary)
                     }
                     if let response = store.liveResponse, store.isRunning {
                         LiveResponseSection(response: response)
                     }
+                    selectedPageContent
                 }
-                .padding(.horizontal, 28)
-                .padding(.top, 28)
-                .padding(.bottom, 18)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                selectedPageContent
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 28)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(28)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .focusable()
         .focusEffectDisabled()
         .focused($isEditorFocused)
@@ -131,21 +119,8 @@ struct SuiteEditorView: View {
                 store: store, selectedPage: $selectedPage, selectedCaseID: $selectedCaseID
             )
         }
-        .navigationTitle("Foundation Evals")
-        .background(Color.primary.opacity(0.025))
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker("Editor page", selection: $selectedPage) {
-                    ForEach(SuiteEditorPage.allCases) { page in
-                        Text(page.title).tag(page)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 380)
-                .accessibilityIdentifier("Editor page")
-            }
-            RunToolbarContent(store: store)
-        }
+        .navigationTitle(store.draftSuite.name)
+        .background(WorkspaceStyle.canvas)
         .fileImporter(
             isPresented: $store.isImportingFiles,
             allowedContentTypes: [.text, .json, .commaSeparatedText, .pdf, .image],
@@ -158,26 +133,58 @@ struct SuiteEditorView: View {
         }
     }
 
+    private var pageNavigation: some View {
+        HStack(spacing: 26) {
+            ForEach(SuiteEditorPage.allCases) { page in
+                Button { selectedPage = page } label: {
+                    VStack(spacing: 13) {
+                        Text(page.title).font(.callout.weight(selectedPage == page ? .semibold : .regular))
+                            .foregroundStyle(selectedPage == page ? Color.primary : .secondary)
+                        Capsule().fill(selectedPage == page ? Color.accentColor : .clear).frame(height: 2)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedPage == page ? .isSelected : [])
+            }
+            Spacer()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("Editor page")
+    }
+
     @ViewBuilder
     private var selectedPageContent: some View {
         switch selectedPage {
         case .cases:
-            CasesSection(store: store, selectedCaseID: $selectedCaseID)
+            SuiteCasesView(store: store, selectedCaseID: $selectedCaseID)
         case .results:
             SuiteResultsView(store: store)
         case .compare:
             SuiteCompareView(store: store)
         case .configure:
-            VStack(alignment: .leading, spacing: 20) {
-                Picker("Configuration", selection: $configurationPage) {
-                    ForEach(SuiteConfigurationPage.allCases) { page in
-                        Text(page.rawValue).tag(page)
+            let layout = availableWidth >= 880
+                ? AnyLayout(HStackLayout(alignment: .top, spacing: 24))
+                : AnyLayout(VStackLayout(alignment: .leading, spacing: 22))
+            layout {
+                if availableWidth >= 880 {
+                    SuiteSetupNavigation(selection: $configurationPage)
+                } else {
+                    Picker("Suite setup", selection: $configurationPage) {
+                        ForEach(SuiteSetupPage.allCases) { page in Text(page.title).tag(page) }
                     }
+                    .pickerStyle(.menu).fixedSize()
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 480)
-                configurationContent
-                    .disabled(store.isRunning || store.isReassessing || store.isProcessingFiles)
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(configurationPage.title).font(.title2.weight(.bold))
+                        Text(configurationPage.subtitle).font(.callout).foregroundStyle(.secondary)
+                    }
+                    configurationContent
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .disabled(store.isRunning || store.isReassessing || store.isProcessingFiles)
             }
         }
     }
@@ -186,24 +193,26 @@ struct SuiteEditorView: View {
     private var configurationContent: some View {
         switch configurationPage {
         case .instructions:
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 350), alignment: .top)],
-                alignment: .leading,
-                spacing: 18
-            ) {
-                ModelInstructionsSection(store: store)
-                SharedReferenceFilesSection(store: store)
-            }
+            ModelInstructionsSection(store: store)
+            SharedReferenceFilesSection(store: store)
         case .scoring:
-            VStack(alignment: .leading, spacing: 18) {
-                ScoringSection(store: store, selectedCaseID: $selectedCaseID)
+            ScoringSection(store: store)
+            if store.draftSuite.scoringMode == .modelJudge {
                 JudgeConfigurationSection(store: store)
+            }
+            SuiteOptionalSection(title: "Release requirements", detail: "Pass thresholds, baseline and latency limits", symbol: "checkmark.shield") {
                 ReleasePolicySection(store: store)
             }
         case .model:
             ModelControlsSection(store: store)
-        case .features:
-            FeatureControlsView(store: store)
+        case .tools:
+            FeatureControlsView(store: store, selectedPage: .tools)
+        case .output:
+            FeatureControlsView(store: store, selectedPage: .output)
+        case .profile:
+            FeatureControlsView(store: store, selectedPage: .profile)
+        case .performance:
+            FeatureControlsView(store: store, selectedPage: .performance)
         }
     }
 }
@@ -233,43 +242,61 @@ private struct SuiteEditorSelectionObserver: View {
 }
 
 private struct SuiteOverviewHeader: View {
+    @Environment(DeveloperRunnerStore.self) private var runners
     @Bindable var store: EvaluationStore
+    @State private var showsDetails = false
+    @State private var showsRunDetails = false
+    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 16) {
-                TextField("Suite name", text: $store.draftSuite.name)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 28, weight: .semibold))
-                    .accessibilityLabel("Suite name")
-
-                Spacer(minLength: 12)
-                ModelStatusBadge(status: store.modelStatus)
-            }
-
-            HStack(spacing: 16) {
-                LabeledContent("Suite version") {
-                    TextField("v1", text: $store.draftSuite.version)
-                        .frame(width: 110)
-                        .multilineTextAlignment(.trailing)
+            HStack(alignment: .center, spacing: 24) {
+                VStack(alignment: .leading, spacing: 7) {
+                    TextField("Suite name", text: $store.draftSuite.name)
+                        .textFieldStyle(.plain).font(.system(size: 26, weight: .semibold))
+                        .accessibilityLabel("Suite name").disabled(isBusy)
+                    HStack(spacing: 7) {
+                        Text("\(store.draftSuite.cases.count) cases")
+                        Text("·")
+                        Text(store.draftSuite.scoringMode.title)
+                        Text("·")
+                        Text(runners.selectedRunner?.identity.displayName ?? store.draftSuite.modelConfiguration.provider.title)
+                        Button { showsDetails = true } label: { Image(systemName: "ellipsis.circle") }
+                            .buttonStyle(.plain).padding(.leading, 4)
+                            .accessibilityLabel("Suite details")
+                            .popover(isPresented: $showsDetails) {
+                                VStack(alignment: .leading, spacing: 16) {
+                                    Text("Suite details").font(.headline)
+                                    LabeledContent("Version") {
+                                        TextField("Suite version", text: $store.draftSuite.version).frame(width: 100)
+                                            .disabled(isBusy)
+                                    }
+                                    ModelStatusBadge(status: store.modelStatus)
+                                }
+                                .padding(22).frame(width: 320)
+                            }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
                 }
-                .fixedSize()
-
-                Divider()
-                    .frame(height: 18)
-
-                Label(
-                    store.draftSaveFailed ? "Changes could not be saved"
-                        : store.isDraftSavePending ? "Saving changes…"
-                        : store.draftSuite != store.suite ? "Draft saved on this Mac"
-                        : "Saved automatically on this Mac",
-                    systemImage: store.draftSaveFailed ? "exclamationmark.triangle" : "lock.laptopcomputer"
-                )
-                    .font(.callout)
-                    .foregroundStyle(store.draftSaveFailed ? Color.orange : Color.secondary)
+                Spacer(minLength: 0)
+                SuiteRunControls(store: store, runners: runners) { showsRunDetails = true }
+                    .popover(isPresented: $showsRunDetails) {
+                        RunReadinessPanel(store: store).frame(width: 560).padding(12)
+                    }
+            }
+            HStack(spacing: 6) {
+                Image(systemName: store.draftSaveFailed ? "exclamationmark.triangle" : "checkmark")
+                Text(store.draftSaveFailed ? "Changes could not be saved"
+                     : store.isDraftSavePending ? "Saving changes…"
+                     : store.draftSuite != store.suite ? "Draft saved on this Mac"
+                     : "Saved automatically on this Mac")
+            }
+            .font(.caption2).foregroundStyle(store.draftSaveFailed ? Color.orange : .secondary)
+            if let blocker = runners.runIssue(for: store), !store.isRunning {
+                Label(blocker, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .disabled(store.isRunning || store.isProcessingFiles)
     }
 }
 
@@ -389,32 +416,6 @@ private struct RunReadinessPanel: View {
     }
 }
 
-private struct RunToolbarContent: ToolbarContent {
-    @Bindable var store: EvaluationStore
-
-    var body: some ToolbarContent {
-        let blocker = store.runBlocker
-        ToolbarItemGroup {
-            if store.isRunning {
-                RunToolbarProgress(completed: store.completedSamples, total: store.totalSamples)
-                Button("Cancel", role: .cancel) { store.cancelRun() }
-            } else if store.hasUnsavedCompletedRun {
-                Button("Retry Save") { store.retryPendingRunSave() }
-                    .buttonStyle(.borderedProminent)
-            } else {
-                if store.isProcessingFiles {
-                    ProgressView("Importing files")
-                        .controlSize(.small)
-                }
-                Button("Run", systemImage: "play.fill") { store.startRun() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(blocker != nil || store.isProcessingFiles)
-                    .help(blocker ?? "Run the current evaluation suite")
-            }
-        }
-    }
-}
-
 private struct ModelInstructionsSection: View {
     @Bindable var store: EvaluationStore
 
@@ -422,12 +423,12 @@ private struct ModelInstructionsSection: View {
         EditorSection(
             "Model instructions",
             systemImage: "text.quote",
-            description: "Shared guidance applied to every test case."
+            description: "Tell the model how to respond across all cases."
         ) {
             TextEditor(text: $store.draftSuite.instructions)
                 .accessibilityLabel("Model instructions")
                 .font(.body)
-                .frame(minHeight: 118)
+                .frame(minHeight: 190)
                 .padding(8)
                 .background(.background, in: .rect(cornerRadius: 8))
                 .overlay {
@@ -435,9 +436,6 @@ private struct ModelInstructionsSection: View {
                         .stroke(Color.secondary.opacity(0.2))
                 }
 
-            Text("Each repetition starts with a fresh model session, so cases cannot influence one another.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .disabled(store.isRunning || store.isProcessingFiles)
     }
@@ -445,7 +443,6 @@ private struct ModelInstructionsSection: View {
 
 private struct ScoringSection: View {
     @Bindable var store: EvaluationStore
-    @Binding var selectedCaseID: UUID?
 
     var body: some View {
         EditorSection(
@@ -480,77 +477,8 @@ private struct ScoringSection: View {
                     )
                 }
 
-                if let selectedCaseIndex {
-                    Divider()
-
-                    HStack {
-                        Text("Scoring target")
-                            .font(.headline)
-                        Spacer()
-                        Picker("Scoring case", selection: scoringCaseSelection) {
-                            ForEach(store.draftSuite.cases) { evaluationCase in
-                                Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
-                                    .tag(evaluationCase.id)
-                            }
-                        }
-                        .accessibilitySelectionActions(
-                            store.draftSuite.cases.map(\.id),
-                            selection: scoringCaseSelection,
-                            title: { caseID in
-                                let evaluationCase = store.draftSuite.cases.first(where: { $0.id == caseID })
-                                let name = evaluationCase?.name ?? ""
-                                return name.isEmpty ? "Untitled case" : name
-                            }
-                        )
-                        .labelsHidden()
-                        .frame(maxWidth: 260)
-                        .accessibilityIdentifier("Scoring case selector")
-                    }
-
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Prompt")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(store.draftSuite.cases[selectedCaseIndex].prompt.isEmpty
-                             ? "No prompt entered yet."
-                             : store.draftSuite.cases[selectedCaseIndex].prompt)
-                            .font(.callout)
-                            .foregroundStyle(store.draftSuite.cases[selectedCaseIndex].prompt.isEmpty ? .secondary : .primary)
-                            .lineLimit(4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 8))
-                    }
-
-                    if store.draftSuite.scoringMode != .review {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(store.draftSuite.scoringMode.expectedLabel)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            TextEditor(text: $store.draftSuite.cases[selectedCaseIndex].expected)
-                                .accessibilityLabel(
-                                    "\(store.draftSuite.scoringMode.expectedLabel) for \(store.draftSuite.cases[selectedCaseIndex].name.isEmpty ? "Untitled case" : store.draftSuite.cases[selectedCaseIndex].name)"
-                                )
-                                .accessibilityIdentifier("Scoring expected text")
-                                .font(store.draftSuite.scoringMode == .modelJudge ? .body : .body.monospaced())
-                                .frame(minHeight: 72)
-                                .padding(8)
-                                .background(.background, in: .rect(cornerRadius: 8))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.secondary.opacity(0.2))
-                                }
-                            Text(store.draftSuite.scoringMode.expectedHelp)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    FieldAssertionsEditor(
-                        assertions: $store.draftSuite.cases[selectedCaseIndex].fieldAssertions,
-                        scoringMode: store.draftSuite.scoringMode
-                    )
-                }
+                Text("Set expected responses and field checks in each test case.")
+                    .font(.caption).foregroundStyle(.secondary)
 
                 if store.draftSuite.scoringMode == .modelJudge {
                     ModelRubricEditor(store: store)
@@ -558,24 +486,6 @@ private struct ScoringSection: View {
             }
             .disabled(store.isRunning || store.isProcessingFiles)
         }
-    }
-
-    private var selectedCaseIndex: Int? {
-        guard let id = SuiteCasePickerSelection.resolvedOrFirst(
-            selectedCaseID, in: store.draftSuite.cases
-        ) else { return nil }
-        return store.draftSuite.cases.firstIndex(where: { $0.id == id })
-    }
-
-    private var scoringCaseSelection: Binding<UUID> {
-        Binding(
-            get: {
-                SuiteCasePickerSelection.resolvedOrFirst(
-                    selectedCaseID, in: store.draftSuite.cases
-                ) ?? UUID()
-            },
-            set: { selectedCaseID = $0 }
-        )
     }
 
 }
@@ -664,189 +574,6 @@ private struct RubricScale: View {
     }
 }
 
-private struct CasesSection: View {
-    @Bindable var store: EvaluationStore
-    @Binding var selectedCaseID: UUID?
-    @State private var isImportingCases = false
-
-    private var pickerSelection: Binding<UUID?> {
-        Binding(
-            get: { SuiteCasePickerSelection.resolved(selectedCaseID, in: store.draftSuite.cases) },
-            set: { selectedCaseID = $0 }
-        )
-    }
-
-    var body: some View {
-        EditorSection(
-            "Test cases",
-            systemImage: "list.bullet.rectangle",
-            description: "Each case gets its own session. Optional restored history and setup turns run before the scored prompt."
-        ) {
-            HStack(spacing: 12) {
-                Text("\(store.draftSuite.cases.count) case\(store.draftSuite.cases.count == 1 ? "" : "s")")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-
-                Picker("Editing case", selection: pickerSelection) {
-                    Text("Choose a case").tag(UUID?.none)
-                    ForEach(store.draftSuite.cases) { evaluationCase in
-                        Text(evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name)
-                            .tag(Optional(evaluationCase.id))
-                    }
-                }
-                .accessibilitySelectionActions(
-                    store.draftSuite.cases.map { Optional($0.id) },
-                    selection: $selectedCaseID,
-                    title: { caseID in
-                        guard let caseID,
-                              let evaluationCase = store.draftSuite.cases.first(where: { $0.id == caseID }) else {
-                            return "Untitled case"
-                        }
-                        return evaluationCase.name.isEmpty ? "Untitled case" : evaluationCase.name
-                    }
-                )
-                .labelsHidden()
-                .frame(maxWidth: 260)
-                .accessibilityIdentifier("Case selector")
-
-                Spacer()
-                Button("Import Cases", systemImage: "square.and.arrow.down") {
-                    isImportingCases = true
-                }
-                    .disabled(store.isRunning || store.isProcessingFiles)
-                Button("Add Case", systemImage: "plus") {
-                    let previousCount = store.draftSuite.cases.count
-                    store.addCase()
-                    if store.draftSuite.cases.count > previousCount {
-                        selectedCaseID = store.draftSuite.cases.last?.id
-                    }
-                }
-                    .disabled(store.isRunning || store.isProcessingFiles)
-            }
-
-            CaseOverviewTable(cases: store.draftSuite.cases, selection: $selectedCaseID)
-
-            if let selectedCaseIndex {
-                let caseID = store.draftSuite.cases[selectedCaseIndex].id
-                EvaluationCaseEditor(
-                    evaluationCase: $store.draftSuite.cases[selectedCaseIndex],
-                    prompt: Binding(
-                        get: { store.promptText(for: caseID) },
-                        set: { store.editPrompt($0, for: caseID) }
-                    ),
-                    canDelete: store.draftSuite.cases.count > 1,
-                    isDisabled: store.isRunning || store.isProcessingFiles,
-                    duplicate: {
-                        let id = store.draftSuite.cases[selectedCaseIndex].id
-                        let previousCount = store.draftSuite.cases.count
-                        store.duplicateCase(id: id)
-                        if store.draftSuite.cases.count > previousCount {
-                            selectedCaseID = store.draftSuite.cases[selectedCaseIndex + 1].id
-                        }
-                    },
-                    remove: {
-                        store.removeCase(id: store.draftSuite.cases[selectedCaseIndex].id)
-                        selectedCaseID = store.draftSuite.cases.first?.id
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $isImportingCases) {
-            CaseImportView(store: store)
-        }
-    }
-
-    private var selectedCaseIndex: Int? {
-        guard let selectedCaseID else { return nil }
-        return store.draftSuite.cases.firstIndex(where: { $0.id == selectedCaseID })
-    }
-
-}
-
-private struct EvaluationCaseEditor: View {
-    @Binding var evaluationCase: EvaluationCase
-    @Binding var prompt: String
-    let canDelete: Bool
-    let isDisabled: Bool
-    let duplicate: () -> Void
-    let remove: () -> Void
-    @State private var isConfirmingDeletion = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                TextField("Case name", text: $evaluationCase.name)
-                    .font(.headline)
-                    .textFieldStyle(.plain)
-                    .accessibilityLabel("Case name")
-
-                Spacer()
-
-                Menu("Case actions", systemImage: "ellipsis.circle") {
-                    caseActions
-                }
-                .accessibilityActions { caseActions }
-                .labelStyle(.iconOnly)
-                .menuStyle(.borderlessButton)
-                .help("Case actions")
-            }
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Prompt")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                PromptTextEditor(
-                    text: $prompt,
-                    label: "Prompt for \(evaluationCase.name.isEmpty ? "untitled case" : evaluationCase.name)"
-                )
-                    .id(evaluationCase.id)
-                    .frame(height: 140)
-                    .padding(8)
-                    .background(.background, in: .rect(cornerRadius: 8))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.secondary.opacity(0.2))
-                    }
-                PromptQuickActionsSection(prompt: $prompt, isDisabled: isDisabled)
-                    .id(evaluationCase.id)
-            }
-
-            ConversationConfigurationEditor(
-                configuration: $evaluationCase.conversation,
-                isDisabled: isDisabled
-            )
-
-        }
-        .padding(14)
-        .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 11))
-        .disabled(isDisabled)
-        .confirmationDialog(
-            "Delete \(evaluationCase.name.isEmpty ? "this case" : evaluationCase.name)?",
-            isPresented: $isConfirmingDeletion,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Case", role: .destructive, action: remove)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes its prompt and scoring value from the suite.")
-        }
-    }
-
-    @ViewBuilder
-    private var caseActions: some View {
-        Button("Duplicate Case", systemImage: "plus.square.on.square") {
-            guard !isDisabled else { return }
-            duplicate()
-        }
-        Divider()
-        Button("Delete Case", systemImage: "trash", role: .destructive) {
-            guard !isDisabled, canDelete else { return }
-            isConfirmingDeletion = true
-        }
-        .disabled(!canDelete)
-    }
-}
-
 private struct SharedReferenceFilesSection: View {
     @Bindable var store: EvaluationStore
     @State private var isDropTargeted = false
@@ -856,10 +583,10 @@ private struct SharedReferenceFilesSection: View {
     }
 
     var body: some View {
-        EditorSection(
-            "Shared reference files",
-            systemImage: "paperclip",
-            description: "Applied to every case. Text is extracted; images are attached directly."
+        SuiteOptionalSection(
+            title: "Reference files",
+            detail: store.draftSuite.attachments.isEmpty ? "Optional · Add documents or images shared by every case" : "\(store.draftSuite.attachments.count) files shared by every case",
+            symbol: "paperclip"
         ) {
             HStack {
                 Label("\(store.draftSuite.attachments.count) file\(store.draftSuite.attachments.count == 1 ? "" : "s")", systemImage: "doc.on.doc")
@@ -986,55 +713,5 @@ private struct ModelStatusBadge: View {
         .help(status.detail)
         .accessibilityLabel("Foundation model status")
         .accessibilityValue("\(status.label). \(status.detail)")
-    }
-}
-
-struct EditorSection<Content: View>: View {
-    let title: LocalizedStringResource
-    let systemImage: String
-    let sectionDescription: LocalizedStringResource
-    @ViewBuilder let content: Content
-
-    init(
-        _ title: LocalizedStringResource,
-        systemImage: String,
-        description: LocalizedStringResource,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.title = title
-        self.systemImage = systemImage
-        sectionDescription = description
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 11) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.tint)
-                    .frame(width: 30, height: 30)
-                    .background(Color.accentColor.opacity(0.08), in: .rect(cornerRadius: 5))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.headline)
-                        .accessibilityAddTraits(.isHeader)
-                    Text(sectionDescription)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Divider()
-            content
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.secondary.opacity(0.14))
-        }
     }
 }
