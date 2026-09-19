@@ -227,8 +227,11 @@ Remote output flows through the existing feature-adapter runner and normal
 `EvaluationStore` persistence. Saved runs include immutable suite/case evidence,
 normal deterministic scoring, repository metadata, and
 `EvaluationDeveloperExecution` (runner, device/OS, app, feature, and protocol
-versions). The run can be compared, reassessed, or approved as a baseline in the
-same way as a local run.
+versions). AI-rubric suites require an approved independent judge connection;
+the desktop judges the returned feature responses before saving the run and
+records that initial assessment separately from subject execution. A missing or
+failed judge never becomes a pass. The run can be compared, reassessed, or
+approved as a baseline in the same way as a local run.
 
 Cancellation propagates from the desktop task to the in-flight device request.
 Feature closures still need to cooperate by calling `Task.checkCancellation()`

@@ -1380,6 +1380,144 @@ struct EvaluationDevelopmentWorkflowTests {
     }
 
     @MainActor
+    @Test func featureAdapterAIRubricUsesConfiguredJudgeForInitialAssessment() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try CompatibleJudgeFixture(mode: .valid)
+        defer { fixture.stop() }
+        let store = EvaluationStore(supportDirectory: directory)
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Initial judge fixture", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+        try store.saveJudgeConnection(connection, apiKey: nil)
+        store.draftSuite.criteria = "The response is accurate and complete."
+        store.draftSuite.scoringMode = .modelJudge
+        store.draftSuite.cases = [EvaluationCase(name: "Feature", prompt: "ready", expected: "READY")]
+        store.draftSuite.judgeConfiguration = .init(mode: .connection, connectionID: connection.id)
+        store.approveExternalJudgeDisclosure()
+
+        let run = try await store.runFeatureAdapter(
+            expectedRevision: store.suiteRevision,
+            adapter: ClosureFeatureAdapter(displayName: "Saved response") { _ in "READY" }
+        )
+
+        let assessment = try #require(run.selectedAssessment)
+        #expect(assessment.origin == .initialRun)
+        #expect(assessment.judge.mode == .connection)
+        #expect(assessment.judge.connectionID == connection.id)
+        #expect(assessment.subjectEvidenceDigest == run.subjectEvidence?.digest)
+        #expect(run.results.first?.status == .unscored)
+        #expect(run.effectiveResults.first?.status == .passed)
+        #expect(fixture.completionRequestCount == 1)
+
+        let reloaded = EvaluationStore(supportDirectory: directory)
+        let persisted = try #require(reloaded.run(with: run.id))
+        #expect(persisted.selectedAssessment?.origin == .initialRun)
+        #expect(persisted.effectiveResults.first?.status == .passed)
+    }
+
+    @MainActor
+    @Test func featureAdapterAIRubricJudgeFailurePersistsUnscoredEvidence() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try CompatibleJudgeFixture(mode: .status(503))
+        defer { fixture.stop() }
+        let store = EvaluationStore(supportDirectory: directory)
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Unavailable judge fixture", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+        try store.saveJudgeConnection(connection, apiKey: nil)
+        store.draftSuite.criteria = "The response is accurate and complete."
+        store.draftSuite.scoringMode = .modelJudge
+        store.draftSuite.cases = [EvaluationCase(name: "Feature", prompt: "ready", expected: "READY")]
+        store.draftSuite.judgeConfiguration = .init(mode: .connection, connectionID: connection.id)
+        store.approveExternalJudgeDisclosure()
+
+        let run = try await store.runFeatureAdapter(
+            expectedRevision: store.suiteRevision,
+            adapter: ClosureFeatureAdapter(displayName: "Saved response") { _ in "READY" }
+        )
+
+        let result = try #require(run.effectiveResults.first)
+        #expect(run.selectedAssessment?.origin == .initialRun)
+        #expect(result.status == .unscored)
+        #expect(result.judgeErrorCategory == "serviceUnavailable")
+        #expect(result.judgeErrorMessage != nil)
+        #expect(run.passedCount == 0)
+        #expect(EvaluationStore(supportDirectory: directory).run(with: run.id)?.passedCount == 0)
+    }
+
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func featureAdapterAIRubricCancellationPersistsUnscoredEvidence() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try CompatibleJudgeFixture(mode: .stalled)
+        defer { fixture.stop() }
+        let store = EvaluationStore(supportDirectory: directory)
+        let connection = EvaluationJudgeConnection(
+            id: UUID(), name: "Stalled initial judge", kind: .localCompatible,
+            baseURL: fixture.baseURL, modelID: "judge-fixture"
+        )
+        try store.saveJudgeConnection(connection, apiKey: nil)
+        store.draftSuite.criteria = "The response is accurate and complete."
+        store.draftSuite.scoringMode = .modelJudge
+        store.draftSuite.cases = [EvaluationCase(name: "Feature", prompt: "ready", expected: "READY")]
+        store.draftSuite.judgeConfiguration = .init(mode: .connection, connectionID: connection.id)
+        store.approveExternalJudgeDisclosure()
+
+        let task = Task { @MainActor in
+            try await store.runFeatureAdapter(
+                expectedRevision: store.suiteRevision,
+                adapter: ClosureFeatureAdapter(displayName: "Saved response") { _ in "READY" }
+            )
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while fixture.completionRequestCount < 1, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(fixture.completionRequestCount == 1, "Judge fixture did not receive the initial assessment request.")
+
+        task.cancel()
+        let run = try await task.value
+
+        let result = try #require(run.effectiveResults.first)
+        #expect(run.cancelled)
+        #expect(run.terminationReason == "cancelled")
+        #expect(run.selectedAssessment?.origin == .initialRun)
+        #expect(result.status == .unscored)
+        #expect(result.judgeErrorCategory == "cancelled")
+        #expect(result.judgeErrorMessage != nil)
+        #expect(EvaluationStore(supportDirectory: directory).run(with: run.id)?.cancelled == true)
+    }
+
+    @MainActor
+    @Test func featureAdapterAIRubricRequiresIndependentJudgeBeforeExecution() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let invoked = FeatureInvocationCounter()
+        store.draftSuite.criteria = "The response is accurate and complete."
+        store.draftSuite.scoringMode = .modelJudge
+        #expect(store.saveSuite())
+
+        await #expect(throws: EvaluationStoreError.self) {
+            try await store.runFeatureAdapter(
+                expectedRevision: store.suiteRevision,
+                adapter: ClosureFeatureAdapter(displayName: "Must not execute") { _ in
+                    await invoked.increment()
+                    return "READY"
+                }
+            )
+        }
+
+        #expect(await invoked.value == 0)
+        #expect(store.runs.isEmpty)
+    }
+
+    @MainActor
     @Test func developerRunnerIdentityPersistsWithNormalRunEvidence() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1409,6 +1547,7 @@ struct EvaluationDevelopmentWorkflowTests {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = EvaluationStore(supportDirectory: directory)
+        store.draftSuite.scoringMode = .exactMatch
         store.draftSuite.cases = [
             EvaluationCase(name: "First", prompt: "one", expected: "ONE"),
             EvaluationCase(name: "Second", prompt: "two", expected: "TWO"),
@@ -2216,6 +2355,14 @@ private actor DeveloperTrackedExecutionGate {
         await withCheckedContinuation { continuation in
             waiters.append(continuation)
         }
+    }
+}
+
+private actor FeatureInvocationCounter {
+    private(set) var value = 0
+
+    func increment() {
+        value += 1
     }
 }
 

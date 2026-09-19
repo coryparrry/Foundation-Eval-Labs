@@ -104,6 +104,26 @@ private struct DeveloperDesktopTrustState: Codable {
     var entries: [Entry]
 }
 
+struct DeveloperIntentionalDisconnects {
+    private var peers: Set<MCPeerID> = []
+
+    mutating func begin(for peer: MCPeerID) {
+        peers.insert(peer)
+    }
+
+    mutating func consume(for peer: MCPeerID) -> Bool {
+        peers.remove(peer) != nil
+    }
+
+    mutating func forget(_ peer: MCPeerID) {
+        peers.remove(peer)
+    }
+
+    mutating func removeAll() {
+        peers.removeAll()
+    }
+}
+
 @MainActor
 @Observable
 public final class DeveloperRunnerClient {
@@ -126,6 +146,7 @@ public final class DeveloperRunnerClient {
     @ObservationIgnored private var candidatesByPeer: [MCPeerID: DeveloperClientCandidate] = [:]
     @ObservationIgnored private var trustByRunnerID: [UUID: DeveloperDesktopTrustState.Entry] = [:]
     @ObservationIgnored private var activeRunnerID: UUID?
+    @ObservationIgnored private var intentionalDisconnects = DeveloperIntentionalDisconnects()
     @ObservationIgnored private var unauthenticatedSessionTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var continuations: [UUID: CheckedContinuation<DeveloperFeatureExecutionResult, any Error>] = [:]
     @ObservationIgnored private var timeoutTasks: [UUID: Task<Void, Never>] = [:]
@@ -177,6 +198,7 @@ public final class DeveloperRunnerClient {
         unauthenticatedSessionTimeoutTask = nil
         selectedCandidatePeerByRunnerID = [:]
         activeRunnerID = nil
+        intentionalDisconnects.removeAll()
         let pending = Array(continuations.keys)
         for requestID in pending {
             finish(
@@ -262,6 +284,9 @@ public final class DeveloperRunnerClient {
             return
         }
         try? sendAuthenticated(.disconnect(reason: "Disconnected by the user."), runnerID: runnerID)
+        if let peer = authenticatedPeersByRunnerID[runnerID]?.peer {
+            intentionalDisconnects.begin(for: peer)
+        }
         session.disconnect()
         activeRunnerID = nil
         markDisconnected(runnerID: runnerID, detail: "Disconnected by the user.")
@@ -385,6 +410,7 @@ public final class DeveloperRunnerClient {
     }
 
     fileprivate func lostPeer(_ box: DeveloperPeerBox) {
+        intentionalDisconnects.forget(box.peer)
         guard let runnerID = candidatesByPeer[box.peer]?.runnerID else { return }
         candidatesByPeer[box.peer] = nil
         if selectedCandidatePeerByRunnerID[runnerID] == box.peer {
@@ -412,13 +438,14 @@ public final class DeveloperRunnerClient {
         case .connecting:
             updateRunner(runnerID) { $0.state = .connecting }
         case .notConnected:
+            let retainDiscoveredCandidate = intentionalDisconnects.consume(for: box.peer)
             candidatesByPeer[box.peer]?.reconnectChallenge = nil
             candidatesByPeer[box.peer]?.secureSession = nil
             if authenticatedPeersByRunnerID[runnerID]?.peer == box.peer {
                 authenticatedPeersByRunnerID[runnerID] = nil
                 activeRunnerID = nil
                 markDisconnected(runnerID: runnerID, detail: "Runner disconnected.")
-            } else {
+            } else if !retainDiscoveredCandidate {
                 evictCandidate(box, runnerID: runnerID)
             }
         @unknown default:
@@ -781,6 +808,7 @@ public final class DeveloperRunnerClient {
         candidatesByPeer = [:]
         selectedCandidatePeerByRunnerID = [:]
         activeRunnerID = nil
+        intentionalDisconnects.removeAll()
         for runnerID in runnerIDs {
             pendingPairingChallenges[runnerID] = nil
             updateRunner(runnerID) {

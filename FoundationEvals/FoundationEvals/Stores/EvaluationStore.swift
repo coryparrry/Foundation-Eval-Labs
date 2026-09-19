@@ -1450,6 +1450,7 @@ final class EvaluationStore {
             )
         }
         let suiteSnapshot = suite
+        let featureJudge = try resolvedFeatureJudge(for: suiteSnapshot)
         let ownerProjectID = selectedProjectID
         let ownerSuiteID = selectedSuiteID
         let evidence = try snapshotSubjectEvidence(
@@ -1482,9 +1483,34 @@ final class EvaluationStore {
             await self?.updateFeatureAdapterProgress(completed: completed, total: total)
             await progress(completed, total)
         }
-        run.subjectEvidence = evidence
-        run = runPreparedForHistory(run)
         do {
+            run.subjectEvidence = evidence
+            if suiteSnapshot.scoringMode == .modelJudge,
+               !run.cancelled,
+               run.terminationReason == nil {
+                let images = try imageInputs(
+                    for: evidence,
+                    projectID: ownerProjectID,
+                    suiteID: ownerSuiteID,
+                    runID: id
+                )
+                let assessment = try await reassessmentService.reassess(
+                    run: run,
+                    suite: suiteSnapshot,
+                    images: images,
+                    resolved: featureJudge,
+                    scoringContract: try? EvaluationScoringContract(suite: suiteSnapshot),
+                    subjectEvidenceDigest: evidence.digest,
+                    origin: .initialRun
+                )
+                run.assessments = [assessment]
+                run.selectedAssessmentID = assessment.id
+                if assessment.samples.contains(where: { $0.errorCategory == "cancelled" }) {
+                    run.cancelled = true
+                    run.terminationReason = "cancelled"
+                }
+            }
+            run = runPreparedForHistory(run)
             try persistRun(run)
         } catch {
             try? FileManager.default.removeItem(at: runEvidenceDirectory(
@@ -1527,6 +1553,18 @@ final class EvaluationStore {
     private func updateFeatureAdapterProgress(completed: Int, total: Int) {
         completedSamples = completed
         totalSamples = total
+    }
+
+    private func resolvedFeatureJudge(
+        for suite: EvaluationSuite
+    ) throws -> EvaluationResolvedJudgeConnection? {
+        guard suite.scoringMode == .modelJudge, suite.needsModelJudge else { return nil }
+        guard suite.judgeConfiguration.usesExternalConnection else {
+            throw EvaluationStoreError.invalidSuite(
+                "Choose an independent judge connection for AI-rubric app feature runs."
+            )
+        }
+        return try resolvedJudge(for: suite)
     }
 
     private func updateExperimentProgress(completed: Int, total: Int) {

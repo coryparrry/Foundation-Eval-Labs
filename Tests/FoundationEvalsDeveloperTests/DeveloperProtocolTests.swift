@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import MultipeerConnectivity
 import Testing
 @testable import FoundationEvalsDeveloper
 
@@ -93,6 +94,19 @@ struct DeveloperProtocolTests {
         } == [0, 1])
         #expect(buffer.insert(envelope(1)).isEmpty)
         #expect(buffer.insert(envelope(2)).count == 1)
+    }
+
+    @Test("Intentional disconnect retains only the matching discovered candidate")
+    func intentionalDisconnectCandidateRetention() {
+        let retained = MCPeerID(displayName: "Retained runner")
+        let remote = MCPeerID(displayName: "Remote runner")
+        var disconnects = DeveloperIntentionalDisconnects()
+
+        disconnects.begin(for: retained)
+
+        #expect(disconnects.consume(for: remote) == false)
+        #expect(disconnects.consume(for: retained) == true)
+        #expect(disconnects.consume(for: retained) == false)
     }
 }
 
