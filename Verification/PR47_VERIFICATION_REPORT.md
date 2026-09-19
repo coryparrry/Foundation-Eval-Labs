@@ -127,5 +127,13 @@ Validation on the integrated dashboard branch:
 The physical provisioning boundary is an actual automatic approval rejection:
 registering the connected device and creating/updating Apple Developer signing
 profiles requires informed user approval before retrying. The request is pending.
-The configured AI-rubric judge path and reconnect finding remain with Sol for
-backend correction and verification.
+The configured AI-rubric judge path and reconnect corrections are now integrated
+on the dashboard branch at `9dd1229`. Sol verified initial judging, failure and
+cancellation evidence, and a fresh two-app Mac Disconnect → Connect flow without
+relaunching or re-pairing, as described above.
+
+The integrated source at `9dd1229` passed 79 focused native tests with zero
+failures or skips. Command:
+`xcodebuild test -quiet -project FoundationEvals/FoundationEvals.xcodeproj -scheme FoundationEvals -destination 'platform=macOS' -derivedDataPath /private/tmp/FoundationEvals-PR47-UIFixes -only-testing:FoundationEvalsTests/EvaluationDevelopmentWorkflowTests -only-testing:FoundationEvalsTests/DeveloperRunPresentationTests -only-testing:FoundationEvalsTests/WorkspacePresentationTests CODE_SIGNING_ALLOWED=NO`.
+This checks the combined backend workflow and UI presentation contracts; it
+does not replace the outstanding physical-device checks.
