@@ -1,10 +1,11 @@
 """Exercise release PR publication gates and CI dispatch with a recording GitHub fixture."""
+
 import json
 import os
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 
 class ReleasePRTests(unittest.TestCase):
@@ -14,7 +15,7 @@ class ReleasePRTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.script = Path(__file__).resolve().parents[1] / "release_pr.py"
         fixture = self.root / "gh"
-        fixture.write_text('''#!/usr/bin/env python3
+        fixture.write_text("""#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["CALL_LOG"], "a") as output:
@@ -36,22 +37,32 @@ elif args[:2] == ["workflow", "run"]:
     sys.exit(1 if os.environ.get("FAIL_DISPATCH") else 0)
 else:
     sys.exit("Unexpected GitHub operation: " + repr(args))
-''')
+""")
         fixture.chmod(0o755)
         self.calls_path = self.root / "calls.jsonl"
         self.output_path = self.root / "output"
-        self.env = dict(os.environ, PATH=f"{self.root}:{os.environ['PATH']}",
-                        GITHUB_REPOSITORY="owner/repo", GITHUB_OUTPUT=str(self.output_path),
-                        CALL_LOG=str(self.calls_path), MANIFEST=json.dumps({".": "1.2.0"}),
-                        RELEASE=json.dumps({"tagName": "v1.2.0", "isDraft": False}))
+        self.env = dict(
+            os.environ,
+            PATH=f"{self.root}:{os.environ['PATH']}",
+            GITHUB_REPOSITORY="owner/repo",
+            GITHUB_OUTPUT=str(self.output_path),
+            CALL_LOG=str(self.calls_path),
+            MANIFEST=json.dumps({".": "1.2.0"}),
+            RELEASE=json.dumps({"tagName": "v1.2.0", "isDraft": False}),
+        )
         self.env.pop("RELEASE_PRS", None)
 
     def run_script(self, mode, **environment):
         self.calls_path.unlink(missing_ok=True)
         self.output_path.unlink(missing_ok=True)
-        return subprocess.run(["python3", str(self.script), mode], cwd=self.root,
-                              env=dict(self.env, **environment), text=True,
-                              capture_output=True, timeout=10)
+        return subprocess.run(
+            ["python3", str(self.script), mode],
+            cwd=self.root,
+            env=dict(self.env, **environment),
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
 
     def calls(self):
         if not self.calls_path.exists():
@@ -68,14 +79,18 @@ else:
         self.assertEqual(len(self.calls()), 2)
 
     def test_pending_draft_defers_pr_generation_without_failure(self):
-        result = self.run_script("check-baseline", RELEASE=json.dumps({"tagName": "v1.2.0", "isDraft": True}))
+        result = self.run_script(
+            "check-baseline", RELEASE=json.dumps({"tagName": "v1.2.0", "isDraft": True})
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.output(), "ready=false\n")
         self.assertIn("waiting for installer publication", result.stdout)
         self.assertFalse(any(call[:2] == ["workflow", "run"] for call in self.calls()))
 
     def test_publication_after_draft_allows_the_next_run(self):
-        draft = self.run_script("check-baseline", RELEASE=json.dumps({"tagName": "v1.2.0", "isDraft": True}))
+        draft = self.run_script(
+            "check-baseline", RELEASE=json.dumps({"tagName": "v1.2.0", "isDraft": True})
+        )
         self.assertEqual(draft.returncode, 0, draft.stderr)
         self.assertEqual(self.output(), "ready=false\n")
         published = self.run_script("check-baseline")
@@ -90,7 +105,14 @@ else:
                 self.assertEqual(self.output(), "")
 
     def test_invalid_manifest_stops_before_release_lookup(self):
-        for manifest in ('{".": ""}', '{".": "1.2"}', '{".": "1.3.0-rc.1"}', '{".": null}', '{}', 'invalid'):
+        for manifest in (
+            '{".": ""}',
+            '{".": "1.2"}',
+            '{".": "1.3.0-rc.1"}',
+            '{".": null}',
+            "{}",
+            "invalid",
+        ):
             with self.subTest(manifest=manifest):
                 result = self.run_script("check-baseline", MANIFEST=manifest)
                 self.assertNotEqual(result.returncode, 0)
@@ -98,8 +120,12 @@ else:
                 self.assertEqual(len(self.calls()), 1)
 
     def test_invalid_release_response_never_allows_pr_generation(self):
-        for release in ('{"tagName": "v1.1.1", "isDraft": false}',
-                        '{"tagName": "v1.2.0", "isDraft": "false"}', '{}', 'invalid'):
+        for release in (
+            '{"tagName": "v1.1.1", "isDraft": false}',
+            '{"tagName": "v1.2.0", "isDraft": "false"}',
+            "{}",
+            "invalid",
+        ):
             with self.subTest(release=release):
                 result = self.run_script("check-baseline", RELEASE=release)
                 self.assertNotEqual(result.returncode, 0)
@@ -114,27 +140,47 @@ else:
 
     def test_created_pr_dispatches_ci_on_its_branch(self):
         branch = "release-please--branches--main"
-        result = self.run_script("dispatch-ci", RELEASE_PRS=json.dumps([{"headBranchName": branch}]))
+        result = self.run_script(
+            "dispatch-ci", RELEASE_PRS=json.dumps([{"headBranchName": branch}])
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [["workflow", "run", "ci.yml", "--repo", "owner/repo", "--ref", branch]])
+        self.assertEqual(
+            self.calls(),
+            [["workflow", "run", "ci.yml", "--repo", "owner/repo", "--ref", branch]],
+        )
 
     def test_each_distinct_pr_branch_gets_ci_once(self):
-        prs = [{"headBranchName": branch} for branch in ("release-a", "release-b", "release-a")]
+        prs = [
+            {"headBranchName": branch}
+            for branch in ("release-a", "release-b", "release-a")
+        ]
         result = self.run_script("dispatch-ci", RELEASE_PRS=json.dumps(prs))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([call[-1] for call in self.calls()], ["release-a", "release-b"])
+        self.assertEqual(
+            [call[-1] for call in self.calls()], ["release-a", "release-b"]
+        )
 
     def test_malformed_pr_output_never_dispatches(self):
-        for prs in ('invalid', '{}', 'null', '[null]', '[{}]', '[{"headBranchName": ""}]',
-                    '[{"headBranchName": "valid"}, {"headBranchName": 2}]'):
+        for prs in (
+            "invalid",
+            "{}",
+            "null",
+            "[null]",
+            "[{}]",
+            '[{"headBranchName": ""}]',
+            '[{"headBranchName": "valid"}, {"headBranchName": 2}]',
+        ):
             with self.subTest(prs=prs):
                 result = self.run_script("dispatch-ci", RELEASE_PRS=prs)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(self.calls(), [])
 
     def test_dispatch_failure_is_reported(self):
-        result = self.run_script("dispatch-ci", FAIL_DISPATCH="1",
-                                 RELEASE_PRS=json.dumps([{"headBranchName": "release-a"}]))
+        result = self.run_script(
+            "dispatch-ci",
+            FAIL_DISPATCH="1",
+            RELEASE_PRS=json.dumps([{"headBranchName": "release-a"}]),
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(self.calls()), 1)
 

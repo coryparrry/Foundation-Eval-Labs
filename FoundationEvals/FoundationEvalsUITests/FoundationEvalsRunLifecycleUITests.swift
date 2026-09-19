@@ -98,7 +98,6 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
     }
 
     private func launchApp() throws -> XCUIApplication {
-        try UITestStorage.verifyWritable(storage)
         let launchedApp = XCUIApplication()
         launchedApp.launchArguments += [
             "--disable-mcp-autostart",

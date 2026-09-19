@@ -1,9 +1,8 @@
 import CoreGraphics
 import Foundation
 import FoundationModels
-import Vision
-import ImageIO
 import Testing
+import Vision
 @testable import FoundationEvals
 
 struct ImageToolTests {
