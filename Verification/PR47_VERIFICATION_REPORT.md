@@ -17,6 +17,20 @@ The follow-up disconnect/reconnect check used the rebuilt product at
 `/private/tmp/PR47BackendJudgeDerived/Build/Products/Debug/FoundationEvals.app`
 and the rebuilt isolated host at `/private/tmp/PR47RunnerHostMacDerived`.
 
+The physical iPhone host was freshly generated and built while the worktree was
+detached at exact `c4dac19`, then signed, installed, and launched from
+`/private/tmp/PR47iPhoneC4Derived`. The desktop dashboard used while executing
+that physical matrix was the backend-derived product above. Its executable
+timestamp predates both `9dd1229` and `c4dac19`, and the bundle does not embed a
+Git SHA, so it is treated as a pre-integration dashboard rather than evidence
+for the integrated presentation fixes. The stale `/Applications` copy was not
+running during the matrix.
+
+After the matrix, a dashboard was freshly built from exact detached `c4dac19`
+at `/private/tmp/PR47C4DashboardDerived/Build/Products/Debug/FoundationEvals.app`
+and launched against the same isolated workspace. Independent visual inspection
+of that product confirmed the saved physical run presentation described below.
+
 ## Outcome
 
 | Area | Result | Evidence |
@@ -32,9 +46,9 @@ and the rebuilt isolated host at `/private/tmp/PR47RunnerHostMacDerived`.
 | Provenance persistence | Passed | Saved JSON retained runner name, platform, hardware model, OS, app bundle/version, feature ID/version, and protocol version for completed, cancelled, disconnected, and deadline-exceeded runs. |
 | Comparison | Passed on physical iPhone | Compare selected the first iPhone echo run as the baseline for the second and reported `Comparable`, one unchanged case, and zero regressions. Both runs used the same suite revision, runner, OS, app version, and `verification.echo` feature version. |
 | Cancellation | Passed on physical iPhone | Cancelling `verification.slow` produced a persisted cancelled run and a saved sample error saying `The remote run was cancelled.` |
-| Disconnect | Passed on physical iPhone | Loss of discovery during `verification.slow` produced the `developerRunner:disconnected` alert and a persisted sample error saying `Runner discovery was lost.` |
+| Disconnect | Passed on physical iPhone | Loss of discovery during `verification.slow` persisted a sample error saying `Runner discovery was lost.` The raw internal alert was observed only in the pre-integration dashboard, not the later c4 presentation check. |
 | Manual disconnect/reconnect | Passed on Mac and physical iPhone | The signed iPhone runner reconnected from saved trust after the disconnected run, returned to `Connected`, and exposed all four features without another code. |
-| Timeout | Passed on physical iPhone | `verification.timeout` produced `developerRunner:deadlineExceeded` and persisted `The verification fixture exceeded its deadline.` after 575 ms. Package tests also verified that expired requests are rejected before application code runs. |
+| Timeout | Passed on physical iPhone | `verification.timeout` persisted `The verification fixture exceeded its deadline.` after 575 ms. The c4 alert wording is covered by presentation tests but was not freshly exercised end to end on-device. Package tests also verified that expired requests are rejected before application code runs. |
 | New suite setup pages | Passed | Scoring, Tools, Structured output, Session profile, and Performance were exercised in the fresh build. Focused UI tests passed for the primary controls and dark rendering. |
 | Dark appearance | Passed at wide layout | All five setup pages were inspected from real screenshots and were readable without clipping. |
 | Compact layout | Partially passed | A manual compact-width check showed the `Suite setup` pop-up and dark Instructions page without clipping. Every setup page was not re-captured at compact width. |
@@ -63,15 +77,31 @@ text scoring, so no external judge was contacted:
   and 3 output tokens from the Apple Foundation Models framework.
 - Cancelling `verification.slow` persisted `cancelled: true` with `The remote
   run was cancelled.` and retained the iPhone provenance.
-- Losing discovery during `verification.slow` surfaced
-  `developerRunner:disconnected` and persisted `Runner discovery was lost.`
-  Relaunching the host reconnected from saved trust without another code.
-- `verification.timeout` surfaced `developerRunner:deadlineExceeded` and
-  persisted `The verification fixture exceeded its deadline.` in 575 ms.
+- Losing discovery during `verification.slow` persisted `Runner discovery was
+  lost.` Relaunching the host reconnected from saved trust without another code.
+- `verification.timeout` persisted `The verification fixture exceeded its
+  deadline.` in 575 ms.
 
 The saved JSON for all five physical scenarios retained the runner, platform,
 OS, app bundle/version, feature ID/version, protocol version, suite revision,
 and per-sample outcome. This is persistence evidence, not merely live UI state.
+
+### Dashboard provenance and presentation recheck
+
+The physical matrix executed a c4-built iPhone host through a desktop dashboard
+whose executable was produced before the integrated `9dd1229` and `c4dac19`
+commits. Its exact source commit cannot be recovered from the bundle. Therefore,
+its `Provider not recorded` footer and raw transport-key alerts are not evidence
+of defects in the integrated c4 dashboard.
+
+The freshly built c4 dashboard loaded the same saved physical AFM run and
+visibly showed `App feature · Foundation Evals verification host · Local
+workspace`, correct iPhone and OS provenance, 5.78 seconds, and 65 total tokens.
+After relaunching the existing signed host, its Devices sheet showed the physical
+iPhone as `Connected` with four registered features. A fresh timeout-alert run
+was not completed because the runner option disappeared during selection; this
+bounded recheck stopped without reopening the device matrix. Alert wording is
+therefore test-covered at c4, but not freshly exercised end to end there.
 
 ### Earlier Mac verification
 
@@ -94,18 +124,15 @@ their incompatibility rather than producing a misleading delta. The later pair
 of physical `verification.echo` runs were compatible and produced a valid
 unchanged-case comparison.
 
-## UI findings for follow-up
+## UI findings resolution
 
-1. Still reproducible on the physical iPhone path at `c4dac19`: a selected
-   app-feature run shows `Provider not recorded · Local workspace` in the
-   status bar even though `developerExecution` provenance is present. The
-   footer should identify the app-feature target instead of implying that
-   provenance is missing.
-2. Still reproducible on the physical iPhone path at `c4dac19`: disconnected
-   and deadline-exceeded runs present generic alerts containing the internal
-   termination keys (`developerRunner:disconnected` and
-   `developerRunner:deadlineExceeded`). The saved run detail has the useful
-   human-readable error, but the alert does not.
+1. Retracted as an older-dashboard artifact: the `Provider not recorded`
+   footer was observed in a pre-integration executable. The freshly built c4
+   dashboard correctly identified the saved physical app-feature runner.
+2. Retracted as a demonstrated c4 defect: raw `developerRunner:` alert keys were
+   observed only in the pre-integration executable. Integrated presentation
+   tests cover readable disconnect and deadline-exceeded errors, but the alert
+   was not freshly exercised end to end in the bounded c4 device recheck.
 3. Resolved in the follow-up: AI-rubric app-feature runs now perform their
    configured independent judge step as part of the initial evaluation.
 4. Fixed in the follow-up: clicking Disconnect had cleared authentication before
@@ -137,6 +164,9 @@ unchanged-case comparison.
   — passed.
 - `xcodegen generate --spec Verification/DeveloperRunnerTestHost/project.yml`
   — passed; the generated project remains ignored and disposable.
+- `xcodebuild build -quiet -project FoundationEvals/FoundationEvals.xcodeproj -scheme FoundationEvals -configuration Debug -destination 'platform=macOS' -derivedDataPath /private/tmp/PR47C4DashboardDerived CODE_SIGNING_ALLOWED=NO`
+  — passed from exact detached `c4dac19`; the product was launched against the
+  existing isolated verification workspace for the presentation recheck.
 - Physical Debug build of `DeveloperRunnerTestHost` with automatic signing,
   provisioning updates, and device registration enabled against the connected
   iPhone — passed from `c4dac19`. The development-team and device identifiers
@@ -158,10 +188,12 @@ is available.
 
 The earlier local presentation checks expected the footer to identify the
 persisted app-feature runner and terminal alerts to prefer readable errors.
-Those tests passed, but the exact integrated physical flow at `c4dac19` still
-showed `Provider not recorded` and exposed the two `developerRunner:` keys.
-Those two live UI findings therefore remain open; the local rendered fixture is
-not treated as proof of the physical-device path.
+Those tests passed. The later fresh c4 dashboard visual inspection also
+confirmed the footer with real saved physical-run evidence, so the footer issue
+is closed. The raw alert keys came from the older dashboard; no c4 alert defect
+was demonstrated. Because a fresh timeout selection did not complete during the
+bounded recheck, readable c4 alert wording remains supported by tests rather
+than new physical end-to-end evidence.
 
 Validation on the integrated dashboard branch:
 - `DeveloperRunPresentationTests`: 3 tests passed.
