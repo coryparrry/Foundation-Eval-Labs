@@ -3,9 +3,9 @@
 ## Snapshot
 
 - PR: `#47` (`feat: evaluate app features on paired Apple devices`)
-- Verified source commit: `27d51b087027df6f8b83401362493ba4fbcc76d7`
+- Verified source commit: `c4dac19933355429576379aafb07cef6a7d33572`
 - Source branch: `codex/developer-dashboard`
-- Local verification branch: `codex/pr47-verification`
+- Local verification branch: `codex/pr47-iphone-verification`
 - Toolchain: Xcode 27.0 (`27A266a`) on macOS 27.2 (`26B5086k`)
 - Physical device available: iPhone 16 Pro Max on iOS 27.0; identifiers omitted
 
@@ -23,24 +23,57 @@ and the rebuilt isolated host at `/private/tmp/PR47RunnerHostMacDerived`.
 |---|---|---|
 | PR source and CI | Passed | PR remained open and non-draft at the verified commit. All listed GitHub checks passed, including Compile app and tests, Portable regression tests, workflow/script checks, CodeQL, GitGuardian, Socket, and route analysis. |
 | Public SDK host builds | Passed | The isolated verification host compiled for macOS and generic iOS with signing disabled. The generated project is ignored and reproducible from `project.yml`. |
-| Discovery and explicit pairing | Passed on Mac | The client discovered the verification host, required its displayed code, authenticated, and listed the registered features. No pairing code is retained in this report. |
-| Saved-trust reconnect | Passed on Mac | After relaunching both isolated apps with the same stores, the client moved from `Connecting…` to `Connected` without asking for the code again. |
-| Same suite on distinct targets | Passed on Mac | The same saved suite ran through the built-in evaluator and through the paired public-SDK host. |
-| Real Apple Foundation Model | Passed on Mac | Built-in execution used `On-device · AFM 3 Core Advanced`. A second run invoked `verification.foundation-model` inside the paired host and returned generated text plus framework-reported token usage. This is separate from the deterministic fixture. |
+| Discovery and explicit pairing | Passed on Mac and physical iPhone | The client discovered each verification host, required its displayed code, authenticated, and listed the registered features. No pairing code is retained in this report. |
+| Saved-trust reconnect | Passed on Mac and physical iPhone | Relaunching the signed iPhone host restored `Connected` without asking for another code. The runner again advertised the same four features. |
+| Same suite on distinct targets | Passed on Mac and physical iPhone | The same saved suite ran through the built-in evaluator, paired Mac host, and paired iPhone host. |
+| Real Apple Foundation Model | Passed on physical iPhone | `verification.foundation-model` returned `READY` through `SystemLanguageModel.default`, passed exact scoring in 5.78 seconds, and reported 62 input plus 3 output framework tokens. This is separate from the deterministic fixture. |
 | Initial app-feature judgment | Passed in focused tests | AI-rubric feature runs now require an approved independent judge before feature execution, persist an `.initialRun` assessment, and keep judge failure or cancellation as unscored evidence. Deterministic-only criteria remain local. |
-| Deterministic fixture | Passed on Mac | `verification.echo` returned the prompt through the public SDK with saved feature identity and usage. |
+| Deterministic fixture | Passed on physical iPhone | Two `verification.echo` runs returned `READY` through the public SDK, passed exact scoring, recorded one input token, and retained the same suite revision and feature identity. |
 | Provenance persistence | Passed | Saved JSON retained runner name, platform, hardware model, OS, app bundle/version, feature ID/version, and protocol version for completed, cancelled, disconnected, and deadline-exceeded runs. |
-| Comparison | Passed with expected incompatibility | Compare showed the local run as a selectable baseline and correctly marked the local-model and app-feature runs not comparable because their execution contracts differed. |
-| Cancellation | Passed | Cancelling `verification.slow` produced a persisted cancelled run with `developerRunner:cancelled` and a sample error saying the remote run was cancelled. |
-| Disconnect | Passed | Terminating only the isolated host during `verification.slow` produced a persisted `developerRunner:disconnected` run with `Runner discovery was lost.` |
-| Manual disconnect/reconnect | Passed on Mac | The current client distinguishes an intentional session close from a lost peer, retaining the still-advertised candidate. In the freshly rebuilt two-app flow, Disconnect exposed a usable Connect action and Connect returned to the trusted Connected state immediately without relaunch or re-pairing. |
-| Timeout | Passed through fixture | `verification.timeout` produced a persisted `developerRunner:deadlineExceeded` run after about 641 ms. Package tests also verified that expired requests are rejected before application code runs. |
+| Comparison | Passed on physical iPhone | Compare selected the first iPhone echo run as the baseline for the second and reported `Comparable`, one unchanged case, and zero regressions. Both runs used the same suite revision, runner, OS, app version, and `verification.echo` feature version. |
+| Cancellation | Passed on physical iPhone | Cancelling `verification.slow` produced a persisted cancelled run and a saved sample error saying `The remote run was cancelled.` |
+| Disconnect | Passed on physical iPhone | Loss of discovery during `verification.slow` produced the `developerRunner:disconnected` alert and a persisted sample error saying `Runner discovery was lost.` |
+| Manual disconnect/reconnect | Passed on Mac and physical iPhone | The signed iPhone runner reconnected from saved trust after the disconnected run, returned to `Connected`, and exposed all four features without another code. |
+| Timeout | Passed on physical iPhone | `verification.timeout` produced `developerRunner:deadlineExceeded` and persisted `The verification fixture exceeded its deadline.` after 575 ms. Package tests also verified that expired requests are rejected before application code runs. |
 | New suite setup pages | Passed | Scoring, Tools, Structured output, Session profile, and Performance were exercised in the fresh build. Focused UI tests passed for the primary controls and dark rendering. |
 | Dark appearance | Passed at wide layout | All five setup pages were inspected from real screenshots and were readable without clipping. |
 | Compact layout | Partially passed | A manual compact-width check showed the `Suite setup` pop-up and dark Instructions page without clipping. Every setup page was not re-captured at compact width. |
-| Physical iPhone/iPad execution | Blocked / unverified | The iPhone was detected and Developer Mode was available, but installing the host requires Apple Developer provisioning/device-registration mutations. Those were not authorized. No iPad was connected. |
+| Physical iPhone execution | Passed | With explicit authorization, Xcode automatically registered/provisioned the connected iPhone, built and signed the isolated host, installed it, launched it, paired it, and completed success, cancellation, disconnect, reconnect, comparison, and timeout checks. |
+| Physical iPad execution | Unverified | No iPad was connected. |
 
 ## Runtime evidence
+
+### Physical iPhone
+
+The exact integrated source at `c4dac19` was rebuilt for the connected iPhone
+with automatic signing after the user explicitly authorized Apple Developer
+device registration and provisioning. The isolated host bundle passed
+`codesign --verify --deep --strict`, installed successfully, launched on iOS
+27.0, paired explicitly, and advertised four registered features. Device and
+pairing identifiers are intentionally omitted.
+
+The physical runs used one deterministic suite (`READY` → `READY`) with Exact
+text scoring, so no external judge was contacted:
+
+- Two `verification.echo` runs passed in 119 ms and 206 ms. Both recorded the
+  same suite revision, iPhone OS build, app/feature version, and one framework
+  input token. Compare marked them `Comparable`, with one unchanged case and no
+  regressions.
+- `verification.foundation-model` passed in 5.78 seconds and reported 62 input
+  and 3 output tokens from the Apple Foundation Models framework.
+- Cancelling `verification.slow` persisted `cancelled: true` with `The remote
+  run was cancelled.` and retained the iPhone provenance.
+- Losing discovery during `verification.slow` surfaced
+  `developerRunner:disconnected` and persisted `Runner discovery was lost.`
+  Relaunching the host reconnected from saved trust without another code.
+- `verification.timeout` surfaced `developerRunner:deadlineExceeded` and
+  persisted `The verification fixture exceeded its deadline.` in 575 ms.
+
+The saved JSON for all five physical scenarios retained the runner, platform,
+OS, app bundle/version, feature ID/version, protocol version, suite revision,
+and per-sample outcome. This is persistence evidence, not merely live UI state.
+
+### Earlier Mac verification
 
 The built-in run completed with a passing AI-rubric assessment, 112 subject
 tokens, and a 1.82-second subject request. The paired-host Apple Foundation
@@ -56,20 +89,23 @@ The focused tests cover a successful verdict, HTTP failure, cancellation, and
 missing independent-judge configuration. Failures and cancellation persist as
 unscored evidence and never become a pass.
 
-The comparison UI retained both runs and explained the incompatibility rather
-than producing a misleading delta. It reported one unchanged case, zero fully
-scored comparable cases, and changed subject-model/generation conditions.
+The earlier comparison UI retained the local and paired-Mac runs and explained
+their incompatibility rather than producing a misleading delta. The later pair
+of physical `verification.echo` runs were compatible and produced a valid
+unchanged-case comparison.
 
 ## UI findings for follow-up
 
-1. A selected app-feature run shows `Provider not recorded · Local workspace`
-   in the status bar even though `developerExecution` provenance is present.
-   The footer should identify an app-feature target instead of implying that
+1. Still reproducible on the physical iPhone path at `c4dac19`: a selected
+   app-feature run shows `Provider not recorded · Local workspace` in the
+   status bar even though `developerExecution` provenance is present. The
+   footer should identify the app-feature target instead of implying that
    provenance is missing.
-2. A disconnected or deadline-exceeded device run presents a generic alert
-   whose message is the internal termination key
-   (`developerRunner:disconnected` or `developerRunner:deadlineExceeded`). The
-   saved run detail has the useful human-readable error, but the alert does not.
+2. Still reproducible on the physical iPhone path at `c4dac19`: disconnected
+   and deadline-exceeded runs present generic alerts containing the internal
+   termination keys (`developerRunner:disconnected` and
+   `developerRunner:deadlineExceeded`). The saved run detail has the useful
+   human-readable error, but the alert does not.
 3. Resolved in the follow-up: AI-rubric app-feature runs now perform their
    configured independent judge step as part of the initial evaluation.
 4. Fixed in the follow-up: clicking Disconnect had cleared authentication before
@@ -99,23 +135,33 @@ scored comparable cases, and changed subject-model/generation conditions.
   — passed.
 - `xcodebuild build -quiet -project Verification/DeveloperRunnerTestHost/DeveloperRunnerTestHost.xcodeproj -scheme DeveloperRunnerTestHost -destination 'generic/platform=iOS' -derivedDataPath /private/tmp/PR47RunnerHostGenericDeviceDerived2 CODE_SIGNING_ALLOWED=NO`
   — passed.
+- `xcodegen generate --spec Verification/DeveloperRunnerTestHost/project.yml`
+  — passed; the generated project remains ignored and disposable.
+- Physical Debug build of `DeveloperRunnerTestHost` with automatic signing,
+  provisioning updates, and device registration enabled against the connected
+  iPhone — passed from `c4dac19`. The development-team and device identifiers
+  are intentionally omitted.
+- `codesign --verify --deep --strict` on the physical-device product — passed;
+  the signed bundle used Apple Development identity and the expected app bundle.
+- `xcrun devicectl device install app` and `device process launch` for the
+  isolated host — passed. The installed host then completed the physical run
+  matrix described above.
 - `plutil -lint` on both generated host plists — passed.
 
 ## Remaining device gap
 
-Physical installation is the only acceptance path still blocked. It requires an
-explicitly authorized build with automatic provisioning/device registration,
-followed by real iPhone pairing, execution, cancellation/disconnect checks, and
-saved-run comparison. iPad execution remains unverified until an iPad is
-available.
+iPhone execution is verified. iPad execution remains unverified until an iPad
+is available.
 
 
-## Presentation corrections after verification
+## Presentation-check status after physical verification
 
-The footer now identifies the persisted app-feature runner instead of showing
-`Provider not recorded`. Terminal-run alerts prefer the readable saved sample
-error, preserve specific unsaved failure messages, and use readable transport
-fallbacks instead of exposing `developerRunner:` keys.
+The earlier local presentation checks expected the footer to identify the
+persisted app-feature runner and terminal alerts to prefer readable errors.
+Those tests passed, but the exact integrated physical flow at `c4dac19` still
+showed `Provider not recorded` and exposed the two `developerRunner:` keys.
+Those two live UI findings therefore remain open; the local rendered fixture is
+not treated as proof of the physical-device path.
 
 Validation on the integrated dashboard branch:
 - `DeveloperRunPresentationTests`: 3 tests passed.
@@ -124,9 +170,9 @@ Validation on the integrated dashboard branch:
   UI fixture. This render is presentation evidence, not a physical-device run.
 - Both invocations used `xcodebuild test -project FoundationEvals/FoundationEvals.xcodeproj -scheme FoundationEvals -destination 'platform=macOS' -derivedDataPath /private/tmp/FoundationEvals-PR47-UIFixes CODE_SIGNING_ALLOWED=NO`, selecting the respective suites with `-only-testing`.
 
-The physical provisioning boundary is an actual automatic approval rejection:
-registering the connected device and creating/updating Apple Developer signing
-profiles requires informed user approval before retrying. The request is pending.
+The physical provisioning boundary was cleared with explicit user approval.
+Automatic device registration/provisioning, signed build, installation, launch,
+pairing, and the runtime matrix all completed successfully.
 The configured AI-rubric judge path and reconnect corrections are now integrated
 on the dashboard branch at `9dd1229`. Sol verified initial judging, failure and
 cancellation evidence, and a fresh two-app Mac Disconnect → Connect flow without
@@ -136,4 +182,4 @@ The integrated source at `9dd1229` passed 79 focused native tests with zero
 failures or skips. Command:
 `xcodebuild test -quiet -project FoundationEvals/FoundationEvals.xcodeproj -scheme FoundationEvals -destination 'platform=macOS' -derivedDataPath /private/tmp/FoundationEvals-PR47-UIFixes -only-testing:FoundationEvalsTests/EvaluationDevelopmentWorkflowTests -only-testing:FoundationEvalsTests/DeveloperRunPresentationTests -only-testing:FoundationEvalsTests/WorkspacePresentationTests CODE_SIGNING_ALLOWED=NO`.
 This checks the combined backend workflow and UI presentation contracts; it
-does not replace the outstanding physical-device checks.
+did not replace the physical-device checks recorded above.
