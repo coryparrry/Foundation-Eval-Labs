@@ -48,3 +48,24 @@ validation, and remaining limitations to the parent task. Astra integrates the
 commit into the dashboard branch, connects the presentation, builds, and visually
 checks the integrated UI. Backend corrections remain Sol's responsibility.
 No publication, release, or claim of physical-device proof is implied.
+
+## UI checkpoint — 19 September 2026
+
+Implemented the project dashboard, metric cards, suite search/attention filter,
+latest-check navigation, suite-health summary, sidebar refinement, and run-history
+presentation. Components use semantic system colours and Reduce Motion-aware
+transitions. SwiftUX's Tickets Sales Dashboard and Inspora's Support analytics
+informed grouping and density; supplied library repositories were reviewed, with
+no third-party implementation copied or new runtime dependency required.
+
+Validation: macOS Debug `xcodebuild` passed after both visual correction rounds;
+`git diff --check` passed. The actual app was inspected with isolated storage:
+created starter suites, completed a three-case on-device receipt run, checked
+search/filter states, cross-suite latest-run navigation, and final result labels.
+A Luna High read-only review found three issues; all were corrected and rechecked.
+Light appearance was visually verified. Dark/compact SwiftUI preview rendering
+hit an Xcode timeout, so these appearances remain unverified.
+
+SDK/device presentation and final integration remain pending Sol's completion
+message. No backend changes or physical-device execution are claimed by this UI
+checkpoint. The parent task stops here without polling the backend task.

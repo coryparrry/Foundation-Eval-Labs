@@ -131,8 +131,8 @@ struct SuiteEditorView: View {
                 store: store, selectedPage: $selectedPage, selectedCaseID: $selectedCaseID
             )
         }
-        .navigationTitle("Foundation Evals")
-        .background(Color.primary.opacity(0.025))
+        .navigationTitle(store.draftSuite.name)
+        .background(WorkspaceStyle.canvas)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("Editor page", selection: $selectedPage) {

@@ -92,10 +92,7 @@ struct DashboardCard<Content: View>: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, minHeight: 190, maxHeight: 190, alignment: .topLeading)
-        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.12))
-        }
+        .workspaceSurface()
     }
 }
 
@@ -119,6 +116,12 @@ struct WorkbenchStatusBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            if store.selection == .overview {
+                Image(systemName: "square.stack").accessibilityHidden(true)
+                Text("\(store.suiteRecords.filter { !$0.isArchived }.count) suites")
+                Text("·")
+                Text("Project overview")
+            } else {
             Text("\(caseCount) case\(caseCount == 1 ? "" : "s")")
             Circle()
                 .fill(store.isRunning ? Color.accentColor : Color.secondary)
@@ -130,9 +133,12 @@ struct WorkbenchStatusBar: View {
                         ? "Run waiting to be saved"
                         : "\(store.runs.count) saved runs"
             )
+            }
             Spacer()
-            Text(provider)
-            Text("·")
+            if store.selection != .overview {
+                Text(provider)
+                Text("·")
+            }
             Text("Local workspace")
         }
         .font(.caption)
