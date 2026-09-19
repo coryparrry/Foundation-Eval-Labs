@@ -111,16 +111,17 @@ struct FoundationEvalsApp: App {
                 Divider()
 
                 Button("Run Evaluation") {
-                    store.startRun()
+                    do { try runnerStore.startSelectedRun(for: store) }
+                    catch { store.notice = error.localizedDescription }
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(store.isRunning || store.isProcessingFiles || store.runBlocker != nil)
+                .disabled(!runnerStore.canStartRun(for: store))
 
                 Button("Cancel Run") {
-                    store.cancelRun()
+                    runnerStore.cancelCurrentRun(for: store)
                 }
                 .keyboardShortcut(".", modifiers: [.command])
-                .disabled(!store.isRunning)
+                .disabled(!runnerStore.canCancelRun(for: store))
             }
         }
 

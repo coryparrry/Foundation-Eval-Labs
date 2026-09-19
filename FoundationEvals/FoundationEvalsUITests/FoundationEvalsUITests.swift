@@ -6,6 +6,37 @@ final class FoundationEvalsUITests: XCTestCase {
     }
 
     @MainActor
+    func testRunCommandsMatchInvalidSuiteControls() throws {
+        let app = XCUIApplication()
+        let storageName = UUID().uuidString
+        let storage = uiTestStorage(name: storageName)
+        defer { try? FileManager.default.removeItem(at: storage) }
+        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage-name", storageName]
+        app.launch()
+        defer { app.terminate() }
+        app.activate()
+        app.menuBars.menuBarItems["Evaluation"].click()
+        app.menuItems["Show Suite Editor"].click()
+        let prompt = app.textViews["Case prompt"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        prompt.click()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [])
+        XCTAssertFalse(app.buttons["Run evaluation"].isEnabled)
+
+        app.menuBars.menuBarItems["Evaluation"].click()
+        XCTAssertFalse(app.menuItems["Run Evaluation"].isEnabled)
+        XCTAssertFalse(app.menuItems["Cancel Run"].isEnabled)
+        let screenshot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        try screenshot.pngRepresentation.write(to: FileManager.default.temporaryDirectory
+            .appending(path: "foundation-evals-shortcut-menu.png"), options: .atomic)
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+    }
+
+    @MainActor
     func testSuiteEditorShowsPrimaryRunControls() throws {
         let app = XCUIApplication()
         let storageName = UUID().uuidString

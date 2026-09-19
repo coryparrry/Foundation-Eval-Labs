@@ -14,7 +14,7 @@ struct SuiteRunControls: View {
     private var activeRun: DeveloperRunStatus? {
         runners.executingRunID.flatMap { runners.status(for: $0) }
     }
-    private var busy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles || activeRun != nil }
+    private var busy: Bool { runners.isBusy(for: store) }
     private var runner: DeveloperRunnerSnapshot? { runners.selectedRunner }
     private var destinationName: String {
         runner?.identity.displayName ?? (runners.selectedRunnerID == nil ? "This Mac" : "Unavailable device")
@@ -22,22 +22,22 @@ struct SuiteRunControls: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 8) {
-            if store.isRunning || activeRun != nil {
+            if store.isRunning || runners.executingRunID != nil {
                 HStack {
                     ProgressView().controlSize(.small)
                     Text("\(store.completedSamples) / \(max(store.totalSamples, activeRun?.totalSamples ?? 0))")
                         .font(.caption.monospacedDigit())
                     Button("Cancel", role: .cancel) {
-                        if let activeRun { runners.cancelRun(activeRun.id) } else { store.cancelRun() }
+                        runners.cancelCurrentRun(for: store)
                     }
-                    .disabled(activeRun?.phase == .cancelled)
+                    .disabled(!runners.canCancelRun(for: store))
                 }
             } else if store.hasUnsavedCompletedRun {
                 Button("Retry save") { store.retryPendingRunSave() }.buttonStyle(.borderedProminent)
             } else {
                 Button("Run suite", systemImage: "play.fill", action: run)
                     .buttonStyle(.borderedProminent).controlSize(.large)
-                    .disabled(runners.runIssue(for: store) != nil || busy)
+                    .disabled(!runners.canStartRun(for: store))
                     .help(runners.runIssue(for: store) ?? "Run the current suite")
                     .accessibilityIdentifier("Run evaluation")
             }
@@ -113,8 +113,34 @@ struct SuiteRunControls: View {
 extension DeveloperRunnerStore {
     var selectedRunner: DeveloperRunnerSnapshot? { runners.first { $0.id == selectedRunnerID } }
 
+    func isBusy(for store: EvaluationStore) -> Bool {
+        store.isRunning || store.isReassessing || store.isProcessingFiles || executingRunID != nil
+    }
+
+    func canStartRun(for store: EvaluationStore) -> Bool {
+        !isBusy(for: store) && !store.hasUnsavedCompletedRun && runIssue(for: store) == nil
+    }
+
+    func canCancelRun(for store: EvaluationStore) -> Bool {
+        if let runID = executingRunID {
+            return status(for: runID)?.phase != .cancelled
+        }
+        return store.isRunning
+    }
+
+    func cancelCurrentRun(for store: EvaluationStore) {
+        if let runID = executingRunID {
+            cancelRun(runID)
+        } else {
+            store.cancelRun()
+        }
+    }
+
     @discardableResult
     func startSelectedRun(for store: EvaluationStore) throws -> UUID? {
+        guard !isBusy(for: store) else {
+            throw EvaluationStoreError.resourceConflict("Another evaluation operation is already running.")
+        }
         guard let runnerID = selectedRunnerID else { store.startRun(); return nil }
         if let issue = runIssue(for: store) { throw EvaluationStoreError.invalidSuite(issue) }
         guard let featureID = selectedFeatureID else { return nil }
