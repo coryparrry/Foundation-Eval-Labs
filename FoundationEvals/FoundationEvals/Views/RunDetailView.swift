@@ -44,6 +44,10 @@ struct RunDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let execution = run.developerExecution {
+                DeveloperExecutionSummary(execution: execution)
+                Divider()
+            }
             HStack {
                 Picker("Run view", selection: $showsWorkflow) {
                     Text("Workflow trace").tag(true)

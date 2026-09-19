@@ -81,5 +81,6 @@ struct EmptyRunHistoryRow: View {
 }
 
 #Preview {
-    ContentView(store: EvaluationStore())
+    let store = EvaluationStore()
+    ContentView(store: store).environment(DeveloperRunnerStore(evaluationStore: store))
 }

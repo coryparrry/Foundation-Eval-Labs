@@ -34,12 +34,12 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Run evaluation"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Add Case"].exists)
         XCTAssertTrue(app.buttons["Add Case"].isHittable)
-        XCTAssertTrue(app.buttons["Run details"].exists)
+        XCTAssertTrue(app.buttons["Run destination"].exists)
 
         selectSetup("Instructions", in: app)
         XCTAssertTrue(app.textViews["Model instructions"].exists)
         XCTAssertFalse(app.buttons["Add Files"].exists)
-        app.disclosureTriangles.containing(.staticText, identifier: "Reference files").firstMatch.click()
+        app.disclosureTriangles.matching(NSPredicate(format: "label BEGINSWITH %@", "Reference files")).firstMatch.click()
         XCTAssertTrue(app.buttons["Add Files"].exists)
 
         selectSetup("Model", in: app)

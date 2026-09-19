@@ -69,3 +69,29 @@ hit an Xcode timeout, so these appearances remain unverified.
 SDK/device presentation and final integration remain pending Sol's completion
 message. No backend changes or physical-device execution are claimed by this UI
 checkpoint. The parent task stops here without polling the backend task.
+
+
+## Integrated UI and backend checkpoint — 19 September 2026
+
+Sol's SDK/device commit and execution-teardown correction are integrated on
+`codex/developer-dashboard`. The app owns one shared runner store. The overview
+and toolbar open Devices & apps; the suite header selects a local evaluator or
+connected app feature. Pairing, disconnect, trust removal, run dispatch,
+cancellation, terminal errors, and saved device provenance use the backend's
+public contract. Comparison labels identify runner and OS and allow inspection
+of any saved run against an earlier run, without requiring baseline approval.
+
+The in-app Swift guide covers package setup, real-feature registration, hosting,
+local-network configuration, and pairing. It links to the repository; publication
+of the new package revision is separate from this local integration.
+
+Validation: the combined macOS Debug xcodebuild completed with BUILD SUCCEEDED.
+The native Devices empty state, integration guide, run destination chooser,
+Cases search and restoration, Instructions, and Model layout were inspected in
+isolated preview storage. A bounded independent UI review found cancellation and
+error-presentation issues; these were corrected and rechecked in source. Sol
+reported 13 SDK tests, 60 focused desktop tests, and a generic iOS Simulator
+product build passing. UI tests were updated but not executed. No signed physical
+device pairing/run was performed. Connected-device screens, cross-device
+comparison, dark/compact layouts, and remaining Setup pages are not visually
+verified; native inspection repeatedly disconnected when opening Scoring.

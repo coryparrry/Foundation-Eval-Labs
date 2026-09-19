@@ -1,13 +1,17 @@
 import SwiftUI
 
 #Preview("Dashboard · Light") {
-    WorkspaceOverviewView(store: dashboardPreviewStore())
+    let store = dashboardPreviewStore()
+    WorkspaceOverviewView(store: store)
+        .environment(DeveloperRunnerStore(evaluationStore: store))
         .frame(width: 1_000, height: 800)
         .preferredColorScheme(.light)
 }
 
 #Preview("Dashboard · Dark, compact") {
-    WorkspaceOverviewView(store: dashboardPreviewStore())
+    let store = dashboardPreviewStore()
+    WorkspaceOverviewView(store: store)
+        .environment(DeveloperRunnerStore(evaluationStore: store))
         .frame(width: 730, height: 1_100)
         .preferredColorScheme(.dark)
 }

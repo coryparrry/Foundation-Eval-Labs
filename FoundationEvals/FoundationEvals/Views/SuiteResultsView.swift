@@ -65,6 +65,10 @@ private struct WorkspaceRunRow: View {
                     }
                 }
                 .font(.caption)
+                if let execution = run.developerExecution {
+                    Label("\(execution.runnerName) · \(execution.operatingSystem)", systemImage: "laptopcomputer.and.iphone")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text("\(run.scoredCount) of \(run.results.count) responses scored · \(run.suiteVersion)")
                     .font(.caption2).foregroundStyle(.secondary)
             }
@@ -79,19 +83,37 @@ private struct WorkspaceRunRow: View {
 
 struct SuiteCompareView: View {
     @Bindable var store: EvaluationStore
+    @State private var selectedRunID: UUID?
+
+    private var currentRun: EvaluationRun? {
+        store.runs.first { $0.id == selectedRunID } ?? store.runs.first
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Compare").font(.title2.bold())
-            if let current = store.runs.first,
-               let baseline = BaselinePresentation.approvedRun(approval: store.activeBaselineApproval, runs: store.runs),
-               baseline.id != current.id {
-                RunAnalysisSection(run: current, baselineRuns: [baseline])
+            if store.runs.count > 1, let current = currentRun {
+                Picker("Run to inspect", selection: Binding(
+                    get: { current.id }, set: { selectedRunID = $0 }
+                )) {
+                    ForEach(store.runs) { run in
+                        Text(run.comparisonDisplayName).tag(run.id)
+                    }
+                }
+                Text("Choose an earlier run in Analysis to compare quality and latency across devices or revisions.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if let execution = current.developerExecution {
+                    DeveloperExecutionSummary(execution: execution)
+                }
+                RunAnalysisSection(run: current, baselineRuns: store.runs.filter {
+                    $0.id != current.id && $0.startedAt < current.startedAt
+                })
+                    .id(current.id)
             } else {
                 Label {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Compare results against your baseline").font(.headline)
-                        Text("Approve a completed run from its report, then run the suite again to see what changed.")
+                        Text("Compare your saved runs").font(.headline)
+                        Text("Run this suite at least twice to compare quality, latency, and failures. Device runs keep their hardware and OS details.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 } icon: { Image(systemName: "arrow.left.arrow.right").font(.title2) }
@@ -102,5 +124,14 @@ struct SuiteCompareView: View {
             Divider()
             SuiteExperimentsView(store: store)
         }
+    }
+}
+
+
+extension EvaluationRun {
+    var comparisonDisplayName: String {
+        let date = startedAt.formatted(date: .abbreviated, time: .shortened)
+        let target = developerExecution.map { "\($0.runnerName) · \($0.operatingSystem)" } ?? environment.model
+        return "\(date) · \(target) · \(suiteVersion)"
     }
 }

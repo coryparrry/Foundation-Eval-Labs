@@ -242,6 +242,7 @@ private struct SuiteEditorSelectionObserver: View {
 }
 
 private struct SuiteOverviewHeader: View {
+    @Environment(DeveloperRunnerStore.self) private var runners
     @Bindable var store: EvaluationStore
     @State private var showsDetails = false
     @State private var showsRunDetails = false
@@ -259,7 +260,7 @@ private struct SuiteOverviewHeader: View {
                         Text("·")
                         Text(store.draftSuite.scoringMode.title)
                         Text("·")
-                        Text(store.draftSuite.modelConfiguration.provider.title)
+                        Text(runners.selectedRunner?.identity.displayName ?? store.draftSuite.modelConfiguration.provider.title)
                         Button { showsDetails = true } label: { Image(systemName: "ellipsis.circle") }
                             .buttonStyle(.plain).padding(.leading, 4)
                             .accessibilityLabel("Suite details")
@@ -278,25 +279,10 @@ private struct SuiteOverviewHeader: View {
                     .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                VStack(alignment: .trailing, spacing: 8) {
-                    if store.isRunning {
-                        HStack {
-                            RunToolbarProgress(completed: store.completedSamples, total: store.totalSamples)
-                            Button("Cancel", role: .cancel) { store.cancelRun() }
-                        }
-                    } else if store.hasUnsavedCompletedRun {
-                        Button("Retry save") { store.retryPendingRunSave() }.buttonStyle(.borderedProminent)
-                    } else {
-                        Button("Run suite", systemImage: "play.fill") { store.startRun() }
-                            .buttonStyle(.borderedProminent).controlSize(.large)
-                            .disabled(store.runBlocker != nil || isBusy)
-                            .help(store.runBlocker ?? "Run the current suite")
-                            .accessibilityIdentifier("Run evaluation")
+                SuiteRunControls(store: store, runners: runners) { showsRunDetails = true }
+                    .popover(isPresented: $showsRunDetails) {
+                        RunReadinessPanel(store: store).frame(width: 560).padding(12)
                     }
-                    Button("Run details") { showsRunDetails = true }
-                        .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
-                        .popover(isPresented: $showsRunDetails) { RunReadinessPanel(store: store).frame(width: 560).padding(12) }
-                }
             }
             HStack(spacing: 6) {
                 Image(systemName: store.draftSaveFailed ? "exclamationmark.triangle" : "checkmark")
@@ -306,7 +292,7 @@ private struct SuiteOverviewHeader: View {
                      : "Saved automatically on this Mac")
             }
             .font(.caption2).foregroundStyle(store.draftSaveFailed ? Color.orange : .secondary)
-            if let blocker = store.runBlocker, !store.isRunning {
+            if let blocker = runners.runIssue(for: store), !store.isRunning {
                 Label(blocker, systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WorkspaceOverviewView: View {
     @Bindable var store: EvaluationStore
+    @Environment(DeveloperRunnerStore.self) private var runners
     @State private var savedSummaries: [SuiteOverviewSummary] = []
     @State private var loader = WorkspaceOverviewLoader()
     @State private var refresh = 0
@@ -12,7 +13,7 @@ struct WorkspaceOverviewView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles }
+    private var isBusy: Bool { store.isRunning || store.isReassessing || store.isProcessingFiles || runners.executingRunID != nil }
     private var records: [EvaluationSuiteRecord] { store.suiteRecords.filter { !$0.isArchived } }
     private var summaries: [SuiteOverviewSummary] { records.compactMap { summary(for: $0) } }
     private var isLoaded: Bool { summaries.count == records.count }
@@ -47,6 +48,7 @@ struct WorkspaceOverviewView: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 metrics
+                DeveloperConnectionBanner()
                 let layout = availableWidth >= 820
                     ? AnyLayout(HStackLayout(alignment: .top, spacing: 22))
                     : AnyLayout(VStackLayout(alignment: .leading, spacing: 22))
@@ -196,7 +198,7 @@ struct WorkspaceOverviewView: View {
         do {
             if id != store.selectedSuiteID { try store.switchSuite(id: id) }
             store.selection = .suite
-            if run { store.startRun() }
+            if run { try runners.startSelectedRun(for: store) }
         } catch { store.notice = error.localizedDescription }
     }
 

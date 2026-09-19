@@ -107,8 +107,7 @@ private struct RunAnalysisHeader: View {
     }
 
     private func baselineLabel(_ run: EvaluationRun) -> String {
-        let date = run.startedAt.formatted(date: .abbreviated, time: .standard)
-        return "\(run.suiteName) \(run.suiteVersion) · \(date) · \(run.environment.model)"
+        run.comparisonDisplayName
     }
 }
 

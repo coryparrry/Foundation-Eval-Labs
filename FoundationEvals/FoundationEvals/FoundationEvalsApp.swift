@@ -8,6 +8,7 @@ struct FoundationEvalsApp: App {
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(FoundationEvalsAppDelegate.self) private var appDelegate
     @State private var store: EvaluationStore
+    @State private var runnerStore: DeveloperRunnerStore
     @State private var telemetry: TelemetryController
     @State private var mcpSettings: MCPSettingsController
     private let updaterController = SPUStandardUpdaterController(
@@ -29,6 +30,7 @@ struct FoundationEvalsApp: App {
         _telemetry = State(initialValue: telemetry)
         telemetry.capture(.appOpened)
         _store = State(initialValue: store)
+        _runnerStore = State(initialValue: DeveloperRunnerStore(evaluationStore: store))
         _mcpSettings = State(initialValue: settings)
         mcpRuntime = runtime
     }
@@ -65,6 +67,7 @@ struct FoundationEvalsApp: App {
     var body: some Scene {
         WindowGroup(id: "evaluation-main", for: String.self) { _ in
             ContentView(store: store)
+                .environment(runnerStore)
                 .task(id: mcpSettings.installationState) {
                     appDelegate.runtime = mcpRuntime
                     guard !ProcessInfo.processInfo.arguments.contains("--disable-mcp-autostart") else { return }
