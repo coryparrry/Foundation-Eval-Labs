@@ -81,7 +81,7 @@ struct Options {
       --timeout <seconds>   Overall wait limit (default: 1800).
       --endpoint <url>      Running app MCP endpoint (default: http://127.0.0.1:17873/mcp).
 
-    The Foundation Evals macOS app must be running with its MCP connector started.
+    The Intents macOS app must be running with its MCP connector started.
     """
 }
 

@@ -35,7 +35,7 @@ private final class DeveloperRunnerTestHarness {
         let registry = DeveloperFeatureRegistry()
         let identity = DeveloperRunnerIdentity.current(
             id: Self.persistedRunnerID(),
-            displayName: "Foundation Evals verification host"
+            displayName: "Intents verification host"
         )
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory,

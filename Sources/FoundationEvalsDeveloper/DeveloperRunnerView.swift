@@ -23,7 +23,7 @@ public struct DeveloperRunnerView: View {
                     ContentUnavailableView(
                         "No Features Registered",
                         systemImage: "shippingbox",
-                        description: Text("Register at least one feature before connecting Foundation Evals.")
+                        description: Text("Register at least one feature before connecting Intents.")
                     )
                 } else {
                     ForEach(service.features) { feature in
@@ -70,7 +70,7 @@ public struct DeveloperRunnerView: View {
                 }
             }
         }
-        .navigationTitle("Foundation Evals Runner")
+        .navigationTitle("Intents Runner")
         .task {
             service.start()
             await service.refreshFeatures()

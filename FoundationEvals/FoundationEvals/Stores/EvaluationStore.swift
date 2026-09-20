@@ -819,7 +819,7 @@ final class EvaluationStore {
               let id = draftSuite.judgeConfiguration.connectionID,
               let connection = judgeConnections.first(where: { $0.id == id }) else { return nil }
         let images = draftSuite.attachments.count { $0.kind == .image }
-        return "Foundation Evals will send each case's instructions, effective input, candidate response, verified reference, bounded tool evidence"
+        return "Intents will send each case's instructions, effective input, candidate response, verified reference, bounded tool evidence"
             + (images > 0 ? ", and \(images) image attachment\(images == 1 ? "" : "s")" : "")
             + " to \(connection.name) at \(connection.baseURL). No application tools, other runs, secrets, or telemetry are sent."
     }

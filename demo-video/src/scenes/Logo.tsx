@@ -86,7 +86,7 @@ export const Logo = () => {
           position: "absolute",
         }}
       >
-        Foundation Evals
+        Intents
       </div>
     </AbsoluteFill>
   );

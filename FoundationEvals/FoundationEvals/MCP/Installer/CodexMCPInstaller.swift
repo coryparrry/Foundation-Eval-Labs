@@ -61,7 +61,7 @@ enum CodexMCPInstallerError: Error, Equatable, LocalizedError {
         case .conflictingConfiguration:
             "Codex already has an unmanaged foundation-evals MCP entry. Remove or rename it, then try again."
         case .malformedManagedBlock:
-            "The Foundation Evals managed block is incomplete or duplicated. No changes were made."
+            "The Intents managed block is incomplete or duplicated. No changes were made."
         case .unsafeFile:
             "The selected configuration target is not a regular file. No changes were made."
         case .concurrentModification:

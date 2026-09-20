@@ -274,7 +274,7 @@ actor EvaluationCompatibleJudgeClient {
 
     private func applyHeaders(to request: inout URLRequest, resolved: EvaluationResolvedJudgeConnection) {
         if let apiKey = resolved.apiKey, !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
-        if resolved.connection.kind == .openRouter { request.setValue("Foundation Evals", forHTTPHeaderField: "X-OpenRouter-Title") }
+        if resolved.connection.kind == .openRouter { request.setValue("Intents", forHTTPHeaderField: "X-OpenRouter-Title") }
     }
 
     private func validate(response: URLResponse, data: Data) throws {

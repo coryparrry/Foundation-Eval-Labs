@@ -7,7 +7,7 @@ selected by users are not included; their terms must be checked separately.
 Ship this file with binary distributions and regenerate it when pins change.
 
 ========================================================================
-Foundation Evals
+Intents
 
 MIT License
 

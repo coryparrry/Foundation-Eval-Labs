@@ -115,9 +115,9 @@ final class MCPSettingsController {
             userDefaults.removeObject(forKey: Self.legacyPortKey)
             installationState = .installed
             let successNotice: String? = switch receipt.change {
-            case .installed: "Foundation Evals is ready. Restart Codex to connect."
+            case .installed: "Intents is ready. Restart Codex to connect."
             case .updated: "The Codex connection was updated. Restart Codex to reconnect."
-            case .unchanged: "Foundation Evals is ready. Restart Codex if it does not appear."
+            case .unchanged: "Intents is ready. Restart Codex if it does not appear."
             case .removed: nil
             }
             do {
@@ -142,8 +142,8 @@ final class MCPSettingsController {
             userDefaults.removeObject(forKey: Self.legacyPortKey)
             installationState = .notConfigured
             notice = receipt.change == .removed
-                ? "Foundation Evals was removed from Codex. Restart Codex to apply the change."
-                : "No managed Foundation Evals entry was present."
+                ? "Intents was removed from Codex. Restart Codex to apply the change."
+                : "No managed Intents entry was present."
         } catch {
             installationState = .needsAttention
             notice = safeDescription(for: error)

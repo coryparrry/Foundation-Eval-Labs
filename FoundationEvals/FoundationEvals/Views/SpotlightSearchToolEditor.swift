@@ -116,7 +116,7 @@ private struct SpotlightContactIdentityEditor: View {
                     values: $identity.phoneNumbers
                 )
 
-                Text("These values are stored in the suite and passed directly to Apple's ContactResolver. Foundation Evals does not read the Contacts database.")
+                Text("These values are stored in the suite and passed directly to Apple's ContactResolver. Intents does not read the Contacts database.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

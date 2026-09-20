@@ -45,7 +45,7 @@
 		DA0000000000000000000014 /* DeveloperRunnerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperRunnerService.swift; sourceTree = "<group>"; };
 		DA0000000000000000000015 /* DeveloperRunnerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperRunnerClient.swift; sourceTree = "<group>"; };
 		DA0000000000000000000016 /* DeveloperRunnerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperRunnerView.swift; sourceTree = "<group>"; };
-		AFC28B46304733170023273E /* FoundationEvals.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FoundationEvals.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AFC28B46304733170023273E /* Intents.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Intents.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AFC28B533047331D0023273E /* FoundationEvalsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FoundationEvalsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AFC28B5D3047331D0023273E /* FoundationEvalsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FoundationEvalsUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -120,7 +120,7 @@
 		AFC28B47304733170023273E /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				AFC28B46304733170023273E /* FoundationEvals.app */,
+				AFC28B46304733170023273E /* Intents.app */,
 				AFC28B533047331D0023273E /* FoundationEvalsTests.xctest */,
 				AFC28B5D3047331D0023273E /* FoundationEvalsUITests.xctest */,
 			);
@@ -151,7 +151,7 @@
 				AFC28B6D304A00010023273E /* Hummingbird */,
 			);
 			productName = FoundationEvals;
-			productReference = AFC28B46304733170023273E /* FoundationEvals.app */;
+			productReference = AFC28B46304733170023273E /* Intents.app */;
 			productType = "com.apple.product-type.application";
 		};
 		AFC28B523047331D0023273E /* FoundationEvalsTests */ = {
@@ -427,16 +427,19 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				EXECUTABLE_NAME = FoundationEvals;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Configuration/AppInfo.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Foundation Evals";
+				INFOPLIST_KEY_CFBundleDisplayName = Intents;
+				INFOPLIST_KEY_CFBundleName = Intents;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.FoundationEvals;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = FoundationEvals;
+				PRODUCT_NAME = Intents;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -458,16 +461,19 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				EXECUTABLE_NAME = FoundationEvals;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Configuration/AppInfo.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Foundation Evals";
+				INFOPLIST_KEY_CFBundleDisplayName = Intents;
+				INFOPLIST_KEY_CFBundleName = Intents;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.FoundationEvals;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = FoundationEvals;
+				PRODUCT_NAME = Intents;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -497,7 +503,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FoundationEvals.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FoundationEvals";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Intents.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FoundationEvals";
 			};
 			name = Debug;
 		};
@@ -519,7 +525,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FoundationEvals.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FoundationEvals";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Intents.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FoundationEvals";
 			};
 			name = Release;
 		};
