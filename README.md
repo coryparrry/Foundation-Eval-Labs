@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src=".github/assets/readme-banner.png" alt="Foundation Evals logo on a coral and turquoise background." width="960">
+<img src=".github/assets/readme-banner.png" alt="Intents logo on a coral and turquoise background." width="960">
 
 **Put Apple's Foundation Models to the test.**
 
 Build an evaluation. Inspect the evidence. See what changed.
 
-<img src=".github/assets/foundation-evals-demo.gif" alt="Foundation Evals walkthrough: inspect the workflow trace timeline, span details, and evaluation report." width="960">
+<img src=".github/assets/foundation-evals-demo.gif" alt="Intents walkthrough: inspect the workflow trace timeline, span details, and evaluation report." width="960">
 
 ![macOS 27+](https://img.shields.io/badge/macOS-27%2B-111827?style=flat-square&logo=apple&logoColor=white)
 ![Swift](https://img.shields.io/badge/Swift-F05138?style=flat-square&logo=swift&logoColor=white)
@@ -18,7 +18,7 @@ Build an evaluation. Inspect the evidence. See what changed.
 
 </div>
 
-Foundation Evals is a native macOS workbench for testing Apple's Foundation Models. Create repeatable suites, inspect responses and execution traces, and compare saved runs as you refine prompts, settings, and tools. Its built-in MCP server lets a coding agent use the same evaluation workflow, with every run available to review in the app.
+Intents is a native macOS workbench for testing Apple's Foundation Models. Create repeatable suites, inspect responses and execution traces, and compare saved runs as you refine prompts, settings, and tools. Its built-in MCP server lets a coding agent use the same evaluation workflow, with every run available to review in the app.
 
 ## What you can do
 
@@ -40,9 +40,9 @@ Requirements:
 - A Mac that supports Apple Intelligence
 - Apple Intelligence enabled and the on-device model downloaded
 
-1. Download and open the latest **Foundation Evals.dmg**.
-2. Drag **Foundation Evals** onto the **Applications** shortcut in the window.
-3. Eject the **Foundation Evals** disk, then open the app from **Applications** and check that the model is ready.
+1. Download and open the latest **Intents.dmg**.
+2. Drag **Intents** onto the **Applications** shortcut in the window.
+3. Eject the **Intents** disk, then open the app from **Applications** and check that the model is ready.
 
 The app is signed with Developer ID and notarized by Apple.
 
@@ -79,13 +79,13 @@ saved run evidence, and the boundary with Apple's development-only Evaluations f
 
 ## Connect an agent
 
-Foundation Evals includes an MCP server so an agent can manage suites and references, run evaluations, inspect traces, and compare saved results.
+Intents includes an MCP server so an agent can manage suites and references, run evaluations, inspect traces, and compare saved results.
 
 To connect Codex:
 
-1. Open **Settings** in Foundation Evals.
+1. Open **Settings** in Intents.
 2. Choose **Connect to Codex**.
-3. Restart Codex and keep Foundation Evals open.
+3. Restart Codex and keep Intents open.
 
 The server provides an agent workflow guide during MCP initialization. Its HTTP endpoint is `http://127.0.0.1:17873/mcp` while the connector is running.
 
@@ -107,7 +107,7 @@ Use Xcode 27 with its command-line tools selected. From the repository root:
 ./script/build_and_run.sh
 ```
 
-This creates and opens a development build at `dist/Foundation Evals.app`. Quit the app before rebuilding. You can also open `FoundationEvals/FoundationEvals.xcodeproj` directly in Xcode.
+This creates and opens a development build at `dist/Intents.app`. Quit the app before rebuilding. You can also open `FoundationEvals/FoundationEvals.xcodeproj` directly in Xcode.
 
 Run the native tests on macOS 27 by opening the project in Xcode and choosing **Product > Test** with development signing configured. You can also use the command line:
 
@@ -136,4 +136,4 @@ The explicit portable-source dependency map lives in `script/ci_routes.py`. Upda
 
 ## License
 
-Foundation Evals is released under the [MIT License](LICENSE). Dependencies retain their own licenses; see [third-party notices](FoundationEvals/FoundationEvals/Resources/THIRD_PARTY_NOTICES.txt). Separately supplied model resources have their own terms.
+Intents is released under the [MIT License](LICENSE). Dependencies retain their own licenses; see [third-party notices](FoundationEvals/FoundationEvals/Resources/THIRD_PARTY_NOTICES.txt). Separately supplied model resources have their own terms.

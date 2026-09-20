@@ -351,7 +351,7 @@ actor MCPProtocolHandler {
     }
 
     private static let instructions = """
-    Use Foundation Evals to run repeatable model evaluations and inspect saved evidence.
+    Use Intents to run repeatable model evaluations and inspect saved evidence.
 
     1. Read eval_get_state first. Inspect the existing suite, active run, readiness blocker, selected provider, capabilities, limits, and planned workload. Resolve readiness problems before starting. Preserve the user's current setup unless the requested task requires changing it.
 

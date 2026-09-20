@@ -93,7 +93,7 @@ struct WorkspaceSidebar: View {
         .onChange(of: store.selectedSuiteID) { _, _ in runSearch = "" }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                Label("FOUNDATION EVALS", systemImage: "square.stack.3d.up.fill")
+                Label("INTENTS", systemImage: "square.stack.3d.up.fill")
                     .font(.system(size: 9, weight: .bold)).tracking(1.2)
                     .foregroundStyle(.secondary)
             Menu {

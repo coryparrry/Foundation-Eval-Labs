@@ -1,7 +1,7 @@
 """Deterministic protocol fixture for EvaluationHTTPLanguageModel.
 
 This is not an inference backend. It emits fixed, bounded NDJSON scenarios so the
-Foundation Evals custom-provider UI can exercise text, guided output, reasoning,
+The Intents custom-provider UI can exercise text, guided output, reasoning,
 tool continuation, failures, timeout, and cancellation.
 """
 
@@ -471,7 +471,7 @@ if __name__ == "__main__":
     server = FixtureServer((HOST, arguments.port), request_log=arguments.request_log)
     bound_port = server.server_address[1]
     print(
-        f"Foundation Evals protocol fixture listening on http://{HOST}:{bound_port}",
+        f"Intents protocol fixture listening on http://{HOST}:{bound_port}",
         flush=True,
     )
     print(

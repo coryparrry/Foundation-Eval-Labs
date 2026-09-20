@@ -40,7 +40,7 @@ struct ContentView: View {
             }
         }
         .alert(
-            "Foundation Evals",
+            "Intents",
             isPresented: Binding(
                 get: { store.notice != nil },
                 set: { if !$0 { store.notice = nil } }

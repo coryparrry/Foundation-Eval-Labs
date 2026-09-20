@@ -3,7 +3,7 @@ import SwiftUI
 
 struct DeveloperIntegrationGuideView: View {
     @Environment(\.dismiss) private var dismiss
-    private let packageURL = "https://github.com/coryparrry/Foundation-Eval-Labs.git"
+    private let packageURL = "https://github.com/coryparrry/Intents.git"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,7 +98,7 @@ struct DeveloperIntegrationGuideView: View {
     """
     private static let networkConfiguration = """
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Connect to Foundation Evals on your Mac.</string>
+    <string>Connect to Intents on your Mac.</string>
     <key>NSBonjourServices</key>
     <array><string>_fnd-evals._tcp</string></array>
     """

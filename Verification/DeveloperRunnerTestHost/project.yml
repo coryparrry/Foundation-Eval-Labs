@@ -21,7 +21,7 @@ targets:
         CFBundleDisplayName: Runner Test Host
         NSBonjourServices:
           - _fnd-evals._tcp
-        NSLocalNetworkUsageDescription: Connect this isolated verification host to Foundation Evals on the development Mac.
+        NSLocalNetworkUsageDescription: Connect this isolated verification host to Intents on the development Mac.
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -58,7 +58,7 @@ targets:
         CFBundleDisplayName: Runner Test Host
         NSBonjourServices:
           - _fnd-evals._tcp
-        NSLocalNetworkUsageDescription: Connect this isolated verification host to Foundation Evals on the development Mac.
+        NSLocalNetworkUsageDescription: Connect this isolated verification host to Intents on the development Mac.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.maniacmario.FoundationEvalsDeveloperTestHost.mac

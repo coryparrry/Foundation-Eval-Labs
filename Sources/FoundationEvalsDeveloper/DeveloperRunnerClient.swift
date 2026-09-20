@@ -153,7 +153,7 @@ public final class DeveloperRunnerClient {
 
     public init(
         desktopID: UUID,
-        displayName: String = "Foundation Evals",
+        displayName: String = "Intents",
         trustStoreURL: URL? = nil
     ) {
         self.desktopID = desktopID

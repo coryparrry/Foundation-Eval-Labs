@@ -85,7 +85,7 @@ and enables scheduled checks, automatic background downloads, and installation
 by default. Sparkle handles installation through its standard update flow;
 existing saved update preferences remain respected. End-to-end automatic installation and
 relaunch will be tested after release. The feed is
-`https://github.com/coryparrry/Foundation-Eval-Labs/releases/latest/download/appcast.xml`.
+`https://github.com/coryparrry/Intents/releases/latest/download/appcast.xml`.
 Each stable release must include its generated `appcast.xml` and be marked as the
 latest release. Drafts and prereleases do not advance this feed. Publish the feed
 and installer together; the feed points to that release's immutable download URL.
