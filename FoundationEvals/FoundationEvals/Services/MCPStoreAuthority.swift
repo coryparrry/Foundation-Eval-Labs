@@ -55,7 +55,35 @@ enum MCPStoreAuthority {
                     "markdown": .string(EvaluationReleaseCheckEvaluator.markdown(report))
                 ])
             case .projectReleaseReport(let arguments):
-                let report = try store.projectReleaseCheckReport(projectID: arguments.projectID)
+                let suiteReport = try store.projectReleaseCheckReport(projectID: arguments.projectID)
+                let persistence = scenarioPersistence(store)
+                let definitions = try await persistence.loadDefinitions().filter {
+                    $0.projectID == arguments.projectID
+                }
+                let runs = try await persistence.loadRuns()
+                let scenarioReports = definitions.map { definition in
+                    let run = runs.first {
+                        $0.scenarioID == definition.id
+                            && $0.scenarioVersion == definition.version
+                            && $0.scenarioDigest == definition.definitionDigest
+                    }
+                    let comparison = run.flatMap { candidate in
+                        runs.first(where: {
+                            $0.id != candidate.id
+                                && $0.scenarioID == candidate.scenarioID
+                                && $0.startedAt < candidate.startedAt
+                        }).map { ScenarioComparison.compare(baseline: $0, candidate: candidate) }
+                    }
+                    return ScenarioReleaseCheckEvaluator.report(
+                        definition: definition,
+                        run: run,
+                        comparison: comparison
+                    )
+                }
+                let report = EvaluationReleaseCheckEvaluator.integratingScenarios(
+                    suiteReport,
+                    scenarios: scenarioReports
+                )
                 return readPayload([
                     "report": try json(report),
                     "markdown": .string(EvaluationReleaseCheckEvaluator.projectMarkdown(report))
@@ -109,6 +137,10 @@ enum MCPStoreAuthority {
                 return try analyzeRun(arguments, store: store)
             case .listRuns(let arguments):
                 return try listRuns(arguments, store: store)
+            case .listScenarioRuns(let arguments):
+                return try await listScenarioRuns(arguments, store: store)
+            case .getScenarioReport(let arguments):
+                return try await getScenarioReport(arguments, store: store)
             case .cancelRun(let arguments):
                 let previous = store.runStatus(id: arguments.runID)
                 let operation = try store.cancelRun(id: arguments.runID)
@@ -141,6 +173,69 @@ enum MCPStoreAuthority {
                 return .object(value)
             })
         ])
+    }
+
+    private static func listScenarioRuns(
+        _ arguments: MCPListScenarioRunsArguments,
+        store: EvaluationStore
+    ) async throws -> MCPToolPayload {
+        let persistence = scenarioPersistence(store)
+        let offset = arguments.cursor.flatMap(Int.init) ?? 0
+        let limit = min(max(arguments.limit ?? 20, 1), 50)
+        let page = try await persistence.loadRunPage(
+            scenarioID: arguments.scenarioID,
+            offset: offset,
+            limit: limit
+        )
+        return readPayload([
+            "runs": .array(try page.runs.map { run in
+                try json([
+                    "id": run.id.uuidString,
+                    "scenarioID": run.scenarioID.uuidString,
+                    "scenarioVersion": String(run.scenarioVersion),
+                    "scenarioDigest": run.scenarioDigest,
+                    "executionStatus": run.executionStatus.rawValue,
+                    "outcome": run.outcome.rawValue,
+                    "startedAt": run.startedAt.ISO8601Format(),
+                    "completedAt": run.completedAt.ISO8601Format(),
+                    "device": run.environment.deviceModel,
+                    "operatingSystem": run.environment.operatingSystem
+                ])
+            }),
+            "nextCursor": page.hasMore ? .string(String(offset + page.runs.count)) : .null
+        ])
+    }
+
+    private static func getScenarioReport(
+        _ arguments: MCPGetScenarioReportArguments,
+        store: EvaluationStore
+    ) async throws -> MCPToolPayload {
+        let persistence = scenarioPersistence(store)
+        guard let run = try await persistence.loadRuns().first(where: { $0.id == arguments.runID }) else {
+            throw EvaluationStoreError.resourceNotFound("Intent Lab scenario run")
+        }
+        let definition = try await persistence.loadDefinitions().first {
+            $0.id == run.scenarioID && $0.version == run.scenarioVersion && $0.definitionDigest == run.scenarioDigest
+        }
+        let baseline = try await persistence.loadRuns(scenarioID: run.scenarioID).first {
+            $0.id != run.id && $0.startedAt < run.startedAt
+        }
+        let comparison = baseline.map { ScenarioComparison.compare(baseline: $0, candidate: run) }
+        let release = definition.map {
+            ScenarioReleaseCheckEvaluator.report(definition: $0, run: run, comparison: comparison)
+        }
+        let sharingCopy = await persistence.redactedSharingCopy(of: run)
+        return readPayload([
+            "run": try json(sharingCopy),
+            "diagnostic": .string(ScenarioDiagnosticClassifier.message(for: run.laneResults)),
+            "releaseCheck": try release.map(json) ?? .null
+        ])
+    }
+
+    private static func scenarioPersistence(_ store: EvaluationStore) -> ScenarioPersistence {
+        ScenarioPersistence(
+            rootDirectory: store.overviewStorageDirectory.appending(path: "IntentLab", directoryHint: .isDirectory)
+        )
     }
 
     private static func read(_ request: MCPResourceRequest, store: EvaluationStore) async -> MCPResourcePayload {

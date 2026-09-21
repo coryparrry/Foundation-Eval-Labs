@@ -31,6 +31,7 @@ Intents is a native macOS workbench for testing Apple's Foundation Models. Creat
 | **Models and tools** | Apple's on-device model, compatible Core AI models, custom HTTP providers, and configurable tools. |
 | **Agent integration** | An included MCP server for managing suites, running evaluations, and inspecting results. |
 | **App feature runners** | A public Swift package for evaluating real app closures on a paired iPhone, iPad, or Mac. [Integration guide](docs/DEVELOPER_SWIFT_INTEGRATION.md). |
+| **Intent Lab** | Run frozen App Intent and recognised-text Siri scenarios from a developer-owned UI-test target, then inspect separately labelled evidence. [Setup guide](docs/intent-lab.md). |
 
 ## Install
 

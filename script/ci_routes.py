@@ -23,6 +23,11 @@ SWIFT_DEPENDENCIES = {
         "EvaluationFieldAssertionTests",
         "MetricScorerTests",
     },
+    "Models/ScenarioModels.swift": {"ScenarioContractsTests"},
+    "Services/ScenarioComparison.swift": {"ScenarioContractsTests"},
+    "Services/ScenarioPersistence.swift": {"ScenarioContractsTests"},
+    "Services/ScenarioValidation.swift": {"ScenarioContractsTests"},
+    "Services/XCTestEvidenceImporter.swift": {"ScenarioContractsTests"},
     "Services/EvaluationFieldAssertions.swift": {"EvaluationFieldAssertionTests"},
     "Services/MetricScorer.swift": {"MetricScorerTests"},
     "Models/WorkflowTimelineInterval.swift": {

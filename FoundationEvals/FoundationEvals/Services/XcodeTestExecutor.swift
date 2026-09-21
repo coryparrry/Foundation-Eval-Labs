@@ -1,0 +1,710 @@
+import CryptoKit
+import Foundation
+
+struct XcodeTestConfiguration: Codable, Equatable, Sendable {
+    var containerPath: String
+    var isWorkspace: Bool
+    var scheme: String
+    var testTarget: String
+    var testBundleIdentifier: String
+    var destinationIdentifier: String
+    var generatedResourceDirectory: String
+    var harnessVersion: String? = nil
+    var harnessCapabilities: [String]? = nil
+    var applicationSigningConfigured: Bool? = nil
+    var testSigningConfigured: Bool? = nil
+    var configuration: String = "Debug"
+    var xcodebuildPath: String = "/usr/bin/xcodebuild"
+    var xcresulttoolPath: String = "/usr/bin/xcrun"
+}
+
+enum ScenarioPreflightState: String, Codable, Sendable {
+    case ready
+    case blocked
+    case unknown
+}
+
+struct ScenarioPreflightCheck: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var title: String
+    var state: ScenarioPreflightState
+    var detail: String
+}
+
+struct ScenarioPreflightReport: Codable, Equatable, Sendable {
+    var checks: [ScenarioPreflightCheck]
+    var isReady: Bool { checks.allSatisfy { $0.state == .ready } }
+}
+
+enum ScenarioDeviceReservation: Codable, Equatable, Sendable {
+    case reserved(invocationID: UUID)
+    case quarantined(reason: String)
+}
+
+struct ScenarioExecutorResult: Sendable {
+    var journal: ScenarioExecutionJournal
+    var resultBundleURL: URL
+    var attachmentDirectory: URL
+    var evidenceURLs: [URL]
+    var reportedTestCount: Int?
+    var processExitCode: Int32
+}
+
+enum XcodeTestExecutorError: LocalizedError, Sendable {
+    case preflight([ScenarioPreflightCheck])
+    case deviceUnavailable(String)
+    case activeExecution
+    case processLaunch(String)
+    case buildFailed(Int32, String)
+    case productMissing(String)
+    case resourceMismatch(String)
+    case testFailed(Int32, String)
+    case evidenceMissing
+    case cancelled
+    case timedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .preflight(let checks):
+            checks.filter { $0.state != .ready }.map(\.detail).joined(separator: " ")
+        case .deviceUnavailable(let reason): reason
+        case .activeExecution: "Another Intent Lab execution is already active."
+        case .processLaunch(let message): "Xcode could not start: \(message)"
+        case .buildFailed(let code, let log): "The UI-test bundle failed to build (exit \(code)). \(log)"
+        case .productMissing(let message): "The built product could not be verified: \(message)"
+        case .resourceMismatch(let message): "The generated test resources are invalid: \(message)"
+        case .testFailed(let code, let log): "The UI test failed (exit \(code)). Partial evidence was retained. \(log)"
+        case .evidenceMissing: "The result bundle contains no IntentLabEvidence JSON attachment."
+        case .cancelled: "The scenario execution was cancelled. Its final device-side outcome is not assumed."
+        case .timedOut: "The scenario execution exceeded its deadline. Late evidence remains bound to this timed-out invocation."
+        }
+    }
+}
+
+actor XcodeTestExecutor {
+    private struct ActiveExecution {
+        var invocationID: UUID
+        var destinationIdentifier: String
+        var process: Process
+        var journal: ScenarioExecutionJournal
+    }
+
+    private let workDirectory: URL
+    private let persistence: ScenarioPersistence
+    private let fileManager: FileManager
+    private var active: ActiveExecution?
+    private var reservations: [String: ScenarioDeviceReservation] = [:]
+    private var cancelledInvocationIDs: Set<UUID> = []
+
+    init(workDirectory: URL, persistence: ScenarioPersistence, fileManager: FileManager = .default) {
+        self.workDirectory = workDirectory
+        self.persistence = persistence
+        self.fileManager = fileManager
+    }
+
+    func reconcileInterruptedJournals() async throws -> [ScenarioExecutionJournal] {
+        let journals = try await persistence.loadJournals()
+        var recovered: [ScenarioExecutionJournal] = []
+        for var journal in journals where [.preparing, .running, .cancelling, .recoveryRequired].contains(journal.phase) {
+            removeInvocationTestRuns(derivedDataPath: journal.derivedDataPath)
+            if journal.phase != .recoveryRequired {
+                journal.phase = .recoveryRequired
+                journal.recoveryReason = "The desktop stopped before device-side termination and fixture readiness were established."
+                journal.updatedAt = Date()
+                try await persistence.saveJournal(journal)
+            }
+            reservations[journal.invocation.destinationIdentifier] = .quarantined(
+                reason: journal.recoveryReason ?? "Recovery is required."
+            )
+            recovered.append(journal)
+        }
+        return recovered
+    }
+
+    private func removeInvocationTestRuns(derivedDataPath: String) {
+        let products = URL(filePath: derivedDataPath).appending(path: "Build/Products", directoryHint: .isDirectory)
+        guard let files = try? fileManager.contentsOfDirectory(at: products, includingPropertiesForKeys: nil) else { return }
+        for file in files where file.lastPathComponent.hasPrefix("IntentLab-") && file.pathExtension == "xctestrun" {
+            try? fileManager.removeItem(at: file)
+        }
+    }
+
+    func reservation(for destinationIdentifier: String) -> ScenarioDeviceReservation? {
+        reservations[destinationIdentifier]
+    }
+
+    func hasActiveExecution() -> Bool {
+        active != nil
+    }
+
+    func clearQuarantine(destinationIdentifier: String, fixtureReadinessProven: Bool) async throws {
+        guard fixtureReadinessProven else {
+            throw XcodeTestExecutorError.deviceUnavailable(
+                "Prove that the prior test session stopped and the fixture is ready before clearing this device quarantine."
+            )
+        }
+        guard active == nil else {
+            throw XcodeTestExecutorError.deviceUnavailable(
+                "Wait for the cancelled host process to stop before clearing this device quarantine."
+            )
+        }
+        let journals = try await persistence.loadJournals()
+        for var journal in journals where
+            journal.invocation.destinationIdentifier == destinationIdentifier
+                && [.preparing, .running, .cancelling, .recoveryRequired].contains(journal.phase) {
+            journal.phase = .stopped
+            journal.recoveryReason = nil
+            journal.updatedAt = Date()
+            try await persistence.saveJournal(journal)
+        }
+        reservations[destinationIdentifier] = nil
+    }
+
+    func preflight(
+        definition: ScenarioDefinition,
+        configuration: XcodeTestConfiguration,
+        projectTrusted: Bool,
+        linkedFeatureEvidenceAvailable: Bool = false
+    ) -> ScenarioPreflightReport {
+        var checks: [ScenarioPreflightCheck] = []
+        func check(_ id: String, _ title: String, _ ready: Bool, _ detail: String) {
+            checks.append(.init(id: id, title: title, state: ready ? .ready : .blocked, detail: detail))
+        }
+
+        let container = URL(filePath: configuration.containerPath)
+        check("trust", "Project trust", projectTrusted,
+              projectTrusted ? "The developer approved this project for local build-script execution."
+                  : "Approve the selected project before Intents runs its build scripts.")
+        check("toolchain", "Xcode toolchain", fileManager.isExecutableFile(atPath: configuration.xcodebuildPath),
+              "Expected xcodebuild at \(configuration.xcodebuildPath).")
+        check("container", configuration.isWorkspace ? "Workspace" : "Project",
+              fileManager.fileExists(atPath: container.path), "Could not find \(container.path).")
+        check("scheme", "Scheme", !configuration.scheme.trimmingCharacters(in: .whitespaces).isEmpty,
+              "Choose the app-producing scheme.")
+        check("testTarget", "UI-test target", !configuration.testTarget.trimmingCharacters(in: .whitespaces).isEmpty,
+              "Choose the signed UI-test target containing testIntentLabScenario.")
+        check("testBundleIdentifier", "Test bundle identity",
+              configuration.testBundleIdentifier.contains("."),
+              "Enter the UI-test bundle identifier used by the signed test runner.")
+        let discoveredCapabilities = Set(configuration.harnessCapabilities ?? [])
+        check(
+            "harness",
+            "Intent Lab harness",
+            configuration.harnessVersion == ScenarioInvocationIdentity.currentHarnessVersion,
+            "Add INTENT_LAB_HARNESS_VERSION=\(ScenarioInvocationIdentity.currentHarnessVersion) to the UI-test target, then include IntentLabScenarioTests/testIntentLabScenario."
+        )
+        check("signing", "Device signing",
+              configuration.applicationSigningConfigured == true && configuration.testSigningConfigured == true,
+              "Select a development team for both the app and UI-test targets in Xcode Signing & Capabilities.")
+        check("payloadCapability", "Invocation payload", discoveredCapabilities.contains("environment-payload"),
+              "Declare the environment-payload harness capability on the UI-test target.")
+        check("fixtureCapability", "Fixture reset", discoveredCapabilities.contains("fixture-reset"),
+              "Provide the -intent-lab-reset launch path and declare fixture-reset.")
+        check("correlationCapability", "Invocation correlation", discoveredCapabilities.contains("invocation-correlation"),
+              "Expose the invocation context in the fixture and declare invocation-correlation.")
+        check("accessibilityCapability", "Accessible result", discoveredCapabilities.contains("accessible-result"),
+              "Expose the stable Intent Lab accessibility values and declare accessible-result.")
+        check("intentOutputCapability", "Intent output", discoveredCapabilities.contains("direct-intent-output"),
+              "Capture direct App Intent output fields and declare direct-intent-output.")
+        let destination = physicalDestination(configuration.destinationIdentifier)
+        check("destination", "Physical destination", destination.ready, destination.detail)
+
+        let definitionIssues = ScenarioValidator.issues(in: definition, requireFrozenDigest: true)
+        let definitionReady = !definitionIssues.contains { $0.severity == .error }
+        check("definition", "Frozen scenario", definitionReady,
+              definitionReady ? "The scenario digest and deterministic values are valid."
+                  : definitionIssues.filter { $0.severity == .error }.map(\.message).joined(separator: " "))
+        check(
+            "featureLane",
+            "App feature evidence",
+            definition.coverage.appFeature != .required || linkedFeatureEvidenceAvailable,
+            definition.coverage.appFeature == .required && !linkedFeatureEvidenceAvailable
+                ? "Link a saved production feature run before executing this required lane."
+                : "The device harness will preserve the declared Intent and Siri lane requirements."
+        )
+
+        if let reservation = reservations[configuration.destinationIdentifier] {
+            let detail: String
+            switch reservation {
+            case .reserved: detail = "The selected device already has an active scenario."
+            case .quarantined(let reason): detail = reason
+            }
+            check("reservation", "Device reservation", false, detail)
+        } else {
+            check("reservation", "Device reservation", true, "The selected device is available to the executor.")
+        }
+        return .init(checks: checks)
+    }
+
+    func execute(
+        definition: ScenarioDefinition,
+        configuration: XcodeTestConfiguration,
+        projectTrusted: Bool,
+        linkedFeatureEvidenceAvailable: Bool = false
+    ) async throws -> ScenarioExecutorResult {
+        guard active == nil else { throw XcodeTestExecutorError.activeExecution }
+        let report = preflight(
+            definition: definition,
+            configuration: configuration,
+            projectTrusted: projectTrusted,
+            linkedFeatureEvidenceAvailable: linkedFeatureEvidenceAvailable
+        )
+        guard report.isReady else { throw XcodeTestExecutorError.preflight(report.checks) }
+
+        let invocationID = UUID()
+        let invocationDirectory = workDirectory.appending(path: invocationID.uuidString, directoryHint: .isDirectory)
+        let derivedData = invocationDirectory.appending(path: "DerivedData", directoryHint: .isDirectory)
+        let resultBundle = invocationDirectory.appending(path: "IntentLab.xcresult", directoryHint: .isDirectory)
+        let attachments = invocationDirectory.appending(path: "Attachments", directoryHint: .isDirectory)
+        let buildLog = invocationDirectory.appending(path: "xcodebuild.log")
+        try fileManager.createDirectory(at: invocationDirectory, withIntermediateDirectories: true)
+
+        let testIdentity = ScenarioTestIdentity(
+            bundleIdentifier: configuration.testBundleIdentifier,
+            className: "IntentLabScenarioTests",
+            methodName: "testIntentLabScenario"
+        )
+        let invocation = ScenarioInvocationIdentity(
+            id: invocationID,
+            nonce: randomNonce(),
+            issuedAt: Date(),
+            testIdentity: testIdentity,
+            harnessVersion: ScenarioInvocationIdentity.currentHarnessVersion,
+            destinationIdentifier: configuration.destinationIdentifier,
+            scenarioDigest: definition.definitionDigest,
+            resultBundleIdentity: resultBundle.lastPathComponent,
+            appProduct: nil,
+            testProduct: nil
+        )
+        let commonArguments = xcodeArguments(
+            configuration: configuration,
+            derivedData: derivedData,
+            resultBundle: nil
+        )
+        var journal = ScenarioExecutionJournal(
+            phase: .preparing,
+            invocation: invocation,
+            scenarioID: definition.id,
+            scenarioVersion: definition.version,
+            resultBundlePath: resultBundle.path,
+            derivedDataPath: derivedData.path,
+            buildLogPath: buildLog.path,
+            intendedExecutable: configuration.xcodebuildPath,
+            intendedArguments: commonArguments + ["test-without-building"],
+            processIdentifier: nil,
+            processStartedAt: nil,
+            updatedAt: Date(),
+            recoveryReason: nil
+        )
+        reservations[configuration.destinationIdentifier] = .reserved(invocationID: invocationID)
+        try await persistence.saveJournal(journal)
+        var deviceTestLaunched = false
+        var invocationTestRunURL: URL?
+        defer {
+            if let invocationTestRunURL {
+                try? fileManager.removeItem(at: invocationTestRunURL)
+            }
+        }
+
+        do {
+            let buildExit = try await runProcess(
+                executable: configuration.xcodebuildPath,
+                arguments: commonArguments + ["build-for-testing"],
+                logURL: buildLog,
+                invocationID: invocationID,
+                destinationIdentifier: configuration.destinationIdentifier,
+                journal: journal,
+                appendLog: false,
+                deadline: .seconds(900)
+            )
+            guard buildExit == 0 else {
+                journal.phase = .stopped
+                journal.updatedAt = Date()
+                try await persistence.saveJournal(journal)
+                reservations[configuration.destinationIdentifier] = nil
+                throw XcodeTestExecutorError.buildFailed(buildExit, tail(of: buildLog))
+            }
+
+            let productPaths = try XCTestRunInvocationTransport.resolveProducts(
+                derivedData: derivedData,
+                testTarget: configuration.testTarget,
+                fileManager: fileManager
+            )
+            let products = try verifyBuiltProducts(
+                definition: definition,
+                configuration: configuration,
+                paths: productPaths
+            )
+            var boundInvocation = invocation
+            boundInvocation.appProduct = products.app
+            boundInvocation.testProduct = products.test
+            invocationTestRunURL = try XCTestRunInvocationTransport.materialize(
+                products: productPaths,
+                testTarget: configuration.testTarget,
+                definition: definition,
+                invocation: boundInvocation,
+                fileManager: fileManager
+            )
+            journal.invocation = boundInvocation
+            journal.phase = .running
+            journal.updatedAt = Date()
+            try await persistence.saveJournal(journal)
+
+            guard let invocationTestRunURL else {
+                throw XcodeTestExecutorError.resourceMismatch("the invocation-specific test configuration was not created")
+            }
+            let testArguments = [
+                "test-without-building",
+                "-xctestrun", invocationTestRunURL.path,
+                "-destination", "id=\(configuration.destinationIdentifier)",
+                "-resultBundlePath", resultBundle.path,
+                "-only-testing:\(configuration.testTarget)/\(testIdentity.className)/\(testIdentity.methodName)",
+            ]
+            journal.intendedArguments = testArguments
+            journal.updatedAt = Date()
+            try await persistence.saveJournal(journal)
+            deviceTestLaunched = true
+            let testDeadline = Duration.seconds(
+                definition.safety.deadlineSeconds * Double(definition.coverage.siriAttemptCount ?? 3) + 30
+            )
+            let testExit = try await runProcess(
+                executable: configuration.xcodebuildPath,
+                arguments: testArguments,
+                logURL: buildLog,
+                invocationID: invocationID,
+                destinationIdentifier: configuration.destinationIdentifier,
+                journal: journal,
+                appendLog: true,
+                deadline: testDeadline
+            )
+            guard !cancelledInvocationIDs.contains(invocationID) else {
+                throw XcodeTestExecutorError.cancelled
+            }
+
+            journal.phase = .stopped
+            journal.updatedAt = Date()
+            try await persistence.saveJournal(journal)
+            let evidenceURLs = try exportAttachments(
+                configuration: configuration,
+                resultBundle: resultBundle,
+                outputDirectory: attachments
+            )
+            let testCount = resultBundleTestCount(configuration: configuration, resultBundle: resultBundle)
+            guard !evidenceURLs.isEmpty else { throw XcodeTestExecutorError.evidenceMissing }
+            guard !cancelledInvocationIDs.contains(invocationID) else {
+                throw XcodeTestExecutorError.cancelled
+            }
+            active = nil
+            reservations[configuration.destinationIdentifier] = nil
+            return .init(
+                journal: journal,
+                resultBundleURL: resultBundle,
+                attachmentDirectory: attachments,
+                evidenceURLs: evidenceURLs,
+                reportedTestCount: testCount,
+                processExitCode: testExit
+            )
+        } catch {
+            active = nil
+            cancelledInvocationIDs.remove(invocationID)
+            let failure = recoveryFailure(for: error)
+            if ScenarioExecutionRecoveryPolicy.requiresQuarantine(
+                deviceTestLaunched: deviceTestLaunched,
+                failure: failure
+            ) {
+                journal.phase = .recoveryRequired
+                journal.recoveryReason = ScenarioExecutionRecoveryPolicy.reason(for: failure)
+                reservations[configuration.destinationIdentifier] = .quarantined(
+                    reason: journal.recoveryReason ?? "Device recovery is required."
+                )
+            } else if journal.phase != .recoveryRequired {
+                journal.phase = .stopped
+                reservations[configuration.destinationIdentifier] = nil
+            }
+            journal.updatedAt = Date()
+            try? await persistence.saveJournal(journal)
+            throw error
+        }
+    }
+
+    func cancelActiveExecution(grace: Duration = .seconds(5)) async -> ScenarioExecutionJournal? {
+        guard var execution = active else { return nil }
+        cancelledInvocationIDs.insert(execution.invocationID)
+        execution.journal.phase = .cancelling
+        execution.journal.updatedAt = Date()
+        active = execution
+        try? await persistence.saveJournal(execution.journal)
+        execution.process.interrupt()
+        try? await Task.sleep(for: grace)
+        if execution.process.isRunning { execution.process.terminate() }
+        execution.journal.phase = .recoveryRequired
+        execution.journal.recoveryReason = "Cancellation was requested; confirm device-side termination and fixture readiness."
+        execution.journal.updatedAt = Date()
+        try? await persistence.saveJournal(execution.journal)
+        reservations[execution.destinationIdentifier] = .quarantined(
+            reason: execution.journal.recoveryReason ?? "Device recovery is required."
+        )
+        return execution.journal
+    }
+
+    private func physicalDestination(_ identifier: String) -> (ready: Bool, detail: String) {
+        let requested = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requested.isEmpty else {
+            return (false, "Choose an enrolled physical iPhone destination identifier.")
+        }
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/xcrun")
+        process.arguments = ["xcdevice", "list", "--timeout", "3"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do { try process.run() } catch {
+            return (false, "Xcode device discovery could not start: \(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let devices = try? JSONSerialization.jsonObject(
+                with: output.fileHandleForReading.readDataToEndOfFile()
+              ) as? [[String: Any]],
+              let device = devices.first(where: { $0["identifier"] as? String == requested }) else {
+            return (false, "Xcode did not report the selected identifier as an available device.")
+        }
+        let physical = (device["simulator"] as? Bool) == false
+        let iPhone = (device["platform"] as? String) == "com.apple.platform.iphoneos"
+        let available = (device["available"] as? Bool) == true && (device["ignored"] as? Bool) != true
+        let name = device["name"] as? String ?? requested
+        guard physical, iPhone, available else {
+            return (false, "\(name) is not an available paired physical iPhone.")
+        }
+        return (true, "\(name) is reported by Xcode as an available physical iPhone.")
+    }
+
+    private func xcodeArguments(
+        configuration: XcodeTestConfiguration,
+        derivedData: URL,
+        resultBundle: URL?
+    ) -> [String] {
+        var arguments = [
+            configuration.isWorkspace ? "-workspace" : "-project", configuration.containerPath,
+            "-scheme", configuration.scheme,
+            "-configuration", configuration.configuration,
+            "-destination", "id=\(configuration.destinationIdentifier)",
+            "-derivedDataPath", derivedData.path
+        ]
+        if let resultBundle {
+            arguments += ["-resultBundlePath", resultBundle.path]
+        }
+        return arguments
+    }
+
+    func runProcess(
+        executable: String,
+        arguments: [String],
+        logURL: URL,
+        invocationID: UUID,
+        destinationIdentifier: String,
+        journal: ScenarioExecutionJournal,
+        appendLog: Bool,
+        deadline: Duration? = nil
+    ) async throws -> Int32 {
+        if !fileManager.fileExists(atPath: logURL.path) {
+            fileManager.createFile(atPath: logURL.path, contents: nil)
+        }
+        let logHandle = try FileHandle(forWritingTo: logURL)
+        if appendLog { try logHandle.seekToEnd() } else { try logHandle.truncate(atOffset: 0) }
+        defer { try? logHandle.close() }
+
+        let process = Process()
+        process.executableURL = URL(filePath: executable)
+        process.arguments = arguments
+        process.standardOutput = logHandle
+        process.standardError = logHandle
+        var runningJournal = journal
+        runningJournal.processStartedAt = Date()
+        do {
+            try process.run()
+        } catch {
+            throw XcodeTestExecutorError.processLaunch(error.localizedDescription)
+        }
+        runningJournal.processIdentifier = process.processIdentifier
+        runningJournal.updatedAt = Date()
+        active = .init(
+            invocationID: invocationID,
+            destinationIdentifier: destinationIdentifier,
+            process: process,
+            journal: runningJournal
+        )
+        defer {
+            if active?.invocationID == invocationID,
+               active?.process === process {
+                active = nil
+            }
+        }
+        try await persistence.saveJournal(runningJournal)
+        enum ProcessOutcome: Sendable {
+            case exited(Int32)
+            case deadline
+        }
+        let (outcomes, continuation) = AsyncStream.makeStream(of: ProcessOutcome.self)
+        process.terminationHandler = { terminated in
+            continuation.yield(.exited(terminated.terminationStatus))
+            continuation.finish()
+        }
+        let timeoutTask = deadline.map { deadline in
+            Task { @concurrent in
+                do {
+                    try await Task.sleep(for: deadline)
+                    continuation.yield(.deadline)
+                    continuation.finish()
+                } catch { }
+            }
+        }
+        let outcome = await outcomes.first { _ in true }
+        timeoutTask?.cancel()
+        guard case .some(.exited(let code)) = outcome else {
+            process.interrupt()
+            try? await Task.sleep(for: .seconds(2))
+            if process.isRunning { process.terminate() }
+            throw XcodeTestExecutorError.timedOut
+        }
+        if Task.isCancelled || cancelledInvocationIDs.contains(invocationID) {
+            throw XcodeTestExecutorError.cancelled
+        }
+        return code
+    }
+
+    private func recoveryFailure(for error: Error) -> ScenarioRecoveryFailure {
+        switch error {
+        case XcodeTestExecutorError.buildFailed:
+            .buildFailure
+        case XcodeTestExecutorError.cancelled:
+            .cancellation
+        case XcodeTestExecutorError.timedOut:
+            .timeout
+        case XcodeTestExecutorError.evidenceMissing:
+            .incompleteResultBundle
+        case XcodeTestExecutorError.resourceMismatch,
+             XcodeTestExecutorError.productMissing:
+            .invalidEvidence
+        default:
+            .unexpected
+        }
+    }
+
+    private func verifyBuiltProducts(
+        definition: ScenarioDefinition,
+        configuration: XcodeTestConfiguration,
+        paths: XCTestRunProductPaths
+    ) throws -> (app: ScenarioProductIdentity, test: ScenarioProductIdentity) {
+        guard fileManager.fileExists(atPath: paths.appBundleURL.path),
+              bundleIdentifier(at: paths.appBundleURL) == definition.target.bundleIdentifier else {
+            throw XcodeTestExecutorError.productMissing("no built app has bundle ID \(definition.target.bundleIdentifier)")
+        }
+        guard fileManager.fileExists(atPath: paths.testBundleURL.path) else {
+            throw XcodeTestExecutorError.productMissing("the \(configuration.testTarget) test bundle was not built")
+        }
+        return (
+            try productIdentity(bundle: paths.appBundleURL, fallbackBundleIdentifier: definition.target.bundleIdentifier),
+            try productIdentity(bundle: paths.testBundleURL, fallbackBundleIdentifier: configuration.testBundleIdentifier)
+        )
+    }
+
+    private func productIdentity(bundle: URL, fallbackBundleIdentifier: String) throws -> ScenarioProductIdentity {
+        let info = NSDictionary(contentsOf: bundle.appending(path: "Info.plist")) as? [String: Any]
+        let executableName = info?["CFBundleExecutable"] as? String ?? bundle.deletingPathExtension().lastPathComponent
+        let executable = bundle.appending(path: executableName)
+        guard let data = try? Data(contentsOf: executable, options: [.mappedIfSafe]) else {
+            throw XcodeTestExecutorError.productMissing("could not fingerprint \(bundle.lastPathComponent)")
+        }
+        return .init(
+            bundleIdentifier: info?["CFBundleIdentifier"] as? String ?? fallbackBundleIdentifier,
+            executableName: executableName,
+            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        )
+    }
+
+    private func bundleIdentifier(at bundle: URL) -> String? {
+        (NSDictionary(contentsOf: bundle.appending(path: "Info.plist")) as? [String: Any])?["CFBundleIdentifier"] as? String
+    }
+
+    private func exportAttachments(
+        configuration: XcodeTestConfiguration,
+        resultBundle: URL,
+        outputDirectory: URL
+    ) throws -> [URL] {
+        if fileManager.fileExists(atPath: outputDirectory.path) {
+            try fileManager.removeItem(at: outputDirectory)
+        }
+        let process = Process()
+        process.executableURL = URL(filePath: configuration.xcresulttoolPath)
+        process.arguments = [
+            "xcresulttool", "export", "attachments",
+            "--path", resultBundle.path,
+            "--output-path", outputDirectory.path,
+            "--filter", "*IntentLab*"
+        ]
+        let pipe = Pipe()
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let detail = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw XcodeTestExecutorError.resourceMismatch("xcresulttool could not export attachments: \(detail)")
+        }
+        guard let enumerator = fileManager.enumerator(at: outputDirectory, includingPropertiesForKeys: nil) else { return [] }
+        return enumerator.compactMap { $0 as? URL }.filter {
+            $0.pathExtension == "json" && $0.lastPathComponent.localizedCaseInsensitiveContains("IntentLabEvidence")
+        }
+    }
+
+    private func resultBundleTestCount(configuration: XcodeTestConfiguration, resultBundle: URL) -> Int? {
+        let process = Process()
+        process.executableURL = URL(filePath: configuration.xcresulttoolPath)
+        process.arguments = ["xcresulttool", "get", "test-results", "summary", "--path", resultBundle.path, "--compact"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do { try process.run() } catch { return nil }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let object = try? JSONSerialization.jsonObject(with: pipe.fileHandleForReading.readDataToEndOfFile()) else {
+            return nil
+        }
+        return findInteger(keys: ["totalTestCount", "testsCount", "testCount"], in: object)
+    }
+
+    private func findInteger(keys: Set<String>, in object: Any) -> Int? {
+        if let dictionary = object as? [String: Any] {
+            for (key, value) in dictionary where keys.contains(key) {
+                if let number = value as? NSNumber { return number.intValue }
+            }
+            for value in dictionary.values {
+                if let found = findInteger(keys: keys, in: value) { return found }
+            }
+        } else if let array = object as? [Any] {
+            for value in array {
+                if let found = findInteger(keys: keys, in: value) { return found }
+            }
+        }
+        return nil
+    }
+
+    private func tail(of url: URL, maximumBytes: Int = 8_000) -> String {
+        guard let data = try? Data(contentsOf: url) else { return "See the retained build log." }
+        return String(decoding: data.suffix(maximumBytes), as: UTF8.self)
+            .split(separator: "\n").suffix(20).joined(separator: "\n")
+    }
+
+    private func randomNonce() -> String {
+        var generator = SystemRandomNumberGenerator()
+        return (0..<32).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max, using: &generator)) }.joined()
+    }
+}
+
+private extension JSONDecoder {
+    static var intentLab: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+}

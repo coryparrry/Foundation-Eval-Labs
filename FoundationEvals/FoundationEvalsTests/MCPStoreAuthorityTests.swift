@@ -4,6 +4,114 @@ import Testing
 
 struct MCPStoreAuthorityTests {
     @MainActor
+    @Test func scenarioReportRedactsSensitiveObservationsAndScreenshots() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EvaluationStore(supportDirectory: directory)
+        let persistence = ScenarioPersistence(
+            rootDirectory: store.overviewStorageDirectory.appending(path: "IntentLab", directoryHint: .isDirectory)
+        )
+        var definition = ScenarioDefinition.starter()
+        definition.target.destinationIdentifier = "physical-device-1"
+        definition = try definition.frozen()
+        try await persistence.saveDefinition(definition)
+        let app = ScenarioProductIdentity(
+            bundleIdentifier: definition.target.bundleIdentifier,
+            executableName: "Fixture",
+            sha256: "app-sha"
+        )
+        let test = ScenarioProductIdentity(
+            bundleIdentifier: "dev.example.FixtureUITests",
+            executableName: "FixtureUITests",
+            sha256: "test-sha"
+        )
+        let invocation = ScenarioInvocationIdentity(
+            id: UUID(), nonce: UUID().uuidString, issuedAt: .now,
+            testIdentity: .init(
+                bundleIdentifier: test.bundleIdentifier,
+                className: "IntentLabScenarioTests",
+                methodName: "testIntentLabScenario"
+            ),
+            harnessVersion: ScenarioInvocationIdentity.currentHarnessVersion,
+            destinationIdentifier: definition.target.destinationIdentifier,
+            scenarioDigest: definition.definitionDigest,
+            resultBundleIdentity: UUID().uuidString,
+            appProduct: app,
+            testProduct: test
+        )
+        let now = Date()
+        let run = ScenarioRun(
+            id: invocation.id,
+            scenarioID: definition.id,
+            scenarioVersion: definition.version,
+            scenarioDigest: definition.definitionDigest,
+            invocation: invocation,
+            startedAt: now,
+            completedAt: now,
+            environment: .init(
+                xcodeVersion: "27", sdkVersion: "27", deviceModel: "iPhone",
+                operatingSystem: "iOS 27", languageCode: "en", regionCode: "GB",
+                timeZoneIdentifier: "Europe/London", executedAt: now
+            ),
+            executionStatus: .completed,
+            outcome: .passed,
+            laneResults: [.init(
+                caseID: definition.id,
+                attempt: 1,
+                lane: .intentIntegration,
+                executionStatus: .completed,
+                outcome: .passed,
+                startedAt: now,
+                completedAt: now,
+                observations: [
+                    "selectedNoteID": .string("packing-001"),
+                    "accountEmail": .string("secret@example.com"),
+                ],
+                assertionResults: [.init(
+                    assertionID: definition.assertions[0].id,
+                    passed: false,
+                    observedValue: .string("assertion-secret@example.com"),
+                    message: "Captured assertion-secret@example.com"
+                )],
+                diagnostic: "Device diagnostic diagnostic-secret@example.com",
+                proposedCause: "Device cause cause-secret@example.com",
+                artifacts: [.init(
+                    kind: .screenshot,
+                    filename: "private-screen.png",
+                    relativePath: "private-screen.png",
+                    contentType: "image/png",
+                    byteCount: 10,
+                    sha256: "screenshot-sha"
+                )]
+            )],
+            linkedFeatureRunID: nil,
+            importedAt: now,
+            responseAssessments: [.init(
+                assertionID: definition.assertions[0].id,
+                lane: .intentIntegration,
+                attempt: 1,
+                passed: false,
+                explanation: "Assessment quoted assessment-secret@example.com",
+                assessorIdentity: "test",
+                rubric: "Do not expose rubric-secret@example.com"
+            )]
+        )
+        _ = try await persistence.saveRun(run, artifactRoot: nil)
+
+        let payload = await MCPStoreAuthority.make(store: store).call(.getScenarioReport(.init(runID: run.id)))
+        let text = try payload.structuredContent.jsonText()
+
+        #expect(text.contains("packing-001"))
+        #expect(!text.contains("secret@example.com"))
+        #expect(!text.contains("assertion-secret@example.com"))
+        #expect(!text.contains("assessment-secret@example.com"))
+        #expect(!text.contains("rubric-secret@example.com"))
+        #expect(!text.contains("diagnostic-secret@example.com"))
+        #expect(!text.contains("cause-secret@example.com"))
+        #expect(!text.contains("private-screen.png"))
+    }
+
+    @MainActor
     @Test func stateUsesOneAuthoritativeSuiteWhileTheUIDraftIsInvalid() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

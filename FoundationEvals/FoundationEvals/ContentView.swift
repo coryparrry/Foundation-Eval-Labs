@@ -2,9 +2,18 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var store: EvaluationStore
+    @State private var scenarioCoordinator: ScenarioCoordinator
     @Environment(DeveloperRunnerStore.self) private var runners
     @State private var showsDevices = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
+    init(store: EvaluationStore) {
+        self.store = store
+        _scenarioCoordinator = State(initialValue: ScenarioCoordinator(
+            supportDirectory: store.overviewStorageDirectory,
+            evaluationStore: store
+        ))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +69,8 @@ struct ContentView: View {
             switch store.selection {
             case .overview:
                 WorkspaceOverviewView(store: store)
+            case .intentLab:
+                IntentLabView(coordinator: scenarioCoordinator)
             case .suite:
                 SuiteEditorView(store: store)
                     .disclosureGroupStyle(FullWidthDisclosureStyle())

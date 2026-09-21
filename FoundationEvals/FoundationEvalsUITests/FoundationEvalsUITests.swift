@@ -6,6 +6,55 @@ final class FoundationEvalsUITests: XCTestCase {
     }
 
     @MainActor
+    func testIntentLabOpensWithScenarioAndConnectionControls() throws {
+        let app = XCUIApplication()
+        let storageName = UUID().uuidString
+        let storage = uiTestStorage(name: storageName)
+        defer { try? FileManager.default.removeItem(at: storage) }
+        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage-name", storageName]
+        app.launch()
+        defer { app.terminate() }
+        app.activate()
+        app.typeKey("2", modifierFlags: .command)
+
+        XCTAssertTrue(app.staticTexts["Intent Lab"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Connect signed UI tests"].exists)
+        XCTAssertTrue(app.buttons["Run preflight"].exists)
+
+        app.buttons["Scenario"].click()
+        XCTAssertTrue(app.staticTexts["Define the expected outcome"].exists)
+        XCTAssertTrue(app.buttons["Run scenario"].exists)
+
+        app.buttons["Results"].click()
+        XCTAssertTrue(app.staticTexts["No scenario evidence"].waitForExistence(timeout: 3))
+        let title = app.staticTexts["Intent Lab page title"]
+        XCTAssertGreaterThan(title.frame.minY - app.windows.firstMatch.frame.minY, 45,
+                             "The page header must remain below the window toolbar")
+        XCTAssertLessThan(title.frame.minY - app.windows.firstMatch.frame.minY, 120,
+                          "Results must keep the page header at the top of the window")
+        XCTAssertLessThan(app.staticTexts["No scenario evidence"].frame.minY - title.frame.minY, 180,
+                          "The empty state must sit directly beneath page navigation")
+        let resultsAttachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        resultsAttachment.name = "Intent Lab results"
+        resultsAttachment.lifetime = .keepAlways
+        add(resultsAttachment)
+        app.buttons["Scenario"].click()
+
+        XCTAssertTrue(app.textFields["Scenario name"].isHittable)
+        XCTAssertTrue(app.buttons["Run scenario"].isHittable)
+
+        let screenshot = app.windows.firstMatch.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = "Intent Lab initial state"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        try screenshot.pngRepresentation.write(
+            to: FileManager.default.temporaryDirectory.appending(path: "foundation-evals-intent-lab.png"),
+            options: .atomic
+        )
+    }
+
+    @MainActor
     func testRunCommandsMatchInvalidSuiteControls() throws {
         let app = XCUIApplication()
         let storageName = UUID().uuidString
