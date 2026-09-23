@@ -2,10 +2,11 @@ import CryptoKit
 import XCTest
 
 enum EvidenceAttachmentWriter {
-    static func attach(_ envelope: IntentLabEvidenceEnvelope, to testCase: XCTestCase) throws {
+    static func attach(_ envelope: IntentLabEvidenceEnvelope, to testCase: XCTestCase, checkpoint: Bool = false) throws {
         let data = try JSONEncoder.intentLab.encode(envelope)
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
-        attachment.name = "IntentLabEvidence-\(envelope.invocation.id.uuidString).json"
+        let stage = checkpoint ? "checkpoint" : "final"
+        attachment.name = "IntentLabEvidence-\(envelope.invocation.id.uuidString)-\(stage).json"
         attachment.lifetime = .keepAlways
         testCase.add(attachment)
     }

@@ -8,6 +8,9 @@ struct IntentLabFixtureApp: App {
     init() {
         #if INTENT_LAB_TEST_SUPPORT
         if CommandLine.arguments.contains("-intent-lab-reset") {
+            // Siri activation can outlast the phone’s normal auto-lock interval.
+            // Keep only this test fixture awake for its lifetime.
+            UIApplication.shared.isIdleTimerDisabled = true
             FixtureState.reset()
         }
         if let index = CommandLine.arguments.firstIndex(of: "-intent-lab-context"),

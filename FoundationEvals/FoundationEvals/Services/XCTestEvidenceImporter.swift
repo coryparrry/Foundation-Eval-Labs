@@ -202,6 +202,10 @@ struct XCTestEvidenceImporter: Sendable {
             throw ScenarioEvidenceImportError.invalidResult("duplicate case, lane, and attempt coordinates")
         }
         for result in results {
+            let assertionIDs = result.assertionResults.map(\.assertionID)
+            guard Set(assertionIDs).count == assertionIDs.count else {
+                throw ScenarioEvidenceImportError.invalidResult("duplicate assertion IDs")
+            }
             guard result.caseID == definition.id, result.attempt > 0 else {
                 throw ScenarioEvidenceImportError.invalidResult("a result has the wrong case ID or attempt number")
             }

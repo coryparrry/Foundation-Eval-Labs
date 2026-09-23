@@ -45,9 +45,16 @@ struct ScenarioExecutorResult: Sendable {
     var journal: ScenarioExecutionJournal
     var resultBundleURL: URL
     var attachmentDirectory: URL
-    var evidenceURLs: [URL]
+    var evidenceAttachments: [ScenarioEvidenceAttachment]
     var reportedTestCount: Int?
     var processExitCode: Int32
+    var testFailureMessages: [String]
+}
+
+struct ScenarioEvidenceAttachment: Equatable, Sendable {
+    var url: URL
+    var name: String
+    var isCheckpoint: Bool { name.contains("-checkpoint") }
 }
 
 enum XcodeTestExecutorError: LocalizedError, Sendable {
@@ -78,6 +85,28 @@ enum XcodeTestExecutorError: LocalizedError, Sendable {
         case .cancelled: "The scenario execution was cancelled. Its final device-side outcome is not assumed."
         case .timedOut: "The scenario execution exceeded its deadline. Late evidence remains bound to this timed-out invocation."
         }
+    }
+}
+
+enum XcodeTestDeadlineBudget {
+    static let xcodeStartupAndFinalizationSeconds = 60.0
+    static let fixtureStartupAndInspectionSeconds = 15.0
+    static let siriActivationWaitSeconds = 60.0
+
+    /// ScenarioValidation bounds the configured wait to 1...900 seconds and
+    /// the Siri attempt count to 1...3 before an execution reaches this budget.
+    static func seconds(for definition: ScenarioDefinition) -> Double {
+        let scenarioWaitSeconds = definition.safety.deadlineSeconds
+        let includesDirectLane = definition.coverage.intentIntegration != .notApplicable
+        let siriAttemptCount = definition.coverage.siri == .notApplicable
+            ? 0
+            : (definition.coverage.siriAttemptCount ?? 3)
+        let fixtureCount = (includesDirectLane ? 1 : 0) + siriAttemptCount
+        let directLaneSeconds = includesDirectLane ? scenarioWaitSeconds : 0
+        let siriSeconds = Double(siriAttemptCount) * (siriActivationWaitSeconds + scenarioWaitSeconds)
+        let fixtureSeconds = Double(fixtureCount) * fixtureStartupAndInspectionSeconds
+
+        return xcodeStartupAndFinalizationSeconds + fixtureSeconds + directLaneSeconds + siriSeconds
     }
 }
 
@@ -119,6 +148,23 @@ actor XcodeTestExecutor {
             recovered.append(journal)
         }
         return recovered
+    }
+
+    func currentRecoveryJournals() async throws -> [ScenarioExecutionJournal] {
+        try await persistence.loadJournals().filter { $0.phase == .recoveryRequired }
+    }
+
+    func finishEvidenceValidation(journal: ScenarioExecutionJournal, accepted: Bool) async throws {
+        var finished = journal
+        let destination = journal.invocation.destinationIdentifier
+        finished.phase = accepted ? .stopped : .recoveryRequired
+        finished.recoveryReason = accepted ? nil : ScenarioExecutionRecoveryPolicy.reason(for: .invalidEvidence)
+        finished.updatedAt = Date()
+        if !accepted {
+            reservations[destination] = .quarantined(reason: finished.recoveryReason!)
+        }
+        try await persistence.saveJournal(finished)
+        if accepted { reservations[destination] = nil }
     }
 
     private func removeInvocationTestRuns(derivedDataPath: String) {
@@ -361,9 +407,7 @@ actor XcodeTestExecutor {
             journal.updatedAt = Date()
             try await persistence.saveJournal(journal)
             deviceTestLaunched = true
-            let testDeadline = Duration.seconds(
-                definition.safety.deadlineSeconds * Double(definition.coverage.siriAttemptCount ?? 3) + 30
-            )
+            let testDeadline = Duration.seconds(XcodeTestDeadlineBudget.seconds(for: definition))
             let testExit = try await runProcess(
                 executable: configuration.xcodebuildPath,
                 arguments: testArguments,
@@ -378,28 +422,29 @@ actor XcodeTestExecutor {
                 throw XcodeTestExecutorError.cancelled
             }
 
+            // Keep the persisted journal running until the host validates the evidence.
             journal.phase = .stopped
             journal.updatedAt = Date()
-            try await persistence.saveJournal(journal)
-            let evidenceURLs = try exportAttachments(
+            let evidenceAttachments = try exportAttachments(
                 configuration: configuration,
                 resultBundle: resultBundle,
-                outputDirectory: attachments
+                outputDirectory: attachments,
+                invocationID: invocationID
             )
             let testCount = resultBundleTestCount(configuration: configuration, resultBundle: resultBundle)
-            guard !evidenceURLs.isEmpty else { throw XcodeTestExecutorError.evidenceMissing }
+            guard !evidenceAttachments.isEmpty else { throw XcodeTestExecutorError.evidenceMissing }
             guard !cancelledInvocationIDs.contains(invocationID) else {
                 throw XcodeTestExecutorError.cancelled
             }
             active = nil
-            reservations[configuration.destinationIdentifier] = nil
             return .init(
                 journal: journal,
                 resultBundleURL: resultBundle,
                 attachmentDirectory: attachments,
-                evidenceURLs: evidenceURLs,
+                evidenceAttachments: evidenceAttachments,
                 reportedTestCount: testCount,
-                processExitCode: testExit
+                processExitCode: testExit,
+                testFailureMessages: resultBundleFailureMessages(configuration: configuration, resultBundle: resultBundle)
             )
         } catch {
             active = nil
@@ -610,8 +655,9 @@ actor XcodeTestExecutor {
     private func exportAttachments(
         configuration: XcodeTestConfiguration,
         resultBundle: URL,
-        outputDirectory: URL
-    ) throws -> [URL] {
+        outputDirectory: URL,
+        invocationID: UUID
+    ) throws -> [ScenarioEvidenceAttachment] {
         if fileManager.fileExists(atPath: outputDirectory.path) {
             try fileManager.removeItem(at: outputDirectory)
         }
@@ -626,15 +672,93 @@ actor XcodeTestExecutor {
         let pipe = Pipe()
         process.standardError = pipe
         try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            let detail = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let detail = String(decoding: output, as: UTF8.self)
             throw XcodeTestExecutorError.resourceMismatch("xcresulttool could not export attachments: \(detail)")
         }
-        guard let enumerator = fileManager.enumerator(at: outputDirectory, includingPropertiesForKeys: nil) else { return [] }
-        return enumerator.compactMap { $0 as? URL }.filter {
-            $0.pathExtension == "json" && $0.lastPathComponent.localizedCaseInsensitiveContains("IntentLabEvidence")
+        let manifest = try Data(contentsOf: outputDirectory.appending(path: "manifest.json"))
+        try Self.restoreArtifactFilenames(in: manifest, root: outputDirectory)
+        return Self.evidenceAttachments(in: manifest, root: outputDirectory, invocationID: invocationID)
+    }
+
+    static func restoreArtifactFilenames(in manifest: Data, root: URL) throws {
+        let entries = try JSONSerialization.jsonObject(with: manifest) as? [[String: Any]] ?? []
+        let root = root.standardizedFileURL.resolvingSymlinksInPath()
+        var restored: Set<String> = []
+        for entry in entries where entry["testIdentifier"] as? String == "IntentLabScenarioTests/testIntentLabScenario()" {
+            for item in entry["attachments"] as? [[String: Any]] ?? [] {
+                guard let name = item["suggestedHumanReadableName"] as? String,
+                      name.hasPrefix("IntentLabArtifact-"),
+                      let id = UUID(uuidString: String(name.dropFirst("IntentLabArtifact-".count).prefix(36))),
+                      let filename = item["exportedFileName"] as? String,
+                      filename == URL(filePath: filename).lastPathComponent,
+                      filename.hasSuffix(".png") else { continue }
+                let source = root.appending(path: filename).resolvingSymlinksInPath()
+                guard source.deletingLastPathComponent() == root else {
+                    throw XcodeTestExecutorError.resourceMismatch("An exported artifact escapes the attachment directory.")
+                }
+                let canonicalName = "IntentLabArtifact-\(id.uuidString).png"
+                guard restored.insert(canonicalName).inserted else {
+                    throw XcodeTestExecutorError.resourceMismatch("Duplicate exported artifact identity.")
+                }
+                let destination = root.appending(path: canonicalName)
+                if source != destination {
+                    try FileManager.default.copyItem(at: source, to: destination)
+                }
+            }
         }
+    }
+
+    static func evidenceAttachments(in manifest: Data, root: URL, invocationID: UUID) -> [ScenarioEvidenceAttachment] {
+        guard let entries = (try? JSONSerialization.jsonObject(with: manifest)) as? [[String: Any]] else { return [] }
+        let prefix = "IntentLabEvidence-\(invocationID.uuidString)"
+        let attachments = entries
+            .filter { $0["testIdentifier"] as? String == "IntentLabScenarioTests/testIntentLabScenario()" }
+            .flatMap { $0["attachments"] as? [[String: Any]] ?? [] }
+            .compactMap { item -> ScenarioEvidenceAttachment? in
+                guard let filename = item["exportedFileName"] as? String,
+                      let name = item["suggestedHumanReadableName"] as? String,
+                      name.hasPrefix(prefix),
+                      filename == URL(filePath: filename).lastPathComponent,
+                      filename.hasSuffix(".json") else { return nil }
+                let url = root.appending(path: filename)
+                guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+                return .init(url: url, name: name)
+            }
+        let finals = attachments.filter { !$0.isCheckpoint }
+        return finals.isEmpty ? attachments : finals
+    }
+
+    private func resultBundleFailureMessages(configuration: XcodeTestConfiguration, resultBundle: URL) -> [String] {
+        let process = Process()
+        process.executableURL = URL(filePath: configuration.xcresulttoolPath)
+        process.arguments = ["xcresulttool", "get", "test-results", "tests", "--path", resultBundle.path, "--compact"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return [] }
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let object = try? JSONSerialization.jsonObject(with: output) else {
+            return []
+        }
+        return Self.failureMessages(in: object)
+    }
+
+    static func failureMessages(in object: Any) -> [String] {
+        if let dictionary = object as? [String: Any] {
+            let message = dictionary["nodeType"] as? String == "Failure Message"
+                ? dictionary["name"] as? String : nil
+            return (message.map { [String($0.prefix(500))] } ?? [])
+                + dictionary.values.flatMap { failureMessages(in: $0) }
+        }
+        if let array = object as? [Any] {
+            return array.flatMap { failureMessages(in: $0) }
+        }
+        return []
     }
 
     private func resultBundleTestCount(configuration: XcodeTestConfiguration, resultBundle: URL) -> Int? {
@@ -643,11 +767,12 @@ actor XcodeTestExecutor {
         process.arguments = ["xcresulttool", "get", "test-results", "summary", "--path", resultBundle.path, "--compact"]
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0,
-              let object = try? JSONSerialization.jsonObject(with: pipe.fileHandleForReading.readDataToEndOfFile()) else {
+              let object = try? JSONSerialization.jsonObject(with: output) else {
             return nil
         }
         return findInteger(keys: ["totalTestCount", "testsCount", "testCount"], in: object)

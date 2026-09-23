@@ -162,6 +162,29 @@ struct ScenarioContractsTests {
         #expect(issues.contains { $0.message.contains("finite") })
     }
 
+    @Test func duplicateAssertionEvidenceIsRejectedWithoutConsumingInvocation() throws {
+        let definition = try scenario()
+        let invocation = invocation(for: definition)
+        var envelope = evidence(for: definition, invocation: invocation)
+        envelope.results[0].assertionResults.append(envelope.results[0].assertionResults[0])
+        try expectRejected(envelope, definition: definition,
+            journal: journal(for: definition, invocation: invocation, phase: .stopped),
+            root: temporaryDirectory(), importer: XCTestEvidenceImporter())
+    }
+
+    @Test func rejectedEvidenceImmediatelyExposesRecovery() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = ScenarioPersistence(rootDirectory: root)
+        let executor = XcodeTestExecutor(workDirectory: root.appending(path: "Executor"), persistence: persistence)
+        let definition = try scenario()
+        let invocation = invocation(for: definition)
+        let stopped = journal(for: definition, invocation: invocation, phase: .stopped)
+        try await executor.finishEvidenceValidation(journal: stopped, accepted: false)
+        #expect(await executor.reservation(for: invocation.destinationIdentifier) != nil)
+        #expect(try await executor.currentRecoveryJournals().map(\.id) == [stopped.id])
+    }
+
     @Test func validEvidenceImportsOnceAndRequiresEveryLane() throws {
         let definition = try scenario()
         let invocation = invocation(for: definition)

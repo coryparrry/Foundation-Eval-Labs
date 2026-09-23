@@ -203,18 +203,22 @@ final class ScenarioCoordinator {
         return ScenarioComparison.compare(baseline: baseline, candidate: run)
     }
 
-    func freezeAndSave() async throws {
+    @discardableResult
+    func freezeAndSave() async throws -> ScenarioDefinition {
         applyConfigurationToDraft()
         draft.version = max(1, draft.version)
         draft = try draft.frozen()
         try ScenarioValidator.validate(draft)
-        try await persistence.saveDefinition(draft)
-        try await persistence.saveExecutionConfiguration(configuration)
-        if let index = definitions.firstIndex(where: { $0.id == draft.id && $0.version == draft.version }) {
-            definitions[index] = draft
+        let frozen = draft
+        let savedConfiguration = configuration
+        try await persistence.saveDefinition(frozen)
+        try await persistence.saveExecutionConfiguration(savedConfiguration)
+        if let index = definitions.firstIndex(where: { $0.id == frozen.id && $0.version == frozen.version }) {
+            definitions[index] = frozen
         } else {
-            definitions.append(draft)
+            definitions.append(frozen)
         }
+        return frozen
     }
 
     func duplicateAsNewVersion() {
@@ -241,34 +245,46 @@ final class ScenarioCoordinator {
         guard !isRunning else { return }
         isRunning = true
         defer { isRunning = false }
+        var pendingJournal: ScenarioExecutionJournal?
+        let runConfiguration = configuration
+        let runTrusted = projectTrusted
+        let changedDimensions = statedChangedDimensions
+        let linkedRun = linkedFeatureRun(for: draft)
         do {
-            try await freezeAndSave()
+            let definition = try await freezeAndSave()
             let result = try await executor.execute(
-                definition: draft,
-                configuration: configuration,
-                projectTrusted: projectTrusted,
-                linkedFeatureEvidenceAvailable: linkedFeatureRun(for: draft) != nil
+                definition: definition,
+                configuration: runConfiguration,
+                projectTrusted: runTrusted,
+                linkedFeatureEvidenceAvailable: linkedRun != nil
             )
+            pendingJournal = result.journal
             guard result.reportedTestCount == 1 else {
                 throw ScenarioEvidenceImportError.invalidTestCount
             }
             var imported: [ScenarioRun] = []
-            let featureResult = linkedFeatureRun(for: draft).map {
-                ScenarioFeatureEvidence.laneResult(from: $0, definition: draft)
+            let featureResult = linkedRun.map {
+                ScenarioFeatureEvidence.laneResult(from: $0, definition: definition)
             }
-            for evidenceURL in result.evidenceURLs {
+            for attachment in result.evidenceAttachments {
                 var run = try XCTestEvidenceImporter().importEvidence(
-                    data: Data(contentsOf: evidenceURL),
-                    definition: draft,
+                    data: Data(contentsOf: attachment.url),
+                    definition: definition,
                     journal: result.journal,
                     artifactRoot: result.attachmentDirectory,
                     ledger: &ledger,
                     supplementaryResults: featureResult.map { [$0] } ?? [],
-                    statedChangedDimensions: statedChangedDimensions
+                    statedChangedDimensions: changedDimensions
                 )
+                if result.processExitCode != 0,
+                   attachment.isCheckpoint,
+                   let failure = result.testFailureMessages.first,
+                   let index = run.laneResults.firstIndex(where: { $0.lane == .siri }) {
+                    run.laneResults[index].diagnostic = ScenarioDiagnosticClassifier.checkpointDiagnostic(for: failure)
+                }
                 if run.outcome == .needsReview {
                     do {
-                        run = try await ScenarioResponseAssessmentService.assess(run, definition: draft)
+                        run = try await ScenarioResponseAssessmentService.assess(run, definition: definition)
                     } catch {
                         notice = "The run was retained, but semantic assessment needs review: \(error.localizedDescription)"
                     }
@@ -276,13 +292,23 @@ final class ScenarioCoordinator {
                 imported.append(try await persistence.saveRun(run, artifactRoot: result.attachmentDirectory))
             }
             try await persistence.saveLedger(ledger)
+            let hasFinalEvidence = result.evidenceAttachments.allSatisfy { !$0.isCheckpoint }
+            try await executor.finishEvidenceValidation(journal: result.journal, accepted: hasFinalEvidence)
+            pendingJournal = nil
+            recoveryJournals = try await executor.currentRecoveryJournals()
             runs.insert(contentsOf: imported, at: 0)
             selectedRunID = imported.first?.id
-            statedChangedDimensions.removeAll()
+            if statedChangedDimensions == changedDimensions { statedChangedDimensions.removeAll() }
             notice = imported.first.map {
-                "Scenario imported as \($0.outcome.rawValue). Direct intent and Siri evidence remain separately labelled."
+                result.processExitCode == 0
+                    ? "Scenario imported as \($0.outcome.rawValue). Direct intent and Siri evidence remain separately labelled."
+                    : "The UI test failed (exit \(result.processExitCode)); its available evidence was retained as \($0.outcome.rawValue)."
             }
         } catch {
+            if let pendingJournal {
+                try? await executor.finishEvidenceValidation(journal: pendingJournal, accepted: false)
+            }
+            recoveryJournals = (try? await executor.currentRecoveryJournals()) ?? recoveryJournals
             notice = error.localizedDescription
         }
         await refreshPreflight()

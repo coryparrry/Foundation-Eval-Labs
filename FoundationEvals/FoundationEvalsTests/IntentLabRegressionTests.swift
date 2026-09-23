@@ -3,11 +3,101 @@ import Testing
 @testable import FoundationEvals
 
 struct IntentLabRegressionTests {
+    @Test func testProcessDeadlineIncludesDirectLaneButOmitsNotApplicableSiri() {
+        let definition = deadlineDefinition(
+            directLane: true,
+            siriLane: false,
+            siriAttemptCount: 3,
+            deadlineSeconds: 60
+        )
+
+        #expect(XcodeTestDeadlineBudget.seconds(for: definition) == 135)
+    }
+
+    @Test func testProcessDeadlineBudgetsThreeSiriAttemptsAndDirectLane() {
+        let definition = deadlineDefinition(
+            directLane: true,
+            siriLane: true,
+            siriAttemptCount: 3,
+            deadlineSeconds: 60
+        )
+
+        #expect(XcodeTestDeadlineBudget.seconds(for: definition) == 540)
+    }
+
+    @Test func testProcessDeadlineUsesConfiguredScenarioWaitForEveryLane() {
+        let definition = deadlineDefinition(
+            directLane: true,
+            siriLane: true,
+            siriAttemptCount: 3,
+            deadlineSeconds: 30
+        )
+
+        #expect(XcodeTestDeadlineBudget.seconds(for: definition) == 420)
+    }
+
+    @Test func xcresultManifestFindsUUIDExportsAndPrefersFinalEvidence() throws {
+        let invocationID = UUID()
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkpointFile = "\(UUID().uuidString).json"
+        let finalFile = "\(UUID().uuidString).json"
+        try Data("{}".utf8).write(to: root.appending(path: checkpointFile))
+        try Data("{}".utf8).write(to: root.appending(path: finalFile))
+        func manifest(_ names: [String]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [[
+                "testIdentifier": "IntentLabScenarioTests/testIntentLabScenario()",
+                "attachments": names.map { name in
+                    ["exportedFileName": name == "checkpoint" ? checkpointFile : finalFile,
+                     "suggestedHumanReadableName": "IntentLabEvidence-\(invocationID.uuidString)-\(name)_0_\(UUID().uuidString).json"]
+                },
+            ]])
+        }
+
+        let checkpoint = XcodeTestExecutor.evidenceAttachments(
+            in: try manifest(["checkpoint"]), root: root, invocationID: invocationID
+        )
+        #expect(checkpoint.map(\.url.lastPathComponent) == [checkpointFile])
+        #expect(checkpoint.first?.isCheckpoint == true)
+        let preferred = XcodeTestExecutor.evidenceAttachments(
+            in: try manifest(["checkpoint", "final"]), root: root, invocationID: invocationID
+        )
+        #expect(preferred.map(\.url.lastPathComponent) == [finalFile])
+    }
+
+    @Test func xcresultScreenshotExportsKeepEnvelopeFilenamesAndBytes() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID()
+        let exported = "\(UUID().uuidString).png"
+        let bytes = Data("screenshot-bytes".utf8)
+        try bytes.write(to: root.appending(path: exported))
+        let manifest = try JSONSerialization.data(withJSONObject: [[
+            "testIdentifier": "IntentLabScenarioTests/testIntentLabScenario()",
+            "attachments": [["exportedFileName": exported,
+                "suggestedHumanReadableName": "IntentLabArtifact-\(id.uuidString)_0.png"]],
+        ]])
+        try XcodeTestExecutor.restoreArtifactFilenames(in: manifest, root: root)
+        #expect(try Data(contentsOf: root.appending(path: "IntentLabArtifact-\(id.uuidString).png")) == bytes)
+    }
+
+    @Test func xcresultFailureMessageIsExtractedWithoutPromotingItToEvidence() {
+        let nodes: [String: Any] = [
+            "testNodes": [["children": [[
+                "nodeType": "Failure Message",
+                "name": "Timed out waiting for Siri to activate",
+            ]]]]
+        ]
+        #expect(XcodeTestExecutor.failureMessages(in: nodes) == ["Timed out waiting for Siri to activate"])
+        #expect(ScenarioDiagnosticClassifier.checkpointDiagnostic(for: "Timed out waiting for Siri to activate")
+            .contains("approve it, then rerun"))
+    }
+
     @Test func injectedSemanticAssessmentFinalizesLaneAndRunOutcome() async throws {
         var definition = ScenarioDefinition.starter()
         let assertion = ScenarioAssertion(
             kind: .semanticRubric,
-            observationKey: "visibleResponse",
+            observationKey: "specificResponse",
             explanation: "The response confirms that the packing note opened.",
             applicableLanes: [.siri]
         )
@@ -52,7 +142,7 @@ struct IntentLabRegressionTests {
                 outcome: .needsReview,
                 startedAt: now,
                 completedAt: now,
-                observations: ["visibleResponse": .string("Opened the packing note")],
+                observations: ["specificResponse": .string("Opened the packing note"), "visibleResponse": .string("Unrelated response")],
                 assertionResults: [.init(
                     assertionID: assertion.id,
                     passed: false,
@@ -77,6 +167,22 @@ struct IntentLabRegressionTests {
         #expect(assessed.laneResults[0].assertionResults[0].passed)
         #expect(assessed.outcome == .passed)
         #expect(assessed.responseAssessments?.first?.passed == true)
+    }
+
+    @MainActor
+    @Test func frozenExecutionDefinitionSurvivesLaterDraftEdits() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EvaluationStore(supportDirectory: root)
+        let coordinator = ScenarioCoordinator(supportDirectory: root, evaluationStore: store)
+        coordinator.configuration.containerPath = "/tmp/Fixture.xcodeproj"
+        coordinator.configuration.destinationIdentifier = "physical-device-1"
+        coordinator.configuration.generatedResourceDirectory = "/tmp/Generated"
+        let frozen = try await coordinator.freezeAndSave()
+        coordinator.draft.goal.requestText = "A different request while the device is running"
+        #expect(frozen.goal.requestText != coordinator.draft.goal.requestText)
+        #expect(coordinator.definitions.first?.definitionDigest == frozen.definitionDigest)
+        #expect(coordinator.definitions.first?.goal.requestText == frozen.goal.requestText)
     }
 
     @MainActor
@@ -149,5 +255,19 @@ struct IntentLabRegressionTests {
             .appending(path: "IntentLabRegressionTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func deadlineDefinition(
+        directLane: Bool,
+        siriLane: Bool,
+        siriAttemptCount: Int,
+        deadlineSeconds: Double
+    ) -> ScenarioDefinition {
+        var definition = ScenarioDefinition.starter()
+        definition.coverage.intentIntegration = directLane ? .required : .notApplicable
+        definition.coverage.siri = siriLane ? .required : .notApplicable
+        definition.coverage.siriAttemptCount = siriAttemptCount
+        definition.safety.deadlineSeconds = deadlineSeconds
+        return definition
     }
 }

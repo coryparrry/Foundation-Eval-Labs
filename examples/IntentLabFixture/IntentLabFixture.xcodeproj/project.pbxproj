@@ -21,6 +21,7 @@
 		B47AD2A190E1986ED9CED03D /* IntentProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C75BB62B9D6ECE218A9FFF16 /* IntentProbe.swift */; };
 		BC0A0C726B79EDAB900C6722 /* IntentLabWireContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C73DA6601F4848FD17B6C0 /* IntentLabWireContracts.swift */; };
 		C34635C6AB1609BC6FD38EF8 /* SummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97AF56C20B60B9A8D4BDFC7B /* SummaryService.swift */; };
+		ADAC21516112083F1ADCE920 /* SiriActivationBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = ADAC21516112083F1ADCE921 /* SiriActivationBridge.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -38,18 +39,20 @@
 		4DF62A784D195126D5BF79FF /* NoteIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIntents.swift; sourceTree = "<group>"; };
 		680A97FBB2BAB223E2B4DE4D /* IntentLabFixtureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentLabFixtureApp.swift; sourceTree = "<group>"; };
 		70FAA5D458FD5B159791FE24 /* IntentLabInvocation.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = IntentLabInvocation.json; sourceTree = "<group>"; };
-		8314F1B2CBE0F5707CA737CB /* IntentLabFixture.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IntentLabFixture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8314F1B2CBE0F5707CA737CB /* IntentLabFixture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IntentLabFixture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		90FE06593FF47615D1DC8643 /* FixtureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureBridge.swift; sourceTree = "<group>"; };
 		97AF56C20B60B9A8D4BDFC7B /* SummaryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryService.swift; sourceTree = "<group>"; };
 		9ED21154C6372ED75D575421 /* IntentLabScenarioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentLabScenarioTests.swift; sourceTree = "<group>"; };
 		9EE60FD197B480A5396210E9 /* IntentLabScenario.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = IntentLabScenario.json; sourceTree = "<group>"; };
 		A8C73DA6601F4848FD17B6C0 /* IntentLabWireContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentLabWireContracts.swift; sourceTree = "<group>"; };
 		A99B9D3A34C1C80E9C78A6CA /* FixtureNotes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureNotes.swift; sourceTree = "<group>"; };
-		AB012819E50B7AA1332348AA /* IntentLabFixtureUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = IntentLabFixtureUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB012819E50B7AA1332348AA /* IntentLabFixtureUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = IntentLabFixtureUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C75BB62B9D6ECE218A9FFF16 /* IntentProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentProbe.swift; sourceTree = "<group>"; };
 		D028A240FEEFE6D7459918B2 /* Apples-Foundation-Evals */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "Apples-Foundation-Evals"; path = ../..; sourceTree = SOURCE_ROOT; };
 		D7B48124753D279ABBA05CB7 /* SiriProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiriProbe.swift; sourceTree = "<group>"; };
 		E54E14FAD1E3BAA2DE59DD5B /* IntentLabFixtureRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentLabFixtureRunner.swift; sourceTree = "<group>"; };
+		ADAC21516112083F1ADCE921 /* SiriActivationBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SiriActivationBridge.m; sourceTree = "<group>"; };
+		ADAC21516112083F1ADCE922 /* SiriActivationBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SiriActivationBridge.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -92,6 +95,8 @@
 				A8C73DA6601F4848FD17B6C0 /* IntentLabWireContracts.swift */,
 				C75BB62B9D6ECE218A9FFF16 /* IntentProbe.swift */,
 				D7B48124753D279ABBA05CB7 /* SiriProbe.swift */,
+				ADAC21516112083F1ADCE921 /* SiriActivationBridge.m */,
+				ADAC21516112083F1ADCE922 /* SiriActivationBridge.h */,
 			);
 			name = AppIntentsTesting;
 			path = ../../Integration/AppIntentsTesting;
@@ -242,6 +247,7 @@
 				BC0A0C726B79EDAB900C6722 /* IntentLabWireContracts.swift in Sources */,
 				B47AD2A190E1986ED9CED03D /* IntentProbe.swift in Sources */,
 				1EB8C22589D18CBE0F27D444 /* SiriProbe.swift in Sources */,
+				ADAC21516112083F1ADCE920 /* SiriActivationBridge.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -272,9 +278,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = 3Z3955EFRE;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Intent Lab Fixture";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -283,7 +289,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.IntentLabFixture;
+				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.IntentLabFixture;
+				PROVISIONING_PROFILE_SPECIFIER = "Intent Lab Fixture iPhone Development";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -293,17 +300,20 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = 3Z3955EFRE;
 				GENERATE_INFOPLIST_FILE = YES;
+				INTENT_LAB_HARNESS_CAPABILITIES = "environment-payload fixture-reset invocation-correlation accessible-result direct-intent-output";
+				INTENT_LAB_HARNESS_VERSION = "intent-lab-v1";
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/../../Integration/AppIntentsTesting/SiriActivationBridge.h";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.IntentLabFixtureUITests;
-				INTENT_LAB_HARNESS_VERSION = "intent-lab-v1";
-				INTENT_LAB_HARNESS_CAPABILITIES = "environment-payload fixture-reset invocation-correlation accessible-result direct-intent-output";
+				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.IntentLabFixtureUITests;
+				PROVISIONING_PROFILE_SPECIFIER = "Intent Lab Fixture UI Runner iPhone Development";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = IntentLabFixture;
@@ -314,9 +324,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = 3Z3955EFRE;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Intent Lab Fixture";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -325,7 +335,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.IntentLabFixture;
+				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.IntentLabFixture;
+				PROVISIONING_PROFILE_SPECIFIER = "Intent Lab Fixture iPhone Development";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) INTENT_LAB_TEST_SUPPORT";
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -336,17 +347,20 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = 3Z3955EFRE;
 				GENERATE_INFOPLIST_FILE = YES;
+				INTENT_LAB_HARNESS_CAPABILITIES = "environment-payload fixture-reset invocation-correlation accessible-result direct-intent-output";
+				INTENT_LAB_HARNESS_VERSION = "intent-lab-v1";
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/../../Integration/AppIntentsTesting/SiriActivationBridge.h";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.IntentLabFixtureUITests;
-				INTENT_LAB_HARNESS_VERSION = "intent-lab-v1";
-				INTENT_LAB_HARNESS_CAPABILITIES = "environment-payload fixture-reset invocation-correlation accessible-result direct-intent-output";
+				PRODUCT_BUNDLE_IDENTIFIER = com.coryparry.IntentLabFixtureUITests;
+				PROVISIONING_PROFILE_SPECIFIER = "Intent Lab Fixture UI Runner iPhone Development";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = IntentLabFixture;

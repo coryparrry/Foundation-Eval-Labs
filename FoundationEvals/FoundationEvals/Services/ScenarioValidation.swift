@@ -257,6 +257,13 @@ enum ScenarioResultEvaluator {
 }
 
 enum ScenarioDiagnosticClassifier {
+    static func checkpointDiagnostic(for failure: String) -> String {
+        let permissionGuidance = failure.localizedCaseInsensitiveContains("Siri to activate")
+            ? " Check the iPhone for an intent or Siri access prompt, approve it, then rerun."
+            : ""
+        return "XCTest: \(failure). Final Siri evidence was not attached.\(permissionGuidance)"
+    }
+
     static func message(for results: [ScenarioLaneResult]) -> String {
         let feature = results.filter { $0.lane == .appFeature }
         let intent = results.filter { $0.lane == .intentIntegration }

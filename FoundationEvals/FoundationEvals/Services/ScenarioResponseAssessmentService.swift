@@ -75,12 +75,10 @@ enum ScenarioResponseAssessmentService {
             var laneResult = updated.laneResults[index]
             let applicable = semantic.filter { $0.applies(to: laneResult.lane) }
             guard !applicable.isEmpty else { continue }
-            guard case .string(let capturedResponse)? = laneResult.observations["feature.response"]
-                    ?? laneResult.observations["visibleResponse"] else {
-                throw ScenarioResponseAssessmentError.missingEvidence("a captured response")
-            }
-
             for assertion in applicable {
+                guard case .string(let capturedResponse)? = laneResult.observations[assertion.observationKey] else {
+                    throw ScenarioResponseAssessmentError.missingEvidence(assertion.observationKey)
+                }
                 let deterministic = laneResult.assertionResults
                     .filter { $0.assertionID != assertion.id }
                     .map { "\($0.assertionID.uuidString): \($0.passed ? "passed" : "failed") — \($0.message)" }

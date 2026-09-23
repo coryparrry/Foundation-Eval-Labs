@@ -1,8 +1,33 @@
 import XCTest
+import AppIntentsTesting
 
 @available(iOS 27.0, *)
 @MainActor
 final class IntentLabScenarioTests: XCTestCase {
+    func testUnresolvedSiriAttemptPreventsResetAndActivationOfLaterAttempts() {
+        for error in [SiriProbeError.permissionRequired, .outcomeNotObserved, .invocationNotCorrelated] {
+            var sequence = SiriAttemptSequence()
+            var activeContext = "attempt-1"
+            XCTAssertThrowsError(try sequence.run { throw error })
+            XCTAssertThrowsError(try sequence.run {
+                activeContext = "attempt-2"
+                return "A late result must not belong to this attempt"
+            }) { skippedError in
+                let skipped = failed(for: .siri, scenario: testScenario(), error: skippedError, startedAt: Date(), attempt: 2)
+                XCTAssertEqual(skipped.executionStatus, .invalidEvidence)
+                XCTAssertEqual(skipped.outcome, .notObserved)
+                XCTAssertTrue(skipped.diagnostic?.contains("not started") == true)
+            }
+            XCTAssertEqual(activeContext, "attempt-1")
+        }
+    }
+
+    func testCompletedSiriAttemptsAllowTheNextAttempt() throws {
+        var sequence = SiriAttemptSequence()
+        XCTAssertEqual(try sequence.run { "attempt-1" }, "attempt-1")
+        XCTAssertEqual(try sequence.run { "attempt-2" }, "attempt-2")
+    }
+
     func testEnvironmentPayloadRequiresAnAtomicPair() {
         XCTAssertThrowsError(try IntentLabPayloadLoader.environmentData(
             named: "IntentLabScenario",
@@ -117,7 +142,118 @@ final class IntentLabScenarioTests: XCTestCase {
         XCTAssertEqual(SiriProbe.waitTimeout(for: scenario.safety), 7.25)
     }
 
-    func testIntentLabScenario() async throws {
+    func testSiriActivationRecoveryRequiresCurrentActionEvidence() {
+        let timeout = "Timed out waiting for Siri to activate"
+        let valid: [String: IntentLabValue] = [
+            "invocationContext": .string("current"),
+            "selectedNoteID": .string("packing-001"),
+            "applicationEvent": .string("OpenNoteIntent:packing-001")
+        ]
+        XCTAssertTrue(SiriProbe.recoverableActivationTimeout(description: timeout, osMajor: 27, observations: valid, expectedContext: "current"))
+        XCTAssertFalse(SiriProbe.recoverableActivationTimeout(description: timeout, osMajor: 27, observations: valid, expectedContext: "previous"))
+        XCTAssertFalse(SiriProbe.recoverableActivationTimeout(description: "Other failure", osMajor: 27, observations: valid, expectedContext: "current"))
+        XCTAssertFalse(SiriProbe.recoverableActivationTimeout(description: timeout, osMajor: 28, observations: valid, expectedContext: "current"))
+        XCTAssertFalse(SiriProbe.recoverableActivationTimeout(description: timeout, osMajor: 27, observations: nil, expectedContext: "current"))
+        for key in ["invocationContext", "selectedNoteID", "applicationEvent"] {
+            var missing = valid
+            missing[key] = .string("none")
+            XCTAssertFalse(SiriProbe.recoverableActivationTimeout(description: timeout, osMajor: 27, observations: missing, expectedContext: "current"), key)
+        }
+    }
+
+    func testSiriChooserExcludesUnderlyingAppText() {
+        let text: [(label: String, bounds: CGRect)] = [
+            ("Which one?", CGRect(x: 0.1, y: 0.91, width: 0.3, height: 0.02)),
+            ("Packing note", CGRect(x: 0.1, y: 0.85, width: 0.3, height: 0.02)),
+            ("Packing notes", CGRect(x: 0.1, y: 0.80, width: 0.3, height: 0.02)),
+            ("Intent Lab Fixture", CGRect(x: 0.1, y: 0.72, width: 0.3, height: 0.02)),
+            ("Fixture", CGRect(x: 0.3, y: 0.03, width: 0.1, height: 0.02))
+        ]
+        let request = "Open the packing note in Intent Lab Fixture"
+        XCTAssertNil(SiriProbe.matchingChoice(request: request, choices: text.map(\.label)))
+        XCTAssertEqual(SiriProbe.chooserRow(request: request, applicationName: "Intent Lab Fixture", text: text)?.label, "Packing note")
+        XCTAssertNil(SiriProbe.chooserRow(request: request, applicationName: "Missing app", text: text))
+        XCTAssertNil(SiriProbe.chooserRow(request: request, applicationName: "Intent Lab Fixture", text: Array(text.dropFirst())))
+    }
+
+    func testSiriChoiceMatchesWholePhraseWithoutGuessing() {
+        XCTAssertEqual(SiriProbe.matchingChoice(request: "Open the packing note in Intent Lab Fixture", choices: ["Packing note", "Packing notes", "Garden note"]), "Packing note")
+        XCTAssertEqual(SiriProbe.matchingChoice(request: "Open the packing notes", choices: ["Packing note", "Packing notes"]), "Packing notes")
+        XCTAssertNil(SiriProbe.matchingChoice(request: "Open a note", choices: ["Packing note", "Garden note"]))
+        XCTAssertNil(SiriProbe.matchingChoice(request: "Packing note or garden note", choices: ["Packing note", "Garden note"]))
+    }
+
+    func testSiriPermissionMustClearBeforeCorrelatedCompletion() {
+        XCTAssertFalse(SiriProbe.completionReady(promptIsVisible: true, observedContext: "attempt", expectedContext: "attempt"))
+        XCTAssertFalse(SiriProbe.completionReady(promptIsVisible: false, observedContext: "previous", expectedContext: "attempt"))
+        XCTAssertFalse(SiriProbe.completionReady(promptIsVisible: false, observedContext: nil, expectedContext: "attempt"))
+        XCTAssertTrue(SiriProbe.completionReady(promptIsVisible: false, observedContext: "attempt", expectedContext: "attempt"))
+    }
+
+    func testCheckpointKeepsEverySiriAttemptUnobserved() {
+        var scenario = testScenario()
+        scenario.coverage.siriAttemptCount = 3
+        let results = Self.unobservedSiriAttempts(for: scenario)
+
+        XCTAssertEqual(results.map(\.attempt), [1, 2, 3])
+        XCTAssertTrue(results.allSatisfy {
+            $0.lane == .siri && $0.outcome == .notObserved
+                && $0.executionStatus == .invalidEvidence && $0.observations.isEmpty
+        })
+    }
+
+    func testFixtureResetAndObservableReady() {
+        let application = XCUIApplication()
+        application.launchArguments = ["-intent-lab-reset", "-intent-lab-context", "recovery-check"]
+        application.launch()
+        let observations = FixtureBridge.observations(from: application)
+
+        XCTAssertEqual(observations["noteStoreMutationCount"], .integer(0))
+        XCTAssertEqual(observations["selectedNoteID"], .string("none"))
+    }
+
+    func testFixtureEntityResolutionAndIntentExecution() async throws {
+        let application = XCUIApplication()
+        let context = "direct-resolution-\(UUID().uuidString)"
+        application.launchArguments = ["-intent-lab-reset", "-intent-lab-context", context]
+        application.launch()
+        addTeardownBlock { await MainActor.run { application.terminate() } }
+        let definitions = IntentDefinitions(bundleIdentifier: "com.coryparry.IntentLabFixture")
+        let note = definitions.entities["NoteEntity"].makeReference(identifier: "packing-001")
+        let intent = definitions.intents["OpenNoteIntent"].makeIntent(note: note)
+        let result = try await intent.run()
+        let selectedID: String = try result.value
+        XCTAssertEqual(selectedID, "packing-001")
+        let observations = FixtureBridge.observations(from: application)
+        XCTAssertEqual(observations["selectedNoteID"], .string("packing-001"))
+        XCTAssertEqual(observations["invocationContext"], .string(context))
+    }
+
+    func testSiriPermissionFlowOnPhysicalDevice() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Siri permission verification requires a physical iPhone.")
+        #else
+        let application = XCUIApplication()
+        let context = "siri-permission-\(UUID().uuidString)"
+        application.launchArguments = ["-intent-lab-reset", "-intent-lab-context", context]
+        application.launch()
+        addTeardownBlock { await MainActor.run { application.terminate() } }
+        defer { _ = EvidenceAttachmentWriter.attachScreenshot(to: self) }
+        let observations = try SiriProbe.run(
+            request: "Open the packing note in Intent Lab Fixture",
+            application: application,
+            expectedContext: context,
+            safety: .init(deadlineSeconds: 60),
+            testCase: self
+        )
+        XCTAssertEqual(observations["selectedNoteID"], .string("packing-001"))
+        XCTAssertEqual(observations["invocationContext"], .string(context))
+        XCTAssertEqual(observations["siriDisambiguationSelection"], .string("Packing note"))
+        XCTAssertEqual(observations["applicationEvent"], .string("OpenNoteIntent:packing-001"))
+        #endif
+    }
+
+    func testIntentLabScenario() throws {
         let scenario: IntentLabScenario = try load("IntentLabScenario")
         let invocation: IntentLabInvocation = try load("IntentLabInvocation")
         guard scenario.schemaVersion == 1,
@@ -137,30 +273,51 @@ final class IntentLabScenarioTests: XCTestCase {
             )
             let directStart = Date()
             do {
-                var observations = try await IntentProbe.run(scenario)
+                var observations = try directObservations(for: scenario)
                 observations.merge(FixtureBridge.observations(from: application)) { direct, _ in direct }
                 results.append(result(for: .intentIntegration, scenario: scenario, observations: observations, startedAt: directStart))
             } catch {
+                // A cancelled async intent may still finish. Do not give that
+                // action a later Siri attempt's fixture context.
+                if error is DirectIntentTimeout { throw error }
                 results.append(failed(for: .intentIntegration, scenario: scenario, error: error, startedAt: directStart))
             }
         }
 
+        // XCTest can terminate this method inside siriService.activate without throwing.
+        // Persist completed direct observations before entering that API. Siri attempts
+        // remain explicitly unobserved until a final envelope replaces this checkpoint.
+        if scenario.coverage.siri != .notApplicable {
+            let checkpoint = evidenceEnvelope(
+                scenario: scenario,
+                invocation: invocation,
+                appProduct: appProduct,
+                testProduct: testProduct,
+                results: results + Self.unobservedSiriAttempts(for: scenario)
+            )
+            try EvidenceAttachmentWriter.attach(checkpoint, to: self, checkpoint: true)
+        }
+
         if scenario.coverage.siri != .notApplicable {
             let attemptCount = scenario.coverage.siriAttemptCount ?? 3
+            var sequence = SiriAttemptSequence()
             for attempt in 1...attemptCount {
                 let context = "siri-\(invocation.id.uuidString)-\(attempt)"
-                let application = FixtureBridge.resetAndLaunch(
-                    bundleIdentifier: scenario.target.bundleIdentifier,
-                    context: context
-                )
                 let siriStart = Date()
                 do {
-                    let observations = try SiriProbe.run(
-                        request: scenario.goal.requestText,
-                        application: application,
-                        expectedContext: context,
-                        safety: scenario.safety
-                    )
+                    let observations = try sequence.run {
+                        let application = FixtureBridge.resetAndLaunch(
+                            bundleIdentifier: scenario.target.bundleIdentifier,
+                            context: context
+                        )
+                        return try SiriProbe.run(
+                            request: scenario.goal.requestText,
+                            application: application,
+                            expectedContext: context,
+                            safety: scenario.safety,
+                            testCase: self
+                        )
+                    }
                     let screenshot = EvidenceAttachmentWriter.attachScreenshot(to: self)
                     results.append(result(
                         for: .siri,
@@ -184,8 +341,48 @@ final class IntentLabScenarioTests: XCTestCase {
             }
         }
 
+        let envelope = evidenceEnvelope(
+            scenario: scenario,
+            invocation: invocation,
+            appProduct: appProduct,
+            testProduct: testProduct,
+            results: results
+        )
+        try EvidenceAttachmentWriter.attach(envelope, to: self)
+        XCTAssertTrue(results.allSatisfy { $0.outcome == .passed || $0.outcome == .needsReview })
+    }
+
+    // Keep Siri on XCTest's synchronous invocation stack, where its Objective-C
+    // interruption can be recovered before it abandons the test's Swift task.
+    private func directObservations(for scenario: IntentLabScenario) throws -> [String: IntentLabValue] {
+        let completed = XCTestExpectation(description: "Direct intent completed")
+        var result: Result<[String: IntentLabValue], Error>?
+        let task = Task { @MainActor in
+            do { result = .success(try await IntentProbe.run(scenario)) }
+            catch { result = .failure(error) }
+            completed.fulfill()
+        }
+        defer { task.cancel() }
+        guard XCTWaiter.wait(for: [completed], timeout: scenario.safety.deadlineSeconds) == .completed,
+              let result else {
+            throw DirectIntentTimeout()
+        }
+        return try result.get()
+    }
+
+    private struct DirectIntentTimeout: LocalizedError {
+        var errorDescription: String? { "The direct intent did not finish before the scenario deadline." }
+    }
+
+    private func evidenceEnvelope(
+        scenario: IntentLabScenario,
+        invocation: IntentLabInvocation,
+        appProduct: IntentLabProductIdentity,
+        testProduct: IntentLabProductIdentity,
+        results: [IntentLabLaneResult]
+    ) -> IntentLabEvidenceEnvelope {
         let process = ProcessInfo.processInfo
-        let envelope = IntentLabEvidenceEnvelope(
+        return IntentLabEvidenceEnvelope(
             invocation: invocation,
             sourceBundleIdentifier: scenario.target.bundleIdentifier,
             observedAppProduct: appProduct,
@@ -206,8 +403,26 @@ final class IntentLabScenarioTests: XCTestCase {
             testCount: 1,
             results: results
         )
-        try EvidenceAttachmentWriter.attach(envelope, to: self)
-        XCTAssertTrue(results.allSatisfy { $0.outcome == .passed || $0.outcome == .needsReview })
+    }
+
+    static func unobservedSiriAttempts(for scenario: IntentLabScenario, at date: Date = Date()) -> [IntentLabLaneResult] {
+        guard scenario.coverage.siri != .notApplicable else { return [] }
+        return (1...(scenario.coverage.siriAttemptCount ?? 3)).map { attempt in
+            IntentLabLaneResult(
+                caseID: scenario.id,
+                attempt: attempt,
+                lane: .siri,
+                executionStatus: .invalidEvidence,
+                outcome: .notObserved,
+                startedAt: date,
+                completedAt: date,
+                observations: [:],
+                assertionResults: [],
+                diagnostic: "XCTest stopped before final Siri evidence was attached.",
+                proposedCause: nil,
+                artifacts: []
+            )
+        }
     }
 
     private func result(
@@ -279,6 +494,8 @@ final class IntentLabScenarioTests: XCTestCase {
     ) -> IntentLabLaneResult {
         let executionStatus: IntentLabExecutionStatus
         switch error {
+        case SiriProbeError.priorAttemptUnresolved:
+            executionStatus = .invalidEvidence
         case SiriProbeError.outcomeNotObserved:
             executionStatus = .timedOut
         case is SiriProbeError:

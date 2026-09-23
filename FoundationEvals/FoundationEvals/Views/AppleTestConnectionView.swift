@@ -103,7 +103,7 @@ struct AppleTestConnectionView: View {
 
                 connectionField(
                     title: "Run",
-                    detail: "When the connection is ready, use Run scenario in the toolbar."
+                    detail: "Keep the iPhone unlocked and approve any intent or Siri access prompt on the device. Then use Run scenario in the toolbar."
                 ) {
                     Image(systemName: coordinator.preflight?.isReady == true ? "play.circle.fill" : "play.circle")
                         .font(.title2)

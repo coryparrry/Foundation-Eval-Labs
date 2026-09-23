@@ -44,6 +44,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.IntentLabFixtureUITests
+        SWIFT_OBJC_BRIDGING_HEADER: ../../Integration/AppIntentsTesting/SiriActivationBridge.h
         INTENT_LAB_HARNESS_VERSION: intent-lab-v1
         INTENT_LAB_HARNESS_CAPABILITIES: environment-payload fixture-reset invocation-correlation accessible-result direct-intent-output
         GENERATE_INFOPLIST_FILE: YES
