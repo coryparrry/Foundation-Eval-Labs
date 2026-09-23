@@ -234,18 +234,16 @@ enum ScenarioResultEvaluator {
         let missingRequiredSemantic = requiredSemantic.contains {
             observations[$0.observationKey] == nil
         }
-        let needsReview = assertions.contains { $0.required && $0.kind == .semanticRubric }
         if failedRequired || missingRequiredSemantic { return (.failed, results) }
-        if needsReview { return (.needsReview, results) }
+        if !requiredSemantic.isEmpty { return (.needsReview, results) }
         return (.passed, results)
     }
 
     static func overall(definition: ScenarioDefinition, laneResults: [ScenarioLaneResult]) -> ScenarioOutcome {
         for lane in ScenarioLane.allCases {
             let requirement = definition.coverage[lane]
-            guard requirement != .notApplicable else { continue }
-            let results = laneResults.filter { $0.lane == lane }
             guard requirement == .required else { continue }
+            let results = laneResults.filter { $0.lane == lane }
             if results.isEmpty { return .notObserved }
             if results.contains(where: { $0.outcome == .failed }) { return .failed }
             if results.contains(where: { $0.executionStatus != .completed || $0.outcome == .notObserved }) {

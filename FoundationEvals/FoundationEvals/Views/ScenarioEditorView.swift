@@ -116,9 +116,9 @@ struct ScenarioEditorView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            ForEach($coordinator.draft.directControl.parameters) { $parameter in
-                ScenarioParameterEditor(parameter: $parameter) {
-                    coordinator.draft.directControl.parameters.removeAll { $0.name == parameter.name }
+            ForEach(Array(coordinator.draft.directControl.parameters.indices), id: \.self) { index in
+                ScenarioParameterEditor(parameter: $coordinator.draft.directControl.parameters[index]) {
+                    coordinator.draft.directControl.parameters.remove(at: index)
                     coordinator.draft.definitionDigest = ""
                 }
             }
@@ -380,6 +380,7 @@ private struct ScenarioParameterEditor: View {
         }
         Button("Remove", systemImage: "trash", role: .destructive, action: remove)
             .labelStyle(.iconOnly)
+            .accessibilityIdentifier("Remove parameter")
     }
 
     @ViewBuilder private var valueEditor: some View {

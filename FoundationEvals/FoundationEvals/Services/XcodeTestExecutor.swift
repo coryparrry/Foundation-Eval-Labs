@@ -278,8 +278,7 @@ actor XcodeTestExecutor {
         )
         let commonArguments = xcodeArguments(
             configuration: configuration,
-            derivedData: derivedData,
-            resultBundle: nil
+            derivedData: derivedData
         )
         var journal = ScenarioExecutionJournal(
             phase: .preparing,
@@ -338,24 +337,22 @@ actor XcodeTestExecutor {
             var boundInvocation = invocation
             boundInvocation.appProduct = products.app
             boundInvocation.testProduct = products.test
-            invocationTestRunURL = try XCTestRunInvocationTransport.materialize(
+            let materializedTestRunURL = try XCTestRunInvocationTransport.materialize(
                 products: productPaths,
                 testTarget: configuration.testTarget,
                 definition: definition,
                 invocation: boundInvocation,
                 fileManager: fileManager
             )
+            invocationTestRunURL = materializedTestRunURL
             journal.invocation = boundInvocation
             journal.phase = .running
             journal.updatedAt = Date()
             try await persistence.saveJournal(journal)
 
-            guard let invocationTestRunURL else {
-                throw XcodeTestExecutorError.resourceMismatch("the invocation-specific test configuration was not created")
-            }
             let testArguments = [
                 "test-without-building",
-                "-xctestrun", invocationTestRunURL.path,
+                "-xctestrun", materializedTestRunURL.path,
                 "-destination", "id=\(configuration.destinationIdentifier)",
                 "-resultBundlePath", resultBundle.path,
                 "-only-testing:\(configuration.testTarget)/\(testIdentity.className)/\(testIdentity.methodName)",
@@ -452,49 +449,32 @@ actor XcodeTestExecutor {
         guard !requested.isEmpty else {
             return (false, "Choose an enrolled physical iPhone destination identifier.")
         }
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/xcrun")
-        process.arguments = ["xcdevice", "list", "--timeout", "3"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = Pipe()
-        do { try process.run() } catch {
-            return (false, "Xcode device discovery could not start: \(error.localizedDescription)")
+        let devices: [IntentLabDeviceDestination]
+        do {
+            devices = try XcodeConnectionDiscoveryService().discoverDevices()
+        } catch {
+            return (false, "Xcode device discovery failed: \(error.localizedDescription)")
         }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let devices = try? JSONSerialization.jsonObject(
-                with: output.fileHandleForReading.readDataToEndOfFile()
-              ) as? [[String: Any]],
-              let device = devices.first(where: { $0["identifier"] as? String == requested }) else {
+        guard let device = devices.first(where: { $0.identifier == requested }) else {
             return (false, "Xcode did not report the selected identifier as an available device.")
         }
-        let physical = (device["simulator"] as? Bool) == false
-        let iPhone = (device["platform"] as? String) == "com.apple.platform.iphoneos"
-        let available = (device["available"] as? Bool) == true && (device["ignored"] as? Bool) != true
-        let name = device["name"] as? String ?? requested
-        guard physical, iPhone, available else {
-            return (false, "\(name) is not an available paired physical iPhone.")
+        guard device.available else {
+            return (false, "\(device.name) is not an available paired physical iPhone.")
         }
-        return (true, "\(name) is reported by Xcode as an available physical iPhone.")
+        return (true, "\(device.name) is reported by Xcode as an available physical iPhone.")
     }
 
     private func xcodeArguments(
         configuration: XcodeTestConfiguration,
-        derivedData: URL,
-        resultBundle: URL?
+        derivedData: URL
     ) -> [String] {
-        var arguments = [
+        [
             configuration.isWorkspace ? "-workspace" : "-project", configuration.containerPath,
             "-scheme", configuration.scheme,
             "-configuration", configuration.configuration,
             "-destination", "id=\(configuration.destinationIdentifier)",
             "-derivedDataPath", derivedData.path
         ]
-        if let resultBundle {
-            arguments += ["-resultBundlePath", resultBundle.path]
-        }
-        return arguments
     }
 
     func runProcess(
@@ -698,13 +678,5 @@ actor XcodeTestExecutor {
     private func randomNonce() -> String {
         var generator = SystemRandomNumberGenerator()
         return (0..<32).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max, using: &generator)) }.joined()
-    }
-}
-
-private extension JSONDecoder {
-    static var intentLab: JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
     }
 }

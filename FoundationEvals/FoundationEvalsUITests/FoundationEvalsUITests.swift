@@ -55,6 +55,43 @@ final class FoundationEvalsUITests: XCTestCase {
     }
 
     @MainActor
+    func testDuplicateParameterDraftsRemoveOneAtATime() throws {
+        let app = XCUIApplication()
+        let storageName = UUID().uuidString
+        let storage = uiTestStorage(name: storageName)
+        defer { try? FileManager.default.removeItem(at: storage) }
+        app.launchArguments += ["--disable-mcp-autostart", "--evaluation-storage-name", storageName]
+        app.launch()
+        defer { app.terminate() }
+        app.activate()
+        app.typeKey("2", modifierFlags: .command)
+        app.buttons["Scenario"].click()
+        app.buttons["Parameters"].click()
+
+        let names = app.textFields.matching(identifier: "Parameter name")
+        XCTAssertEqual(names.count, 1)
+        let addButton = app.buttons["Add parameter"]
+        addButton.click()
+        addButton.click()
+        XCTAssertEqual(names.count, 3)
+
+        let remove = app.buttons.matching(identifier: "Remove parameter")
+        XCTAssertEqual(remove.count, 3)
+        remove.element(boundBy: 2).click()
+        XCTAssertEqual(names.count, 2)
+
+        let screenshot = app.windows.firstMatch.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = "Intent Lab parameter rows after removal"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        try screenshot.pngRepresentation.write(
+            to: FileManager.default.temporaryDirectory.appending(path: "foundation-evals-parameter-rows.png"),
+            options: .atomic
+        )
+    }
+
+    @MainActor
     func testRunCommandsMatchInvalidSuiteControls() throws {
         let app = XCUIApplication()
         let storageName = UUID().uuidString
