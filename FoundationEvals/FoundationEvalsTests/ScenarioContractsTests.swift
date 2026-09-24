@@ -193,6 +193,17 @@ struct ScenarioContractsTests {
         let root = try temporaryDirectory()
         let importer = XCTestEvidenceImporter()
 
+        var invalid = envelope
+        invalid.testCount = 0
+        #expect(throws: ScenarioEvidenceImportError.invalidTestCount) {
+            _ = try importer.importEvidence(
+                data: try encoder.encode(invalid), definition: definition,
+                journal: journal(for: definition, invocation: invocation, phase: .stopped),
+                artifactRoot: root, ledger: &ledger
+            )
+        }
+        #expect(ledger == ScenarioImportLedger())
+
         let run = try importer.importEvidence(
             data: try encoder.encode(envelope), definition: definition,
             journal: journal(for: definition, invocation: invocation, phase: .stopped),
@@ -451,9 +462,39 @@ struct ScenarioContractsTests {
         #expect(noGate.failures.contains { $0.contains("no required evidence lane") })
     }
 
+    @Test func releaseRejectsMissingOrDuplicateRequiredAssertionEvidence() throws {
+        let definition = try scenario()
+        let boundInvocation = invocation(for: definition)
+        var ledger = ScenarioImportLedger()
+        let envelope = evidence(for: definition, invocation: boundInvocation)
+        var run = try XCTestEvidenceImporter().importEvidence(
+            data: try encoder.encode(envelope), definition: definition,
+            journal: journal(for: definition, invocation: boundInvocation, phase: .stopped),
+            artifactRoot: try temporaryDirectory(), ledger: &ledger
+        )
+        run.xctestExitCode = 0
+        #expect(ScenarioReleaseCheckEvaluator.report(definition: definition, run: run).outcome == .passed)
+
+        let laneIndex = try #require(run.laneResults.firstIndex { $0.lane == .intentIntegration })
+        let completeResults = run.laneResults[laneIndex].assertionResults
+        #expect(!completeResults.isEmpty)
+
+        run.laneResults[laneIndex].assertionResults = []
+        let missing = ScenarioReleaseCheckEvaluator.report(definition: definition, run: run)
+        #expect(missing.outcome != .passed)
+        #expect(missing.failures.contains { $0.contains("missing or failed") })
+
+        run.laneResults[laneIndex].assertionResults = completeResults + [completeResults[0]]
+        #expect(ScenarioReleaseCheckEvaluator.report(definition: definition, run: run).outcome != .passed)
+    }
+
     @Test func recoveryPolicyQuarantinesUncertainDeviceFailuresOnlyAfterLaunch() {
         #expect(!ScenarioExecutionRecoveryPolicy.requiresQuarantine(
             deviceTestLaunched: false,
+            failure: .buildFailure
+        ))
+        #expect(!ScenarioExecutionRecoveryPolicy.requiresQuarantine(
+            deviceTestLaunched: true,
             failure: .buildFailure
         ))
         for failure in [
@@ -473,6 +514,41 @@ struct ScenarioContractsTests {
                 failure: failure
             ))
         }
+    }
+
+    @Test func initialJournalSaveFailureReleasesOnlyItsReservation() async throws {
+        let root = try temporaryDirectory()
+        let blockedRoot = root.appending(path: "not-a-directory")
+        try Data("blocked".utf8).write(to: blockedRoot)
+        let definition = try scenario()
+        let invocation = invocation(for: definition)
+        let preparing = journal(for: definition, invocation: invocation, phase: .preparing)
+        let destination = invocation.destinationIdentifier
+
+        let blockedExecutor = XcodeTestExecutor(
+            workDirectory: root.appending(path: "BlockedExecutor"),
+            persistence: ScenarioPersistence(rootDirectory: blockedRoot)
+        )
+        do {
+            try await blockedExecutor.persistPreparingJournal(preparing)
+            Issue.record("Saving the initial journal unexpectedly succeeded.")
+        } catch {
+            #expect(await blockedExecutor.reservation(for: destination) == nil)
+        }
+
+        let persistence = ScenarioPersistence(rootDirectory: root.appending(path: "Writable"))
+        let executor = XcodeTestExecutor(
+            workDirectory: root.appending(path: "WritableExecutor"), persistence: persistence
+        )
+        try await executor.persistPreparingJournal(preparing)
+        #expect(await executor.reservation(for: destination) == .reserved(invocationID: invocation.id))
+        #expect(try await persistence.loadJournals().contains { $0.id == invocation.id && $0.phase == .preparing })
+        await #expect(throws: XcodeTestExecutorError.self) {
+            try await executor.clearQuarantine(
+                destinationIdentifier: destination, fixtureReadinessProven: true
+            )
+        }
+        #expect(await executor.reservation(for: destination) == .reserved(invocationID: invocation.id))
     }
 
     @Test func recoveryRequiredJournalSurvivesRelaunchUntilExplicitlyCleared() async throws {
@@ -498,6 +574,26 @@ struct ScenarioContractsTests {
         #expect(recovered.map(\.id) == [interrupted.id])
         #expect(await relaunched.reservation(for: invocation.destinationIdentifier) != nil)
         #expect(!FileManager.default.fileExists(atPath: stalePayload.path))
+
+        _ = try await relaunched.beginQuarantineClear(
+            destinationIdentifier: invocation.destinationIdentifier,
+            fixtureReadinessProven: true
+        )
+        await #expect(throws: XcodeTestExecutorError.self) {
+            _ = try await relaunched.beginQuarantineClear(
+                destinationIdentifier: invocation.destinationIdentifier,
+                fixtureReadinessProven: true
+            )
+        }
+        await relaunched.endQuarantineClear(destinationIdentifier: invocation.destinationIdentifier)
+
+        await #expect(throws: XcodeTestExecutorError.self) {
+            try await relaunched.clearQuarantine(
+                destinationIdentifier: invocation.destinationIdentifier,
+                fixtureReadinessProven: false
+            )
+        }
+        #expect(await relaunched.reservation(for: invocation.destinationIdentifier) != nil)
 
         try await relaunched.clearQuarantine(
             destinationIdentifier: invocation.destinationIdentifier,
@@ -537,12 +633,17 @@ struct ScenarioContractsTests {
             )
         }
 
-        var launchChecks = 0
-        while !(await executor.hasActiveExecution()) && launchChecks < 100 {
-            launchChecks += 1
-            await Task.yield()
+        let launchDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !(await executor.hasActiveExecution()) && ContinuousClock.now < launchDeadline {
+            try await Task.sleep(for: .milliseconds(10))
         }
         #expect(await executor.hasActiveExecution())
+        await #expect(throws: XcodeTestExecutorError.self) {
+            try await executor.clearQuarantine(
+                destinationIdentifier: invocation.destinationIdentifier,
+                fixtureReadinessProven: true
+            )
+        }
         let cancelled = await executor.cancelActiveExecution(grace: .milliseconds(10))
         #expect(cancelled?.phase == .recoveryRequired)
         #expect(await executor.reservation(for: invocation.destinationIdentifier) != nil)
@@ -561,6 +662,38 @@ struct ScenarioContractsTests {
         #expect(await executor.reservation(for: invocation.destinationIdentifier) == nil)
         let persisted = try await persistence.loadJournals()
         #expect(persisted.first(where: { $0.id == activeJournal.id })?.phase == .stopped)
+    }
+
+    @Test func requiredAssertionOutcomesIgnoreOptionalFailuresAndIncompleteExecution() throws {
+        var definition = try scenario()
+        definition.assertions = [
+            ScenarioAssertion(
+                kind: .returnedField, observationKey: "requiredValue",
+                expectedValue: .string("approved"), explanation: "Required value matched.",
+                required: true, applicableLanes: [.intentIntegration]
+            ),
+            ScenarioAssertion(
+                kind: .returnedField, observationKey: "optionalValue",
+                expectedValue: .string("preferred"), explanation: "Optional value matched.",
+                required: false, applicableLanes: [.intentIntegration]
+            ),
+        ]
+
+        func outcome(_ observations: [String: ScenarioValue], _ status: ScenarioExecutionStatus = .completed) -> ScenarioOutcome {
+            ScenarioResultEvaluator.evaluate(
+                definition: definition, lane: .intentIntegration,
+                observations: observations, executionStatus: status
+            ).0
+        }
+
+        #expect(outcome(["requiredValue": .string("approved")], .cancelled) == .notObserved)
+        #expect(outcome([:]) == .failed)
+        #expect(outcome(["requiredValue": .string("wrong")]) == .failed)
+        #expect(outcome(["requiredValue": .string("approved")]) == .passed)
+        #expect(outcome([
+            "requiredValue": .string("approved"),
+            "optionalValue": .string("wrong"),
+        ]) == .passed)
     }
 
     @Test func semanticAssertionProducesNeedsReviewBeforeHostAssessment() throws {
@@ -582,6 +715,52 @@ struct ScenarioContractsTests {
         #expect(evaluated.0 == .needsReview)
         #expect(evaluated.1.count == 1)
         #expect(evaluated.1[0].observedValue == .string("Opened the packing note"))
+        #expect(ScenarioResultEvaluator.evaluate(
+            definition: definition, lane: .siri,
+            observations: [:], executionStatus: .completed
+        ).0 == .failed)
+
+        var mixed = definition
+        mixed.assertions.append(ScenarioAssertion(
+            kind: .visibleText, observationKey: "approvedText",
+            expectedValue: .string("approved"), explanation: "Visible text matched.",
+            required: true, applicableLanes: [.siri]
+        ))
+        mixed = try mixed.frozen()
+        #expect(ScenarioResultEvaluator.evaluate(
+            definition: mixed, lane: .siri,
+            observations: [
+                "visibleResponse": .string("Opened the packing note"),
+                "approvedText": .string("wrong"),
+            ], executionStatus: .completed
+        ).0 == .failed)
+    }
+
+    @Test func requiredLaneFailureOutranksEarlierIncompleteOrReviewLane() throws {
+        let definition = try scenario()
+        let now = Date()
+        let failedSiri = ScenarioLaneResult(
+            caseID: definition.id, attempt: 1, lane: .siri,
+            executionStatus: .completed, outcome: .failed,
+            startedAt: now, completedAt: now
+        )
+        let incompleteIntent = ScenarioLaneResult(
+            caseID: definition.id, attempt: 1, lane: .intentIntegration,
+            executionStatus: .cancelled, outcome: .notObserved,
+            startedAt: now, completedAt: now
+        )
+        let reviewIntent = ScenarioLaneResult(
+            caseID: definition.id, attempt: 1, lane: .intentIntegration,
+            executionStatus: .completed, outcome: .needsReview,
+            startedAt: now, completedAt: now
+        )
+
+        #expect(ScenarioResultEvaluator.overall(
+            definition: definition, laneResults: [incompleteIntent, failedSiri]
+        ) == .failed)
+        #expect(ScenarioResultEvaluator.overall(
+            definition: definition, laneResults: [reviewIntent, failedSiri]
+        ) == .failed)
     }
 
     @Test func optionalFeatureFailureDoesNotFailRequiredIntentAndSiriLanes() throws {
@@ -811,6 +990,7 @@ struct ScenarioContractsTests {
                 journal: journal, artifactRoot: root, ledger: &ledger
             )
         }
+        #expect(ledger == ScenarioImportLedger())
     }
 
     private func temporaryDirectory() throws -> URL {

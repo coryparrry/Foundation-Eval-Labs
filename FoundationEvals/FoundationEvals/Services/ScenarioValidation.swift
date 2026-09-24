@@ -256,16 +256,16 @@ enum ScenarioResultEvaluator {
               definition.assertions.contains(where: { assertion in
                   assertion.required && requiredLanes.contains(where: assertion.applies(to:))
               }) else { return .needsReview }
-        for lane in requiredLanes {
-            let results = laneResults.filter { $0.lane == lane }
-            if results.isEmpty { return .notObserved }
-            if results.contains(where: { $0.outcome == .failed }) { return .failed }
-            if results.contains(where: { $0.executionStatus != .completed || $0.outcome == .notObserved }) {
-                return .notObserved
-            }
-            if results.contains(where: { $0.outcome == .needsReview }) { return .needsReview }
-            if !results.allSatisfy({ $0.outcome == .passed }) { return .notObserved }
+        let requiredResults = laneResults.filter { requiredLanes.contains($0.lane) }
+        if requiredResults.contains(where: { $0.outcome == .failed }) { return .failed }
+        if requiredLanes.contains(where: { lane in !requiredResults.contains(where: { $0.lane == lane }) }) {
+            return .notObserved
         }
+        if requiredResults.contains(where: { $0.executionStatus != .completed || $0.outcome == .notObserved }) {
+            return .notObserved
+        }
+        if requiredResults.contains(where: { $0.outcome == .needsReview }) { return .needsReview }
+        if !requiredResults.allSatisfy({ $0.outcome == .passed }) { return .notObserved }
         return .passed
     }
 }

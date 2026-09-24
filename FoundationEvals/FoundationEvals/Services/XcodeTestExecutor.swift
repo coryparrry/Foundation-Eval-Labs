@@ -123,6 +123,7 @@ actor XcodeTestExecutor {
     private let fileManager: FileManager
     private var active: ActiveExecution?
     private var reservations: [String: ScenarioDeviceReservation] = [:]
+    private var clearingDestinations: Set<String> = []
     private var cancelledInvocationIDs: Set<UUID> = []
 
     init(workDirectory: URL, persistence: ScenarioPersistence, fileManager: FileManager = .default) {
@@ -183,7 +184,21 @@ actor XcodeTestExecutor {
         active != nil
     }
 
-    func clearQuarantine(destinationIdentifier: String, fixtureReadinessProven: Bool) async throws {
+    func persistPreparingJournal(_ journal: ScenarioExecutionJournal) async throws {
+        let destination = journal.invocation.destinationIdentifier
+        let reservation = ScenarioDeviceReservation.reserved(invocationID: journal.id)
+        reservations[destination] = reservation
+        do {
+            try await persistence.saveJournal(journal)
+        } catch {
+            if reservations[destination] == reservation {
+                reservations[destination] = nil
+            }
+            throw error
+        }
+    }
+
+    func beginQuarantineClear(destinationIdentifier: String, fixtureReadinessProven: Bool) throws -> ScenarioDeviceReservation {
         guard fixtureReadinessProven else {
             throw XcodeTestExecutorError.deviceUnavailable(
                 "Prove that the prior test session stopped and the fixture is ready before clearing this device quarantine."
@@ -194,6 +209,27 @@ actor XcodeTestExecutor {
                 "Wait for the cancelled host process to stop before clearing this device quarantine."
             )
         }
+        guard let reservation = reservations[destinationIdentifier],
+              case .quarantined = reservation else {
+            throw XcodeTestExecutorError.deviceUnavailable("The selected device is not quarantined.")
+        }
+        guard !clearingDestinations.contains(destinationIdentifier) else {
+            throw XcodeTestExecutorError.deviceUnavailable("Device quarantine clearing is already in progress.")
+        }
+        clearingDestinations.insert(destinationIdentifier)
+        return reservation
+    }
+
+    func endQuarantineClear(destinationIdentifier: String) {
+        clearingDestinations.remove(destinationIdentifier)
+    }
+
+    func clearQuarantine(destinationIdentifier: String, fixtureReadinessProven: Bool) async throws {
+        let reservation = try beginQuarantineClear(
+            destinationIdentifier: destinationIdentifier,
+            fixtureReadinessProven: fixtureReadinessProven
+        )
+        defer { endQuarantineClear(destinationIdentifier: destinationIdentifier) }
         let journals = try await persistence.loadJournals()
         for var journal in journals where
             journal.invocation.destinationIdentifier == destinationIdentifier
@@ -202,6 +238,9 @@ actor XcodeTestExecutor {
             journal.recoveryReason = nil
             journal.updatedAt = Date()
             try await persistence.saveJournal(journal)
+        }
+        guard active == nil, reservations[destinationIdentifier] == reservation else {
+            throw XcodeTestExecutorError.deviceUnavailable("Device recovery state changed while clearing quarantine.")
         }
         reservations[destinationIdentifier] = nil
     }
@@ -269,7 +308,9 @@ actor XcodeTestExecutor {
                 : "The device harness will preserve the declared Intent and Siri lane requirements."
         )
 
-        if let reservation = reservations[configuration.destinationIdentifier] {
+        if clearingDestinations.contains(configuration.destinationIdentifier) {
+            check("reservation", "Device reservation", false, "Device quarantine clearing is in progress.")
+        } else if let reservation = reservations[configuration.destinationIdentifier] {
             let detail: String
             switch reservation {
             case .reserved: detail = "The selected device already has an active scenario."
@@ -341,8 +382,7 @@ actor XcodeTestExecutor {
             updatedAt: Date(),
             recoveryReason: nil
         )
-        reservations[configuration.destinationIdentifier] = .reserved(invocationID: invocationID)
-        try await persistence.saveJournal(journal)
+        try await persistPreparingJournal(journal)
         var deviceTestLaunched = false
         var invocationTestRunURL: URL?
         defer {

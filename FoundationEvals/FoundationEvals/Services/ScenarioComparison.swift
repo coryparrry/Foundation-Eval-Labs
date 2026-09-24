@@ -152,17 +152,18 @@ enum ScenarioReleaseCheckEvaluator {
                 failures.append("The required \(lane.title) lane is incomplete or failed.")
             }
         }
-        let requiredAssertionFailed = run.laneResults.contains { laneResult in
+        let requiredAssertionMissingOrFailed = run.laneResults.contains { laneResult in
             guard definition.coverage[laneResult.lane] == .required else { return false }
             let requiredIDs = Set(definition.assertions.filter {
                 $0.required && $0.applies(to: laneResult.lane)
             }.map(\.id))
-            return laneResult.assertionResults.contains {
-                requiredIDs.contains($0.assertionID) && !$0.passed
+            return requiredIDs.contains { requiredID in
+                let matches = laneResult.assertionResults.filter { $0.assertionID == requiredID }
+                return matches.count != 1 || !matches[0].passed
             }
         }
-        if requiredAssertionFailed {
-            failures.append("One or more observable outcome assertions failed.")
+        if requiredAssertionMissingOrFailed {
+            failures.append("One or more required observable outcome assertions are missing or failed.")
         }
         if comparison?.isDirectlyComparable == false {
             failures.append("The run is not directly comparable with the preceding scenario run because an environment or scenario dimension changed without being stated.")
