@@ -139,8 +139,10 @@ enum SiriProbe {
         guard let heading = text.first(where: { $0.label == "Which one?" }) else { return nil }
         // Keep matching inside the Siri card. The app beneath it can expose
         // matching words such as its Fixture tab or duplicate note titles.
+        let attributionTrim = CharacterSet.whitespacesAndNewlines.union(.symbols).union(.punctuationCharacters)
         guard let attribution = text.filter({
-            $0.label == applicationName && $0.bounds.maxY < heading.bounds.minY
+            $0.label.trimmingCharacters(in: attributionTrim) == applicationName
+                && $0.bounds.maxY < heading.bounds.minY
         }).max(by: { $0.bounds.midY < $1.bounds.midY }) else { return nil }
         let choices = text.filter {
             $0.bounds.midY < heading.bounds.minY && $0.bounds.midY > attribution.bounds.maxY

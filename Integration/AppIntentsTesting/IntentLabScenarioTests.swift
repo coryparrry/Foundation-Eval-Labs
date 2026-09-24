@@ -172,6 +172,9 @@ final class IntentLabScenarioTests: XCTestCase {
         let request = "Open the packing note in Intent Lab Fixture"
         XCTAssertNil(SiriProbe.matchingChoice(request: request, choices: text.map(\.label)))
         XCTAssertEqual(SiriProbe.chooserRow(request: request, applicationName: "Intent Lab Fixture", text: text)?.label, "Packing note")
+        var symbolPrefixed = text
+        symbolPrefixed[3].label = "• Intent Lab Fixture"
+        XCTAssertEqual(SiriProbe.chooserRow(request: request, applicationName: "Intent Lab Fixture", text: symbolPrefixed)?.label, "Packing note")
         XCTAssertNil(SiriProbe.chooserRow(request: request, applicationName: "Missing app", text: text))
         XCTAssertNil(SiriProbe.chooserRow(request: request, applicationName: "Intent Lab Fixture", text: Array(text.dropFirst())))
     }
