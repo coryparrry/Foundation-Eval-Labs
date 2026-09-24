@@ -321,6 +321,7 @@ struct ScenarioContractsTests {
         candidate.id = UUID()
         candidate.invocation.id = candidate.id
         candidate.environment.operatingSystem = "iOS 28"
+        candidate.xctestExitCode = 0
 
         let incompatible = ScenarioComparison.compare(baseline: baseline, candidate: candidate)
         #expect(ScenarioReleaseCheckEvaluator.report(
@@ -353,6 +354,101 @@ struct ScenarioContractsTests {
         await #expect(throws: ScenarioPersistenceError.self) {
             try await persistence.saveDefinition(edited)
         }
+    }
+
+    @Test func corruptDefinitionCannotDisappearFromReleaseInventory() async throws {
+        let root = try temporaryDirectory()
+        let persistence = ScenarioPersistence(rootDirectory: root)
+        let original = try scenario()
+        try await persistence.saveDefinition(original)
+        let path = root.appending(path: "Definitions/\(original.id.uuidString)/v\(original.version)-\(original.definitionDigest).json")
+        try Data("{corrupt".utf8).write(to: path, options: .atomic)
+
+        await #expect(throws: ScenarioPersistenceError.self) {
+            _ = try await persistence.loadDefinitions()
+        }
+    }
+
+    @Test func corruptRunCannotDisappearFromReleaseInventory() async throws {
+        let root = try temporaryDirectory()
+        let persistence = ScenarioPersistence(rootDirectory: root)
+        let definition = try scenario()
+        let invocation = invocation(for: definition)
+        var ledger = ScenarioImportLedger()
+        let run = try XCTestEvidenceImporter().importEvidence(
+            data: try encoder.encode(evidence(for: definition, invocation: invocation)),
+            definition: definition,
+            journal: journal(for: definition, invocation: invocation, phase: .stopped),
+            artifactRoot: try temporaryDirectory(), ledger: &ledger
+        )
+        _ = try await persistence.saveRun(run, artifactRoot: nil)
+        let path = root.appending(path: "Runs/\(run.scenarioID.uuidString)/\(run.id.uuidString)/run.json")
+        try Data("{corrupt".utf8).write(to: path, options: .atomic)
+
+        await #expect(throws: ScenarioPersistenceError.self) {
+            _ = try await persistence.loadRuns()
+        }
+        await #expect(throws: ScenarioPersistenceError.self) {
+            _ = try await persistence.loadRunPage(scenarioID: run.scenarioID, offset: 0, limit: 10)
+        }
+    }
+
+    @Test func latestFrozenVersionSupersedesOldProjectAssignment() throws {
+        let oldProject = UUID()
+        let newProject = UUID()
+        var old = try scenario()
+        old.projectID = oldProject
+        old = try old.frozen()
+        var latest = old
+        latest.version += 1
+        latest.projectID = newProject
+        latest = try latest.frozen()
+
+        let selected = ScenarioDefinition.latestVersions(in: [latest, old])
+        #expect(selected.count == 1)
+        #expect(selected[0].version == latest.version)
+        #expect(selected.filter { $0.projectID == oldProject }.isEmpty)
+        #expect(selected.filter { $0.projectID == newProject }.count == 1)
+    }
+
+    @Test func nonzeroXCTestExitAndNoRequiredOutcomeCannotPassRelease() throws {
+        let original = try scenario()
+        let invocation = invocation(for: original)
+        var ledger = ScenarioImportLedger()
+        let envelope = evidence(for: original, invocation: invocation)
+        var run = try XCTestEvidenceImporter().importEvidence(
+            data: try encoder.encode(envelope), definition: original,
+            journal: journal(for: original, invocation: invocation, phase: .stopped),
+            artifactRoot: try temporaryDirectory(), ledger: &ledger
+        )
+        let legacyDecoded = try decoder.decode(ScenarioRun.self, from: encoder.encode(run))
+        #expect(legacyDecoded.xctestExitCode == nil)
+        let legacy = ScenarioReleaseCheckEvaluator.report(definition: original, run: run)
+        #expect(legacy.outcome == .incompleteOrIncompatibleEvidence)
+        #expect(legacy.failures.contains { $0.contains("does not record a successful XCTest exit") })
+        run.xctestExitCode = 0
+        #expect(ScenarioReleaseCheckEvaluator.report(definition: original, run: run).outcome == .passed)
+        run.xctestExitCode = 1
+        let failedTest = ScenarioReleaseCheckEvaluator.report(definition: original, run: run)
+        #expect(failedTest.outcome != .passed)
+        #expect(failedTest.failures.contains { $0.contains("XCTest failed") })
+
+        var optional = original
+        optional.coverage.appFeature = .optional
+        optional.coverage.intentIntegration = .optional
+        optional.coverage.siri = .optional
+        optional.assertions = optional.assertions.map { assertion in
+            var copy = assertion
+            copy.required = false
+            return copy
+        }
+        optional = try optional.frozen()
+        run.scenarioDigest = optional.definitionDigest
+        run.xctestExitCode = 0
+        #expect(ScenarioResultEvaluator.overall(definition: optional, laneResults: run.laneResults) == .needsReview)
+        let noGate = ScenarioReleaseCheckEvaluator.report(definition: optional, run: run)
+        #expect(noGate.outcome == .incompleteOrIncompatibleEvidence)
+        #expect(noGate.failures.contains { $0.contains("no required evidence lane") })
     }
 
     @Test func recoveryPolicyQuarantinesUncertainDeviceFailuresOnlyAfterLaunch() {
@@ -551,6 +647,7 @@ struct ScenarioContractsTests {
             )]
         ))
         run.outcome = ScenarioResultEvaluator.overall(definition: definition, laneResults: run.laneResults)
+        run.xctestExitCode = 0
 
         #expect(run.outcome == .passed)
         #expect(ScenarioReleaseCheckEvaluator.report(definition: definition, run: run).outcome == .passed)
@@ -627,6 +724,8 @@ struct ScenarioContractsTests {
                 message: "Optional copy differed."
             ))
         }
+
+        run.xctestExitCode = 0
 
         #expect(ScenarioReleaseCheckEvaluator.report(definition: definition, run: run).outcome == .passed)
     }

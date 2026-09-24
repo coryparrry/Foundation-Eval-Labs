@@ -83,6 +83,17 @@ enum ScenarioValidator {
         if definition.directControl.intentIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             error("directControl.intentIdentifier", "Declare the App Intent definition identifier.")
         }
+        if definition.coverage.appFeature == .required {
+            if definition.directControl.linkedFeatureRunID == nil {
+                error("directControl.linkedFeatureRunID", "Link a feature run for required App Feature coverage.")
+            }
+            if definition.directControl.linkedFeatureID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                error("directControl.linkedFeatureID", "Declare the expected feature ID for the linked run.")
+            }
+            if definition.directControl.linkedFeatureSubjectDigest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                error("directControl.linkedFeatureSubjectDigest", "Declare the linked run's subject-evidence digest.")
+            }
+        }
         let parameterNames = definition.directControl.parameters.map(\.name)
         if Set(parameterNames).count != parameterNames.count {
             error("directControl.parameters", "Intent parameter names must be unique.")
@@ -240,9 +251,12 @@ enum ScenarioResultEvaluator {
     }
 
     static func overall(definition: ScenarioDefinition, laneResults: [ScenarioLaneResult]) -> ScenarioOutcome {
-        for lane in ScenarioLane.allCases {
-            let requirement = definition.coverage[lane]
-            guard requirement == .required else { continue }
+        let requiredLanes = ScenarioLane.allCases.filter { definition.coverage[$0] == .required }
+        guard !requiredLanes.isEmpty,
+              definition.assertions.contains(where: { assertion in
+                  assertion.required && requiredLanes.contains(where: assertion.applies(to:))
+              }) else { return .needsReview }
+        for lane in requiredLanes {
             let results = laneResults.filter { $0.lane == lane }
             if results.isEmpty { return .notObserved }
             if results.contains(where: { $0.outcome == .failed }) { return .failed }

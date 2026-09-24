@@ -1,8 +1,8 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// This package deliberately exposes only deterministic production logic that can run on
-// GitHub's macOS 26 hosted runner. The macOS 27 app remains an independent Xcode target.
+// This package deliberately exposes deterministic production logic for focused CI tests.
+// GitHub's xcode-27 hosted runner provides macOS 27; the app remains an independent Xcode target.
 let portableProductionSources = [
     "MCP/Installer/CodexMCPInstaller.swift",
     "Models/EvaluationFieldAssertion.swift",

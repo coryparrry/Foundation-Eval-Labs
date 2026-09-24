@@ -6,6 +6,10 @@ struct ScenarioReportView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                DisclosureGroup("What do the results mean?") {
+                    IntentLabHelp("Passed: required checks matched. Failed: a required check did not match. Needs review: captured evidence needs a separate assessment. Not observed: the run did not capture enough evidence. Not applicable: this part was skipped. Each lane reports its own result; the overall result depends on required lanes.")
+                        .padding(.top, 6)
+                }
                 if !coordinator.runs.isEmpty {
                     runPicker
                 }
@@ -27,7 +31,7 @@ struct ScenarioReportView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Scenario report").font(.headline)
-                Text("Original observations stay immutable")
+                Text("Saved observations stay unchanged when you review a run")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -48,7 +52,7 @@ struct ScenarioReportView: View {
             ProgressView().controlSize(.large)
             Text("Running the signed device workflow")
                 .font(.headline)
-            Text("The fresh invocation nonce is embedded in a rebuilt test bundle. Partial logs and late evidence remain attached to this attempt.")
+            Text("Xcode is preparing and running this test on the iPhone. Keep it unlocked and respond to any permission prompts. Logs and captured results are saved with this attempt.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 300)
@@ -73,11 +77,12 @@ struct ScenarioReportView: View {
                 Text("Finish setup and run a saved scenario to see its results here.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text("App feature, intent integration, and Siri results are reported separately.")
+                Text("App feature shows linked evaluation evidence. Intent integration tests the action directly. Siri tests the request text on your iPhone.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button("Run preflight") { Task { await coordinator.refreshPreflight() } }
+                Button("Check setup") { Task { await coordinator.refreshPreflight() } }
                     .padding(.top, 4)
+                IntentLabHelp("Check setup looks for missing configuration before running. It does not run the action or prove Siri has permission.")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

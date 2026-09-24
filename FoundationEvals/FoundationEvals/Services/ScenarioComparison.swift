@@ -128,6 +128,22 @@ enum ScenarioReleaseCheckEvaluator {
         if run.executionStatus != .completed {
             failures.append("The scenario execution did not complete successfully.")
         }
+        if run.xctestExitCode == nil {
+            failures.append("The saved run does not record a successful XCTest exit, so its release evidence is incomplete.")
+        } else if let exitCode = run.xctestExitCode, exitCode != 0 {
+            failures.append("XCTest failed with exit code \(exitCode). Its retained evidence is diagnostic only.")
+        }
+        if !ScenarioLane.allCases.contains(where: { definition.coverage[$0] == .required }) {
+            failures.append("The scenario has no required evidence lane, so it cannot gate a release.")
+        }
+        let requiredObservableAssertions = definition.assertions.filter { assertion in
+            assertion.required && ScenarioLane.allCases.contains {
+                definition.coverage[$0] == .required && assertion.applies(to: $0)
+            }
+        }
+        if requiredObservableAssertions.isEmpty {
+            failures.append("The scenario has no required observable outcome assertion in a required lane.")
+        }
         for lane in ScenarioLane.allCases where definition.coverage[lane] == .required {
             let results = run.laneResults.filter { $0.lane == lane }
             if results.isEmpty {

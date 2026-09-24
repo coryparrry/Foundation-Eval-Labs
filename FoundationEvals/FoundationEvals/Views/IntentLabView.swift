@@ -2,30 +2,37 @@ import SwiftUI
 
 struct IntentLabView: View {
     @Bindable var coordinator: ScenarioCoordinator
+    let projects: [EvaluationProject]
     @State private var section: IntentLabSection = .setup
 
     var body: some View {
-        VStack(spacing: 0) {
-            IntentLabHeader(coordinator: coordinator, section: $section)
-            Divider()
-            switch section {
-            case .setup:
-                ScrollView {
-                    AppleTestConnectionView(coordinator: coordinator)
-                        .padding(28)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                IntentLabHeader(coordinator: coordinator, section: $section)
+                Divider()
+                switch section {
+                case .setup:
+                    ScrollView {
+                        AppleTestConnectionView(coordinator: coordinator)
+                            .frame(maxWidth: 1_080)
+                            .padding(28)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .frame(minHeight: 0, maxHeight: .infinity)
+                case .scenario:
+                    ScrollView {
+                        ScenarioEditorView(coordinator: coordinator, projects: projects)
+                            .frame(maxWidth: 1_080)
+                            .padding(28)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .frame(minHeight: 0, maxHeight: .infinity)
+                case .results:
+                    ScenarioReportView(coordinator: coordinator)
                 }
-            case .scenario:
-                ScrollView {
-                    ScenarioEditorView(coordinator: coordinator)
-                        .padding(28)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-            case .results:
-                ScenarioReportView(coordinator: coordinator)
             }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(WorkspaceStyle.canvas)
         .task { await coordinator.load() }
         .alert(
@@ -62,9 +69,10 @@ private struct IntentLabHeader: View {
                         Text("Intent Lab")
                             .font(.system(size: 26, weight: .semibold))
                             .accessibilityIdentifier("Intent Lab page title")
-                        Text("Test app intents and review what Siri actually does.")
+                        Text("An App Intent makes an app action available to system features such as Shortcuts. With Siri support configured, you can test requests too.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                     if coordinator.isRunning {
@@ -77,7 +85,7 @@ private struct IntentLabHeader: View {
                             .disabled(coordinator.preflight?.isReady != true)
                     }
                 }
-                Label("App intents · On device", systemImage: "iphone")
+                Label("Setup: connect your app · Scenario: define a test · Results: see what passed", systemImage: "checklist")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             HStack(spacing: 26) {

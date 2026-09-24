@@ -4,6 +4,8 @@ enum ScenarioPersistenceError: LocalizedError, Sendable {
     case conflictingDefinition
     case immutableRunExists
     case missingArtifact(String)
+    case invalidDefinition(String)
+    case invalidRun(String)
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +15,10 @@ enum ScenarioPersistenceError: LocalizedError, Sendable {
             "This invocation already has an immutable saved run."
         case .missingArtifact(let name):
             "The evidence artifact \(name) is missing."
+        case .invalidDefinition(let name):
+            "The frozen scenario definition \(name) is unreadable or has an invalid digest. Repair it before release checks can pass."
+        case .invalidRun(let name):
+            "The saved scenario run \(name) is unreadable or has inconsistent identity. Repair it before release checks can pass."
         }
     }
 }
@@ -43,10 +49,7 @@ actor ScenarioPersistence {
             at: directory,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
-        ).compactMap { candidate -> ScenarioDefinition? in
-            guard candidate.pathExtension == "json" else { return nil }
-            return try? Self.decoder.decode(ScenarioDefinition.self, from: Data(contentsOf: candidate))
-        }
+        ).filter { $0.pathExtension == "json" }.map(loadDefinition)
         if let existing = existingVersions.first(where: { $0.version == definition.version }) {
             guard existing.definitionDigest == definition.definitionDigest else {
                 throw ScenarioPersistenceError.conflictingDefinition
@@ -63,8 +66,7 @@ actor ScenarioPersistence {
     func loadDefinitions() throws -> [ScenarioDefinition] {
         guard fileManager.fileExists(atPath: definitionsDirectory.path) else { return [] }
         let files = try recursiveJSONFiles(in: definitionsDirectory)
-        return files.compactMap { try? Self.decoder.decode(ScenarioDefinition.self, from: Data(contentsOf: $0)) }
-            .filter(\.hasValidDigest)
+        return try files.map(loadDefinition)
             .sorted { ($0.name, $0.version) < ($1.name, $1.version) }
     }
 
@@ -115,7 +117,7 @@ actor ScenarioPersistence {
         guard fileManager.fileExists(atPath: directory.path) else { return [] }
         return try recursiveJSONFiles(in: directory)
             .filter { $0.lastPathComponent == "run.json" }
-            .compactMap { try? Self.decoder.decode(ScenarioRun.self, from: Data(contentsOf: $0)) }
+            .map(loadRun)
             .sorted { $0.startedAt > $1.startedAt }
     }
 
@@ -141,7 +143,7 @@ actor ScenarioPersistence {
                 return lhs > rhs
             }
         let window = files.dropFirst(max(0, offset)).prefix(limit + 1)
-        let decoded = window.compactMap { try? Self.decoder.decode(ScenarioRun.self, from: Data(contentsOf: $0)) }
+        let decoded = try window.map(loadRun)
         return (Array(decoded.prefix(limit)), decoded.count > limit || window.count > limit)
     }
 
@@ -230,6 +232,33 @@ actor ScenarioPersistence {
         definitionsDirectory
             .appending(path: definition.id.uuidString, directoryHint: .isDirectory)
             .appending(path: "v\(definition.version)-\(definition.definitionDigest).json")
+    }
+
+    private func loadDefinition(at url: URL) throws -> ScenarioDefinition {
+        do {
+            let definition = try Self.decoder.decode(ScenarioDefinition.self, from: Data(contentsOf: url))
+            guard definition.hasValidDigest,
+                  url.deletingLastPathComponent().lastPathComponent == definition.id.uuidString,
+                  url.lastPathComponent == "v\(definition.version)-\(definition.definitionDigest).json" else {
+                throw ScenarioPersistenceError.invalidDefinition(url.lastPathComponent)
+            }
+            return definition
+        } catch {
+            throw ScenarioPersistenceError.invalidDefinition(url.lastPathComponent)
+        }
+    }
+
+    private func loadRun(at url: URL) throws -> ScenarioRun {
+        do {
+            let run = try Self.decoder.decode(ScenarioRun.self, from: Data(contentsOf: url))
+            guard url.deletingLastPathComponent().lastPathComponent == run.id.uuidString,
+                  url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == run.scenarioID.uuidString else {
+                throw ScenarioPersistenceError.invalidRun(run.id.uuidString)
+            }
+            return run
+        } catch {
+            throw ScenarioPersistenceError.invalidRun(url.deletingLastPathComponent().lastPathComponent)
+        }
     }
 
     private func journalURL(_ id: UUID) -> URL {

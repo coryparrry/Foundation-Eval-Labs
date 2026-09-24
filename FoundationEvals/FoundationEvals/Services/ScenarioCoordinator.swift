@@ -7,6 +7,8 @@ final class ScenarioCoordinator {
     private(set) var definitions: [ScenarioDefinition] = []
     private(set) var runs: [ScenarioRun] = []
     var draft: ScenarioDefinition
+    var parameterArrayDraftTexts: [Int: String] = [:]
+    var invalidParameterDraftIndices: Set<Int> = []
     var selectedRunID: UUID?
     var configuration: XcodeTestConfiguration
     var projectTrusted = false
@@ -27,6 +29,7 @@ final class ScenarioCoordinator {
     private let rootDirectory: URL
     private let evaluationStore: EvaluationStore
     private var ledger = ScenarioImportLedger()
+    private var preflightRevision = 0
 
     init(supportDirectory: URL, evaluationStore: EvaluationStore) {
         let root = supportDirectory.appending(path: "IntentLab", directoryHint: .isDirectory)
@@ -38,13 +41,14 @@ final class ScenarioCoordinator {
             workDirectory: root.appending(path: "Executor", directoryHint: .isDirectory),
             persistence: persistence
         )
-        draft = (try? ScenarioDefinition.starter().frozen()) ?? ScenarioDefinition.starter()
+        draft = (try? ScenarioDefinition.starter(projectID: evaluationStore.selectedProjectID).frozen())
+            ?? ScenarioDefinition.starter(projectID: evaluationStore.selectedProjectID)
         configuration = .init(
             containerPath: "",
             isWorkspace: false,
             scheme: "IntentLabFixture",
             testTarget: "IntentLabFixtureUITests",
-            testBundleIdentifier: "com.example.IntentLabFixtureUITests",
+            testBundleIdentifier: "com.coryparry.IntentLabFixtureUITests",
             destinationIdentifier: "",
             generatedResourceDirectory: ""
         )
@@ -55,7 +59,14 @@ final class ScenarioCoordinator {
     }
 
     var currentValidationIssues: [ScenarioValidationIssue] {
-        ScenarioValidator.issues(in: draft, requireFrozenDigest: false)
+        ScenarioValidator.issues(in: draft, requireFrozenDigest: false) + parameterDraftIssues
+    }
+
+    private var parameterDraftIssues: [ScenarioValidationIssue] {
+        invalidParameterDraftIndices.sorted().map {
+            .init(severity: .error, path: "directControl.parameters[\($0)].presence",
+                  message: "Finish the array value before saving or running this scenario.")
+        }
     }
 
     func definition(for run: ScenarioRun) -> ScenarioDefinition? {
@@ -76,6 +87,8 @@ final class ScenarioCoordinator {
             recoveryJournals = try await executor.reconcileInterruptedJournals()
             if let definition = definitions.last {
                 draft = definition
+                parameterArrayDraftTexts = [:]
+                invalidParameterDraftIndices = []
                 applyTargetToConfiguration(definition.target)
             }
             // The saved connection profile is the most recent operator choice. A frozen
@@ -110,7 +123,7 @@ final class ScenarioCoordinator {
         configuration.testSigningConfigured = nil
         projectTrusted = false
         connectionDiscovery = nil
-        preflight = nil
+        invalidatePreflight()
     }
 
     func refreshDevices() async {
@@ -164,14 +177,14 @@ final class ScenarioCoordinator {
 
     func selectScheme(_ scheme: String) {
         configuration.scheme = scheme
-        preflight = nil
+        invalidatePreflight()
     }
 
     func selectApplication(_ product: XcodeDiscoveredProduct) {
         draft.target.bundleIdentifier = product.bundleIdentifier
         configuration.applicationSigningConfigured = product.signingConfigured
         draft.definitionDigest = ""
-        preflight = nil
+        invalidatePreflight()
     }
 
     func selectUITestBundle(_ product: XcodeDiscoveredProduct) {
@@ -180,12 +193,12 @@ final class ScenarioCoordinator {
         configuration.harnessVersion = product.harnessVersion
         configuration.harnessCapabilities = product.harnessCapabilities
         configuration.testSigningConfigured = product.signingConfigured
-        preflight = nil
+        invalidatePreflight()
     }
 
     func selectDevice(_ identifier: String) async {
         configuration.destinationIdentifier = identifier
-        preflight = nil
+        invalidatePreflight()
         try? await persistence.saveExecutionConfiguration(configuration)
         if projectTrusted { await refreshPreflight() }
     }
@@ -198,16 +211,28 @@ final class ScenarioCoordinator {
 
     func comparison(for run: ScenarioRun) -> ScenarioComparisonReport? {
         guard let baseline = runs.first(where: {
-            $0.id != run.id && $0.scenarioID == run.scenarioID && $0.startedAt < run.startedAt
+            $0.id != run.id && $0.scenarioID == run.scenarioID
+                && $0.scenarioVersion == run.scenarioVersion
+                && $0.scenarioDigest == run.scenarioDigest
+                && $0.startedAt < run.startedAt
         }) else { return nil }
         return ScenarioComparison.compare(baseline: baseline, candidate: run)
     }
 
     @discardableResult
     func freezeAndSave() async throws -> ScenarioDefinition {
+        if !invalidParameterDraftIndices.isEmpty {
+            throw ScenarioValidationError.invalid(parameterDraftIssues)
+        }
         applyConfigurationToDraft()
         draft.version = max(1, draft.version)
         draft = try draft.frozen()
+        if definitions.contains(where: {
+            $0.id == draft.id && $0.version == draft.version && $0.definitionDigest != draft.definitionDigest
+        }) {
+            draft.version = max(draft.version, definitions.filter { $0.id == draft.id }.map(\.version).max() ?? 0) + 1
+            draft = try draft.frozen()
+        }
         try ScenarioValidator.validate(draft)
         let frozen = draft
         let savedConfiguration = configuration
@@ -222,23 +247,57 @@ final class ScenarioCoordinator {
     }
 
     func duplicateAsNewVersion() {
-        draft.version += 1
+        draft.version = max(draft.version, definitions.filter { $0.id == draft.id }.map(\.version).max() ?? 0) + 1
         draft.definitionDigest = ""
+        parameterArrayDraftTexts = [:]
+        invalidParameterDraftIndices = []
         selectedRunID = nil
+        invalidatePreflight()
+    }
+
+    func assignProject(id: UUID) {
+        guard evaluationStore.projects.contains(where: { $0.id == id && !$0.isArchived }) else {
+            notice = "Choose an active project for this scenario."
+            return
+        }
+        guard draft.projectID != id else { return }
+        if definitions.contains(where: { $0.id == draft.id && $0.version == draft.version }) {
+            duplicateAsNewVersion()
+        }
+        draft.projectID = id
+        draft.definitionDigest = ""
+        invalidatePreflight()
+    }
+
+    func invalidatePreflight() {
+        preflightRevision += 1
         preflight = nil
     }
 
     func refreshPreflight() async {
+        guard invalidParameterDraftIndices.isEmpty else {
+            invalidatePreflight()
+            return
+        }
         applyConfigurationToDraft()
         guard let frozen = try? draft.frozen() else { return }
         draft = frozen
         try? await persistence.saveExecutionConfiguration(configuration)
-        preflight = await executor.preflight(
+        let revision = preflightRevision
+        let checkedConfiguration = configuration
+        let checkedProjectTrusted = projectTrusted
+        let report = await executor.preflight(
             definition: frozen,
-            configuration: configuration,
-            projectTrusted: projectTrusted,
+            configuration: checkedConfiguration,
+            projectTrusted: checkedProjectTrusted,
             linkedFeatureEvidenceAvailable: linkedFeatureRun(for: frozen) != nil
         )
+        guard revision == preflightRevision,
+              configuration == checkedConfiguration,
+              projectTrusted == checkedProjectTrusted,
+              draft == frozen,
+              invalidParameterDraftIndices.isEmpty else { return }
+        preflight = report
     }
 
     func run() async {
@@ -276,13 +335,18 @@ final class ScenarioCoordinator {
                     supplementaryResults: featureResult.map { [$0] } ?? [],
                     statedChangedDimensions: changedDimensions
                 )
+                run.xctestExitCode = result.processExitCode
+                if result.processExitCode != 0 {
+                    run.executionStatus = .invalidEvidence
+                    run.outcome = .needsReview
+                }
                 if result.processExitCode != 0,
                    attachment.isCheckpoint,
                    let failure = result.testFailureMessages.first,
                    let index = run.laneResults.firstIndex(where: { $0.lane == .siri }) {
                     run.laneResults[index].diagnostic = ScenarioDiagnosticClassifier.checkpointDiagnostic(for: failure)
                 }
-                if run.outcome == .needsReview {
+                if run.outcome == .needsReview && result.processExitCode == 0 {
                     do {
                         run = try await ScenarioResponseAssessmentService.assess(run, definition: definition)
                     } catch {
@@ -413,6 +477,8 @@ final class ScenarioCoordinator {
     }
 
     private func linkedFeatureRun(for definition: ScenarioDefinition) -> EvaluationRun? {
-        definition.directControl.linkedFeatureRunID.flatMap(evaluationStore.run(with:))
+        guard let run = definition.directControl.linkedFeatureRunID.flatMap(evaluationStore.run(with:)),
+              ScenarioFeatureEvidence.isEligible(run, for: definition) else { return nil }
+        return run
     }
 }

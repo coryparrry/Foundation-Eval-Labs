@@ -16,11 +16,15 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            workspaceNavigation
-            WorkbenchStatusBar(store: store)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("Workspace status")
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                workspaceNavigation
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                WorkbenchStatusBar(store: store)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("Workspace status")
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
         }
         .frame(minWidth: 1_000, minHeight: 700)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -70,7 +74,7 @@ struct ContentView: View {
             case .overview:
                 WorkspaceOverviewView(store: store)
             case .intentLab:
-                IntentLabView(coordinator: scenarioCoordinator)
+                IntentLabView(coordinator: scenarioCoordinator, projects: store.projects)
             case .suite:
                 SuiteEditorView(store: store)
                     .disclosureGroupStyle(FullWidthDisclosureStyle())

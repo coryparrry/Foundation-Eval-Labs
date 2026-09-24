@@ -57,10 +57,46 @@ enum MCPStoreAuthority {
             case .projectReleaseReport(let arguments):
                 let suiteReport = try store.projectReleaseCheckReport(projectID: arguments.projectID)
                 let persistence = scenarioPersistence(store)
-                let definitions = try await persistence.loadDefinitions().filter {
-                    $0.projectID == arguments.projectID
+                let allDefinitions: [ScenarioDefinition]
+                do {
+                    allDefinitions = try await persistence.loadDefinitions()
+                } catch {
+                    var incomplete = suiteReport
+                    incomplete.outcome = .incompleteOrIncompatibleEvidence
+                    incomplete.summary += " Intent Lab definition storage could not be verified: \(error.localizedDescription)"
+                    incomplete.scenarios = []
+                    return readPayload([
+                        "report": try json(incomplete),
+                        "markdown": .string(EvaluationReleaseCheckEvaluator.projectMarkdown(incomplete))
+                    ])
                 }
-                let runs = try await persistence.loadRuns()
+                let latestDefinitions = ScenarioDefinition.latestVersions(in: allDefinitions)
+                let unassigned = latestDefinitions.filter { $0.projectID == nil }
+                if !unassigned.isEmpty {
+                    var incomplete = suiteReport
+                    incomplete.outcome = .incompleteOrIncompatibleEvidence
+                    incomplete.summary += " \(unassigned.count) saved Intent Lab scenario(s) have no project assignment; assign or remove them before a project release check can pass."
+                    incomplete.scenarios = []
+                    return readPayload([
+                        "report": try json(incomplete),
+                        "markdown": .string(EvaluationReleaseCheckEvaluator.projectMarkdown(incomplete))
+                    ])
+                }
+                let definitions = latestDefinitions
+                    .filter { $0.projectID == arguments.projectID }
+                let runs: [ScenarioRun]
+                do {
+                    runs = try await persistence.loadRuns()
+                } catch {
+                    var incomplete = suiteReport
+                    incomplete.outcome = .incompleteOrIncompatibleEvidence
+                    incomplete.summary += " Intent Lab run storage could not be verified: \(error.localizedDescription)"
+                    incomplete.scenarios = []
+                    return readPayload([
+                        "report": try json(incomplete),
+                        "markdown": .string(EvaluationReleaseCheckEvaluator.projectMarkdown(incomplete))
+                    ])
+                }
                 let scenarioReports = definitions.map { definition in
                     let run = runs.first {
                         $0.scenarioID == definition.id
@@ -71,6 +107,8 @@ enum MCPStoreAuthority {
                         runs.first(where: {
                             $0.id != candidate.id
                                 && $0.scenarioID == candidate.scenarioID
+                                && $0.scenarioVersion == candidate.scenarioVersion
+                                && $0.scenarioDigest == candidate.scenarioDigest
                                 && $0.startedAt < candidate.startedAt
                         }).map { ScenarioComparison.compare(baseline: $0, candidate: candidate) }
                     }
@@ -218,7 +256,10 @@ enum MCPStoreAuthority {
             $0.id == run.scenarioID && $0.version == run.scenarioVersion && $0.definitionDigest == run.scenarioDigest
         }
         let baseline = try await persistence.loadRuns(scenarioID: run.scenarioID).first {
-            $0.id != run.id && $0.startedAt < run.startedAt
+            $0.id != run.id
+                && $0.scenarioVersion == run.scenarioVersion
+                && $0.scenarioDigest == run.scenarioDigest
+                && $0.startedAt < run.startedAt
         }
         let comparison = baseline.map { ScenarioComparison.compare(baseline: $0, candidate: run) }
         let release = definition.map {

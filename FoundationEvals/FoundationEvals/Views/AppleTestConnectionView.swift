@@ -55,6 +55,14 @@ struct AppleTestConnectionView: View {
             subtitle: "Choose the app project and a paired iPhone. Intent Lab discovers the Xcode details for you."
         ) {
             VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("New to App Intents?").font(.callout.weight(.semibold))
+                    IntentLabHelp("Think of an intent as one action, such as ‘open a note’. A parameter tells it which note. An entity is an item from your app, like that note. An App Shortcut makes an intent available as a ready-made shortcut with phrases people can use.")
+                    IntentLabHelp("Start by connecting your app below. In Scenario, describe a request and the result you expect, then add checks for that result. Running requires an app with App Intents and Intent Lab test support; choosing a project does not add these for you.")
+                    Link("Apple’s guide to App Intents", destination: URL(string: "https://developer.apple.com/documentation/appintents")!)
+                        .font(.caption)
+                }
+
                 connectionField(
                     title: "Choose Xcode project",
                     detail: selectedProjectName ?? "Select the app's .xcodeproj or .xcworkspace."
@@ -129,23 +137,36 @@ struct AppleTestConnectionView: View {
             description: "Xcode scheme, test target and device settings"
         ) {
             VStack(alignment: .leading, spacing: 10) {
-                advancedRow("Container") {
+                advancedRow("Container", help: "The Xcode project or workspace containing your app and its tests. Choose it in Connection.") {
                     Text(coordinator.configuration.containerPath.isEmpty ? "Choose a project above" : coordinator.configuration.containerPath)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                 }
-                advancedRow("Scheme") {
-                    TextField("App scheme", text: $coordinator.configuration.scheme)
+                advancedRow("Scheme", help: "The Xcode build configuration that includes the app and tests you want to run. Keep the discovered choice unless you use a different scheme.") {
+                    TextField("App scheme", text: Binding(
+                        get: { coordinator.configuration.scheme },
+                        set: { coordinator.configuration.scheme = $0; coordinator.invalidatePreflight() }
+                    ))
                 }
-                advancedRow("UI-test target") {
-                    TextField("AppUITests", text: $coordinator.configuration.testTarget)
+                advancedRow("UI-test target", help: "The group of automated interface tests containing Intent Lab’s test support. This is a test target, not the app target.") {
+                    TextField("AppUITests", text: Binding(
+                        get: { coordinator.configuration.testTarget },
+                        set: { coordinator.configuration.testTarget = $0; coordinator.invalidatePreflight() }
+                    ))
                 }
-                advancedRow("Test bundle ID") {
-                    TextField("com.example.AppUITests", text: $coordinator.configuration.testBundleIdentifier)
+                advancedRow("Test bundle ID", help: "The unique identifier of the compiled UI-test bundle. Use the discovered value or copy it from the test target’s Xcode settings.") {
+                    TextField("com.example.AppUITests", text: Binding(
+                        get: { coordinator.configuration.testBundleIdentifier },
+                        set: { coordinator.configuration.testBundleIdentifier = $0; coordinator.invalidatePreflight() }
+                    ))
                 }
-                advancedRow("Device identifier") {
-                    TextField("000081…", text: $coordinator.configuration.destinationIdentifier)
+                advancedRow("Device identifier", help: "The unique ID of the paired physical iPhone used for this run. Choosing a phone in Connection fills this in.") {
+                    TextField("000081…", text: Binding(
+                        get: { coordinator.configuration.destinationIdentifier },
+                        set: { coordinator.configuration.destinationIdentifier = $0; coordinator.invalidatePreflight() }
+                    ))
                 }
+                IntentLabHelp("Command preview shows the Xcode build command for these settings. Opening the preview does not run it.")
                 DisclosureGroup("Command preview") {
                     Text(commandPreview)
                         .font(.system(.caption, design: .monospaced))
@@ -179,6 +200,7 @@ struct AppleTestConnectionView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Choose the matching app configuration", systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.callout.weight(.semibold))
+                IntentLabHelp("Scheme chooses what Xcode builds. Application chooses the app to test. UI-test target chooses the tests that contain Intent Lab support. Select the matching set for your app.")
                 if discovery.schemes.count > 1 {
                     Picker("Scheme", selection: Binding(
                         get: { coordinator.configuration.scheme },
@@ -244,11 +266,12 @@ struct AppleTestConnectionView: View {
 
     private var harnessGuidance: some View {
         EditorSection(
-            "Harness requirements",
+            "Test support your app needs",
             systemImage: "checkmark.shield",
             description: "Required test support and observable results"
         ) {
             VStack(alignment: .leading, spacing: 6) {
+                IntentLabHelp("A test harness is helper code that prepares sample data, runs the action, and reports what happened. A fixture is that known sample data. Your app needs both before Intent Lab can test it.")
                 Text("The selected UI-test target must include IntentLabScenarioTests/testIntentLabScenario and harness version \(ScenarioInvocationIdentity.currentHarnessVersion).")
                 Text("The fixture must expose reset, invocation-correlation, and observable-result accessibility values. Intent Lab reports missing signing, test identity, fixture, and evidence separately; it never changes signing automatically.")
             }
@@ -273,10 +296,14 @@ struct AppleTestConnectionView: View {
         }
     }
 
-    private func advancedRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func advancedRow<Content: View>(_ title: String, help: String, @ViewBuilder content: () -> Content) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title).font(.callout).foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
-            content().frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 5) {
+                content()
+                IntentLabHelp(help)
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }
     }
 

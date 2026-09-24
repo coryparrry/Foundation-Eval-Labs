@@ -137,6 +137,54 @@ struct ScenarioDirectControl: Codable, Equatable, Sendable {
     var parameters: [ScenarioParameter]
     var outputFields: [ScenarioOutputField]
     var linkedFeatureRunID: UUID?
+    var linkedFeatureID: String = ""
+    /// Digest of the linked evaluation run's immutable subject evidence.
+    var linkedFeatureSubjectDigest: String = ""
+
+    init(
+        intentIdentifier: String,
+        parameters: [ScenarioParameter],
+        outputFields: [ScenarioOutputField],
+        linkedFeatureRunID: UUID?,
+        linkedFeatureID: String = "",
+        linkedFeatureSubjectDigest: String = ""
+    ) {
+        self.intentIdentifier = intentIdentifier
+        self.parameters = parameters
+        self.outputFields = outputFields
+        self.linkedFeatureRunID = linkedFeatureRunID
+        self.linkedFeatureID = linkedFeatureID
+        self.linkedFeatureSubjectDigest = linkedFeatureSubjectDigest
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case intentIdentifier, parameters, outputFields, linkedFeatureRunID
+        case linkedFeatureID, linkedFeatureSubjectDigest
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        intentIdentifier = try container.decode(String.self, forKey: .intentIdentifier)
+        parameters = try container.decode([ScenarioParameter].self, forKey: .parameters)
+        outputFields = try container.decode([ScenarioOutputField].self, forKey: .outputFields)
+        linkedFeatureRunID = try container.decodeIfPresent(UUID.self, forKey: .linkedFeatureRunID)
+        linkedFeatureID = try container.decodeIfPresent(String.self, forKey: .linkedFeatureID) ?? ""
+        linkedFeatureSubjectDigest = try container.decodeIfPresent(String.self, forKey: .linkedFeatureSubjectDigest) ?? ""
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(intentIdentifier, forKey: .intentIdentifier)
+        try container.encode(parameters, forKey: .parameters)
+        try container.encode(outputFields, forKey: .outputFields)
+        try container.encodeIfPresent(linkedFeatureRunID, forKey: .linkedFeatureRunID)
+        if !linkedFeatureID.isEmpty {
+            try container.encode(linkedFeatureID, forKey: .linkedFeatureID)
+        }
+        if !linkedFeatureSubjectDigest.isEmpty {
+            try container.encode(linkedFeatureSubjectDigest, forKey: .linkedFeatureSubjectDigest)
+        }
+    }
 }
 
 enum ScenarioAssertionKind: String, Codable, CaseIterable, Sendable {
@@ -267,6 +315,14 @@ struct ScenarioDefinition: Codable, Equatable, Identifiable, Sendable {
     var hasValidDigest: Bool {
         guard !definitionDigest.isEmpty else { return false }
         return (try? calculatedDigest()) == definitionDigest
+    }
+}
+
+extension ScenarioDefinition {
+    static func latestVersions(in definitions: [Self]) -> [Self] {
+        Dictionary(grouping: definitions, by: \.id).values
+            .compactMap { $0.max(by: { $0.version < $1.version }) }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
     }
 }
 
@@ -475,6 +531,8 @@ struct ScenarioRun: Codable, Equatable, Identifiable, Sendable {
     var laneResults: [ScenarioLaneResult]
     var linkedFeatureRunID: UUID?
     var importedAt: Date
+    /// Exit status of the host XCTest process. A nonzero exit cannot support a release pass.
+    var xctestExitCode: Int32? = nil
     var fixture: ScenarioFixture? = nil
     var responseAssessments: [ScenarioResponseAssessment]? = nil
     /// Environment dimensions the developer explicitly expected to differ from
@@ -512,7 +570,7 @@ extension ScenarioDefinition {
             projectID: projectID,
             name: "Open the packing note",
             target: .init(
-                bundleIdentifier: "com.example.IntentLabFixture",
+                bundleIdentifier: "com.coryparry.IntentLabFixture",
                 projectPath: "examples/IntentLabFixture/IntentLabFixture.xcodeproj",
                 scheme: "IntentLabFixture",
                 testTarget: "IntentLabFixtureUITests",
