@@ -13,6 +13,11 @@ struct NoteEntity: AppEntity, Identifiable {
         id = note.id
         title = note.title
     }
+
+    init(id: String, title: String) {
+        self.id = id
+        self.title = title
+    }
 }
 
 struct NoteEntityQuery: EntityStringQuery {
@@ -33,6 +38,12 @@ struct OpenNoteIntent: AppIntent {
     static let openAppWhenRun = true
 
     @Parameter(title: "Note") var note: NoteEntity
+
+    init() {}
+
+    init(note: NoteEntity) {
+        self.note = note
+    }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         guard FixtureNotes.note(id: note.id) != nil else { throw FixtureIntentError.missingNote }
@@ -60,8 +71,14 @@ struct SummarizeNoteIntent: AppIntent {
 struct FixtureShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
+            intent: OpenNoteIntent(note: NoteEntity(id: "packing-001", title: "Packing note")),
+            phrases: ["Open the packing note in \(.applicationName)"],
+            shortTitle: "Open packing note",
+            systemImageName: "note.text"
+        )
+        AppShortcut(
             intent: OpenNoteIntent(),
-            phrases: ["Open the packing note in \(.applicationName)", "Open a note in \(.applicationName)"],
+            phrases: ["Open a note in \(.applicationName)"],
             shortTitle: "Open note",
             systemImageName: "note.text"
         )

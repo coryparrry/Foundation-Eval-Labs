@@ -232,10 +232,10 @@ final class IntentLabScenarioTests: XCTestCase {
         XCTAssertEqual(observations["invocationContext"], .string(context))
     }
 
-    func testSiriPermissionFlowOnPhysicalDevice() throws {
+    func testSiriShortcutOpensPackingNote() throws {
         #if targetEnvironment(simulator)
-        throw XCTSkip("Siri permission verification requires a physical iPhone.")
-        #else
+        throw XCTSkip("This Siri shortcut check requires a configured physical iPhone.")
+        #endif
         let application = XCUIApplication()
         let context = "siri-permission-\(UUID().uuidString)"
         application.launchArguments = ["-intent-lab-reset", "-intent-lab-context", context]
@@ -251,9 +251,8 @@ final class IntentLabScenarioTests: XCTestCase {
         )
         XCTAssertEqual(observations["selectedNoteID"], .string("packing-001"))
         XCTAssertEqual(observations["invocationContext"], .string(context))
-        XCTAssertEqual(observations["siriDisambiguationSelection"], .string("Packing note"))
+        XCTAssertNil(observations["siriDisambiguationSelection"])
         XCTAssertEqual(observations["applicationEvent"], .string("OpenNoteIntent:packing-001"))
-        #endif
     }
 
     func testIntentLabScenario() throws {
