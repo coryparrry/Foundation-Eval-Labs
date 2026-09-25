@@ -6,6 +6,7 @@ enum ScenarioPersistenceError: LocalizedError, Sendable {
     case missingArtifact(String)
     case invalidDefinition(String)
     case invalidRun(String)
+    case invalidJournal(String)
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ enum ScenarioPersistenceError: LocalizedError, Sendable {
             "The frozen scenario definition \(name) is unreadable or has an invalid digest. Repair it before release checks can pass."
         case .invalidRun(let name):
             "The saved scenario run \(name) is unreadable or has inconsistent identity. Repair it before release checks can pass."
+        case .invalidJournal(let name):
+            "The execution journal \(name) is unreadable or has inconsistent identity. Repair it before device recovery can continue."
         }
     }
 }
@@ -176,8 +179,8 @@ actor ScenarioPersistence {
             includingPropertiesForKeys: [.isRegularFileKey]
         )
         .filter { $0.pathExtension == "json" }
-        .compactMap { try? Self.decoder.decode(ScenarioExecutionJournal.self, from: Data(contentsOf: $0)) }
-            .sorted { $0.updatedAt > $1.updatedAt }
+        .map(loadJournal)
+        .sorted { $0.updatedAt > $1.updatedAt }
     }
 
     func saveExecutionConfiguration(_ configuration: XcodeTestConfiguration) throws {
@@ -200,7 +203,11 @@ actor ScenarioPersistence {
         for laneIndex in copy.laneResults.indices {
             copy.laneResults[laneIndex].observations = copy.laneResults[laneIndex].observations.filter { key, _ in
                 !sensitiveKeys.contains { key.localizedCaseInsensitiveContains($0) }
+                    && !key.hasPrefix("feature.encodedValue")
+                    && !key.hasPrefix("feature.metadata.")
             }
+            copy.laneResults[laneIndex].observationSources = copy.laneResults[laneIndex]
+                .observationSources?.filter { copy.laneResults[laneIndex].observations[$0.key] != nil }
             for assertionIndex in copy.laneResults[laneIndex].assertionResults.indices {
                 copy.laneResults[laneIndex].assertionResults[assertionIndex].observedValue = nil
                 copy.laneResults[laneIndex].assertionResults[assertionIndex].message =
@@ -258,6 +265,18 @@ actor ScenarioPersistence {
             return run
         } catch {
             throw ScenarioPersistenceError.invalidRun(url.deletingLastPathComponent().lastPathComponent)
+        }
+    }
+
+    private func loadJournal(at url: URL) throws -> ScenarioExecutionJournal {
+        do {
+            let journal = try Self.decoder.decode(ScenarioExecutionJournal.self, from: Data(contentsOf: url))
+            guard url.lastPathComponent == "\(journal.id.uuidString).json" else {
+                throw ScenarioPersistenceError.invalidJournal(url.lastPathComponent)
+            }
+            return journal
+        } catch {
+            throw ScenarioPersistenceError.invalidJournal(url.lastPathComponent)
         }
     }
 

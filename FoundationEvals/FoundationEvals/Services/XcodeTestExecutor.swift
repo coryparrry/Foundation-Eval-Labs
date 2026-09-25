@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 struct XcodeTestConfiguration: Codable, Equatable, Sendable {
@@ -122,6 +123,8 @@ actor XcodeTestExecutor {
     private let persistence: ScenarioPersistence
     private let fileManager: FileManager
     private var active: ActiveExecution?
+    private var inFlightJournal: ScenarioExecutionJournal?
+    private var awaitingValidationJournal: ScenarioExecutionJournal?
     private var reservations: [String: ScenarioDeviceReservation] = [:]
     private var clearingDestinations: Set<String> = []
     private var cancelledInvocationIDs: Set<UUID> = []
@@ -158,14 +161,28 @@ actor XcodeTestExecutor {
     func finishEvidenceValidation(journal: ScenarioExecutionJournal, accepted: Bool) async throws {
         var finished = journal
         let destination = journal.invocation.destinationIdentifier
-        finished.phase = accepted ? .stopped : .recoveryRequired
-        finished.recoveryReason = accepted ? nil : ScenarioExecutionRecoveryPolicy.reason(for: .invalidEvidence)
+        var canAccept = accepted && !cancelledInvocationIDs.contains(journal.id)
+        finished.phase = canAccept ? .stopped : .recoveryRequired
+        finished.recoveryReason = canAccept ? nil : ScenarioExecutionRecoveryPolicy.reason(for: .invalidEvidence)
+        finished.evidenceAccepted = canAccept
         finished.updatedAt = Date()
-        if !accepted {
+        if !canAccept {
             reservations[destination] = .quarantined(reason: finished.recoveryReason!)
         }
         try await persistence.saveJournal(finished)
-        if accepted { reservations[destination] = nil }
+        // Cancellation can arrive while the journal write is suspended.
+        if canAccept && cancelledInvocationIDs.contains(journal.id) {
+            canAccept = false
+            finished.phase = .recoveryRequired
+            finished.recoveryReason = ScenarioExecutionRecoveryPolicy.reason(for: .cancellation)
+            finished.evidenceAccepted = false
+            finished.updatedAt = Date()
+            reservations[destination] = .quarantined(reason: finished.recoveryReason!)
+            try await persistence.saveJournal(finished)
+        }
+        if canAccept { reservations[destination] = nil }
+        if awaitingValidationJournal?.id == journal.id { awaitingValidationJournal = nil }
+        cancelledInvocationIDs.remove(journal.id)
     }
 
     private func removeInvocationTestRuns(derivedDataPath: String) {
@@ -181,16 +198,18 @@ actor XcodeTestExecutor {
     }
 
     func hasActiveExecution() -> Bool {
-        active != nil
+        active != nil || inFlightJournal != nil
     }
 
     func persistPreparingJournal(_ journal: ScenarioExecutionJournal) async throws {
         let destination = journal.invocation.destinationIdentifier
         let reservation = ScenarioDeviceReservation.reserved(invocationID: journal.id)
         reservations[destination] = reservation
+        inFlightJournal = journal
         do {
             try await persistence.saveJournal(journal)
         } catch {
+            if inFlightJournal?.id == journal.id { inFlightJournal = nil }
             if reservations[destination] == reservation {
                 reservations[destination] = nil
             }
@@ -204,7 +223,7 @@ actor XcodeTestExecutor {
                 "Prove that the prior test session stopped and the fixture is ready before clearing this device quarantine."
             )
         }
-        guard active == nil else {
+        guard active == nil, inFlightJournal == nil, awaitingValidationJournal == nil else {
             throw XcodeTestExecutorError.deviceUnavailable(
                 "Wait for the cancelled host process to stop before clearing this device quarantine."
             )
@@ -239,7 +258,8 @@ actor XcodeTestExecutor {
             journal.updatedAt = Date()
             try await persistence.saveJournal(journal)
         }
-        guard active == nil, reservations[destinationIdentifier] == reservation else {
+        guard active == nil, inFlightJournal == nil, awaitingValidationJournal == nil,
+              reservations[destinationIdentifier] == reservation else {
             throw XcodeTestExecutorError.deviceUnavailable("Device recovery state changed while clearing quarantine.")
         }
         reservations[destinationIdentifier] = nil
@@ -329,7 +349,10 @@ actor XcodeTestExecutor {
         projectTrusted: Bool,
         linkedFeatureEvidenceAvailable: Bool = false
     ) async throws -> ScenarioExecutorResult {
-        guard active == nil else { throw XcodeTestExecutorError.activeExecution }
+        try Task.checkCancellation()
+        guard active == nil, inFlightJournal == nil, awaitingValidationJournal == nil else {
+            throw XcodeTestExecutorError.activeExecution
+        }
         let report = preflight(
             definition: definition,
             configuration: configuration,
@@ -382,6 +405,12 @@ actor XcodeTestExecutor {
             updatedAt: Date(),
             recoveryReason: nil
         )
+        defer {
+            inFlightJournal = nil
+            if awaitingValidationJournal?.id != invocationID {
+                cancelledInvocationIDs.remove(invocationID)
+            }
+        }
         try await persistPreparingJournal(journal)
         var deviceTestLaunched = false
         var invocationTestRunURL: URL?
@@ -402,6 +431,7 @@ actor XcodeTestExecutor {
                 appendLog: false,
                 deadline: .seconds(900)
             )
+            try throwIfCancelled(invocationID)
             guard buildExit == 0 else {
                 journal.phase = .stopped
                 journal.updatedAt = Date()
@@ -434,6 +464,7 @@ actor XcodeTestExecutor {
             journal.invocation = boundInvocation
             journal.phase = .running
             journal.updatedAt = Date()
+            inFlightJournal = journal
             try await persistence.saveJournal(journal)
 
             let testArguments = [
@@ -445,6 +476,7 @@ actor XcodeTestExecutor {
             ]
             journal.intendedArguments = testArguments
             journal.updatedAt = Date()
+            inFlightJournal = journal
             try await persistence.saveJournal(journal)
             deviceTestLaunched = true
             let testDeadline = Duration.seconds(XcodeTestDeadlineBudget.seconds(for: definition))
@@ -477,6 +509,7 @@ actor XcodeTestExecutor {
                 throw XcodeTestExecutorError.cancelled
             }
             active = nil
+            awaitingValidationJournal = journal
             return .init(
                 journal: journal,
                 resultBundleURL: resultBundle,
@@ -488,12 +521,12 @@ actor XcodeTestExecutor {
             )
         } catch {
             active = nil
-            cancelledInvocationIDs.remove(invocationID)
-            let failure = recoveryFailure(for: error)
+            let failure = cancelledInvocationIDs.contains(invocationID)
+                ? ScenarioRecoveryFailure.cancellation : recoveryFailure(for: error)
             if ScenarioExecutionRecoveryPolicy.requiresQuarantine(
                 deviceTestLaunched: deviceTestLaunched,
                 failure: failure
-            ) {
+            ) || failure == .cancellation {
                 journal.phase = .recoveryRequired
                 journal.recoveryReason = ScenarioExecutionRecoveryPolicy.reason(for: failure)
                 reservations[configuration.destinationIdentifier] = .quarantined(
@@ -510,23 +543,30 @@ actor XcodeTestExecutor {
     }
 
     func cancelActiveExecution(grace: Duration = .seconds(5)) async -> ScenarioExecutionJournal? {
-        guard var execution = active else { return nil }
-        cancelledInvocationIDs.insert(execution.invocationID)
-        execution.journal.phase = .cancelling
-        execution.journal.updatedAt = Date()
-        active = execution
-        try? await persistence.saveJournal(execution.journal)
-        execution.process.interrupt()
-        try? await Task.sleep(for: grace)
-        if execution.process.isRunning { execution.process.terminate() }
-        execution.journal.phase = .recoveryRequired
-        execution.journal.recoveryReason = "Cancellation was requested; confirm device-side termination and fixture readiness."
-        execution.journal.updatedAt = Date()
-        try? await persistence.saveJournal(execution.journal)
-        reservations[execution.destinationIdentifier] = .quarantined(
-            reason: execution.journal.recoveryReason ?? "Device recovery is required."
-        )
-        return execution.journal
+        guard var journal = active?.journal ?? inFlightJournal ?? awaitingValidationJournal else { return nil }
+        let invocationID = journal.id
+        let destination = journal.invocation.destinationIdentifier
+        cancelledInvocationIDs.insert(invocationID)
+        journal.phase = .recoveryRequired
+        journal.recoveryReason = "Cancellation was requested; confirm device-side termination and fixture readiness."
+        journal.evidenceAccepted = false
+        journal.updatedAt = Date()
+        if inFlightJournal?.id == invocationID { inFlightJournal = journal }
+        if awaitingValidationJournal?.id == invocationID { awaitingValidationJournal = journal }
+        reservations[destination] = .quarantined(reason: journal.recoveryReason!)
+        if let process = active?.process, active?.invocationID == invocationID {
+            process.interrupt()
+            try? await Task.sleep(for: grace)
+            if process.isRunning { process.terminate() }
+        }
+        try? await persistence.saveJournal(journal)
+        return journal
+    }
+
+    private func throwIfCancelled(_ invocationID: UUID) throws {
+        if Task.isCancelled || cancelledInvocationIDs.contains(invocationID) {
+            throw XcodeTestExecutorError.cancelled
+        }
     }
 
     private func physicalDestination(_ identifier: String) -> (ready: Bool, detail: String) {
@@ -570,8 +610,10 @@ actor XcodeTestExecutor {
         destinationIdentifier: String,
         journal: ScenarioExecutionJournal,
         appendLog: Bool,
-        deadline: Duration? = nil
+        deadline: Duration? = nil,
+        onProcessLaunched: (@Sendable (Int32) -> Void)? = nil
     ) async throws -> Int32 {
+        try throwIfCancelled(invocationID)
         if !fileManager.fileExists(atPath: logURL.path) {
             fileManager.createFile(atPath: logURL.path, contents: nil)
         }
@@ -584,14 +626,25 @@ actor XcodeTestExecutor {
         process.arguments = arguments
         process.standardOutput = logHandle
         process.standardError = logHandle
+        enum ProcessOutcome: Sendable {
+            case exited(Int32)
+            case deadline
+        }
+        let (outcomes, continuation) = AsyncStream.makeStream(of: ProcessOutcome.self)
+        process.terminationHandler = { terminated in
+            continuation.yield(.exited(terminated.terminationStatus))
+            continuation.finish()
+        }
         var runningJournal = journal
         runningJournal.processStartedAt = Date()
         do {
             try process.run()
         } catch {
+            continuation.finish()
             throw XcodeTestExecutorError.processLaunch(error.localizedDescription)
         }
         runningJournal.processIdentifier = process.processIdentifier
+        onProcessLaunched?(process.processIdentifier)
         runningJournal.updatedAt = Date()
         active = .init(
             invocationID: invocationID,
@@ -605,15 +658,18 @@ actor XcodeTestExecutor {
                 active = nil
             }
         }
-        try await persistence.saveJournal(runningJournal)
-        enum ProcessOutcome: Sendable {
-            case exited(Int32)
-            case deadline
-        }
-        let (outcomes, continuation) = AsyncStream.makeStream(of: ProcessOutcome.self)
-        process.terminationHandler = { terminated in
-            continuation.yield(.exited(terminated.terminationStatus))
-            continuation.finish()
+        do {
+            try await persistence.saveJournal(runningJournal)
+        } catch {
+            // A launched child must be stopped before the executor can release its
+            // active-process tracking, even when the journal write itself failed.
+            process.interrupt()
+            try? await Task.sleep(for: .milliseconds(250))
+            if process.isRunning { process.terminate() }
+            try? await Task.sleep(for: .milliseconds(250))
+            if process.isRunning { _ = Darwin.kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+            throw error
         }
         let timeoutTask = deadline.map { deadline in
             Task { @concurrent in

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Darwin
 @testable import FoundationEvals
 
 struct IntentLabRegressionTests {
@@ -186,6 +187,25 @@ struct IntentLabRegressionTests {
     }
 
     @MainActor
+    @Test func corruptRecoveryJournalPreventsScenarioRun() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journals = root.appending(path: "IntentLab/Journals", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: journals, withIntermediateDirectories: true)
+        try Data("invalid journal".utf8).write(to: journals.appending(path: "corrupt.json"))
+        let store = EvaluationStore(supportDirectory: root)
+        let coordinator = ScenarioCoordinator(supportDirectory: root, evaluationStore: store)
+
+        await coordinator.load()
+        #expect(!coordinator.hasLoaded)
+        await coordinator.run()
+        #expect(coordinator.notice?.contains("must load successfully") == true)
+        let saved = try await ScenarioPersistence(rootDirectory: root.appending(path: "IntentLab"))
+            .loadDefinitions()
+        #expect(saved.isEmpty)
+    }
+
+    @MainActor
     @Test func approvingWordingCreatesANewFrozenVersion() async throws {
         let root = try temporaryDirectory()
         let store = EvaluationStore(supportDirectory: root)
@@ -250,11 +270,174 @@ struct IntentLabRegressionTests {
         #expect(reloaded.projectTrusted == false)
     }
 
+    @MainActor
+    @Test func failedOrUnobservedFinalEvidenceKeepsDeviceQuarantined() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = ScenarioPersistence(rootDirectory: root)
+        let executor = XcodeTestExecutor(workDirectory: root.appending(path: "Executor"), persistence: persistence)
+        var definition = ScenarioDefinition.starter()
+        definition = try definition.frozen()
+        let now = Date()
+        let invocation = ScenarioInvocationIdentity(
+            id: UUID(), nonce: UUID().uuidString, issuedAt: now,
+            testIdentity: .init(bundleIdentifier: "dev.example.FixtureUITests",
+                                className: "IntentLabScenarioTests", methodName: "testIntentLabScenario"),
+            harnessVersion: ScenarioInvocationIdentity.currentHarnessVersion,
+            destinationIdentifier: "physical-device-1", scenarioDigest: definition.definitionDigest,
+            resultBundleIdentity: "IntentLab.xcresult"
+        )
+        let journal = ScenarioExecutionJournal(
+            phase: .stopped, invocation: invocation, scenarioID: definition.id,
+            scenarioVersion: definition.version, resultBundlePath: "", derivedDataPath: "",
+            buildLogPath: "", intendedExecutable: "", intendedArguments: [],
+            processIdentifier: nil, processStartedAt: nil, updatedAt: now, recoveryReason: nil
+        )
+        let siri = ScenarioLaneResult(
+            caseID: definition.id, attempt: 1, lane: .siri,
+            executionStatus: .timedOut, outcome: .notObserved,
+            startedAt: now, completedAt: now, observations: [:], assertionResults: []
+        )
+        let run = ScenarioRun(
+            id: invocation.id, scenarioID: definition.id, scenarioVersion: definition.version,
+            scenarioDigest: definition.definitionDigest, invocation: invocation,
+            startedAt: now, completedAt: now,
+            environment: .init(xcodeVersion: "27", sdkVersion: "27", deviceModel: "iPhone",
+                               operatingSystem: "iOS 27", languageCode: "en", regionCode: "GB",
+                               timeZoneIdentifier: "Europe/London", executedAt: now),
+            executionStatus: .timedOut, outcome: .notObserved, laneResults: [siri],
+            linkedFeatureRunID: nil, importedAt: now
+        )
+        let final = ScenarioEvidenceAttachment(url: root.appending(path: "final.json"), name: "IntentLabEvidence-final")
+        #expect(!ScenarioCoordinator.canReleaseDevice(
+            processExitCode: 1, attachments: [final], importedRuns: [run]
+        ))
+        #expect(!ScenarioCoordinator.canReleaseDevice(
+            processExitCode: 0, attachments: [final], importedRuns: [run]
+        ))
+        var complete = run
+        complete.executionStatus = .completed
+        complete.outcome = .passed
+        complete.laneResults[0].executionStatus = .completed
+        complete.laneResults[0].outcome = .passed
+        #expect(ScenarioCoordinator.canReleaseDevice(
+            processExitCode: 0, attachments: [final], importedRuns: [complete]
+        ))
+        let cancelled = try #require(ScenarioCoordinator.evidenceForCommit([complete], cancelled: true).first)
+        #expect(cancelled.executionStatus == .invalidEvidence)
+        #expect(cancelled.outcome == .needsReview)
+        #expect(!ScenarioCoordinator.canReleaseDevice(
+            processExitCode: 0, attachments: [final], importedRuns: [cancelled]
+        ))
+        try await executor.finishEvidenceValidation(journal: journal, accepted: false)
+        #expect(await executor.reservation(for: invocation.destinationIdentifier) != nil)
+    }
+
+    @Test func cancellationBetweenBuildAndTestStopsNextProcessBeforeLaunch() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = ScenarioPersistence(rootDirectory: root)
+        let executor = XcodeTestExecutor(workDirectory: root.appending(path: "Executor"), persistence: persistence)
+        let definition = try ScenarioDefinition.starter().frozen()
+        let invocation = ScenarioInvocationIdentity(
+            id: UUID(), nonce: UUID().uuidString, issuedAt: Date(),
+            testIdentity: .init(bundleIdentifier: "dev.example.FixtureUITests",
+                                className: "IntentLabScenarioTests", methodName: "testIntentLabScenario"),
+            harnessVersion: ScenarioInvocationIdentity.currentHarnessVersion,
+            destinationIdentifier: "physical-device-1", scenarioDigest: definition.definitionDigest,
+            resultBundleIdentity: "IntentLab.xcresult"
+        )
+        let journal = ScenarioExecutionJournal(
+            phase: .preparing, invocation: invocation, scenarioID: definition.id,
+            scenarioVersion: definition.version, resultBundlePath: "", derivedDataPath: "",
+            buildLogPath: "", intendedExecutable: "/bin/sh", intendedArguments: [],
+            processIdentifier: nil, processStartedAt: nil, updatedAt: Date(), recoveryReason: nil
+        )
+        try await executor.persistPreparingJournal(journal)
+        let cancelled = await executor.cancelActiveExecution(grace: .milliseconds(10))
+        #expect(cancelled?.phase == .recoveryRequired)
+        let marker = root.appending(path: "launched")
+        do {
+            _ = try await executor.runProcess(
+                executable: "/bin/sh", arguments: ["-c", "touch \(marker.path)"],
+                logURL: root.appending(path: "process.log"), invocationID: invocation.id,
+                destinationIdentifier: invocation.destinationIdentifier, journal: journal,
+                appendLog: false
+            )
+            Issue.record("A cancelled invocation launched another process.")
+        } catch XcodeTestExecutorError.cancelled {
+            // The cancellation is expected before process launch.
+        } catch {
+            Issue.record("Unexpected cancellation error: \(error)")
+        }
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+        #expect(await executor.reservation(for: invocation.destinationIdentifier) != nil)
+    }
+
+    @Test func journalWriteFailureStopsLaunchedProcess() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = ScenarioPersistence(rootDirectory: root)
+        let executor = XcodeTestExecutor(workDirectory: root.appending(path: "Executor"), persistence: persistence)
+        let definition = try ScenarioDefinition.starter().frozen()
+        let invocation = ScenarioInvocationIdentity(
+            id: UUID(), nonce: UUID().uuidString, issuedAt: Date(),
+            testIdentity: .init(bundleIdentifier: "dev.example.FixtureUITests",
+                                className: "IntentLabScenarioTests", methodName: "testIntentLabScenario"),
+            harnessVersion: ScenarioInvocationIdentity.currentHarnessVersion,
+            destinationIdentifier: "physical-device-1", scenarioDigest: definition.definitionDigest,
+            resultBundleIdentity: "IntentLab.xcresult"
+        )
+        let journal = ScenarioExecutionJournal(
+            phase: .preparing, invocation: invocation, scenarioID: definition.id,
+            scenarioVersion: definition.version, resultBundlePath: "", derivedDataPath: "",
+            buildLogPath: "", intendedExecutable: "/bin/sh", intendedArguments: [],
+            processIdentifier: nil, processStartedAt: nil, updatedAt: Date(), recoveryReason: nil
+        )
+        let blockedJournal = root.appending(path: "Journals/\(invocation.id.uuidString).json", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: blockedJournal, withIntermediateDirectories: true)
+        let launchedProcess = ProcessIDRecorder()
+        do {
+            _ = try await executor.runProcess(
+                executable: "/bin/sleep", arguments: ["10"],
+                logURL: root.appending(path: "process.log"), invocationID: invocation.id,
+                destinationIdentifier: invocation.destinationIdentifier, journal: journal,
+                appendLog: false,
+                onProcessLaunched: { launchedProcess.record($0) }
+            )
+            Issue.record("The blocked journal unexpectedly saved.")
+        } catch {
+            let processID = try #require(launchedProcess.value)
+            let processCheck = kill(processID, 0)
+            let processError = errno
+            #expect(processCheck == -1)
+            #expect(processError == ESRCH)
+            #expect(!(await executor.hasActiveExecution()))
+        }
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appending(path: "IntentLabRegressionTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private final class ProcessIDRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storedValue: Int32?
+
+        var value: Int32? {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedValue
+        }
+
+        func record(_ processID: Int32) {
+            lock.lock()
+            defer { lock.unlock() }
+            storedValue = processID
+        }
     }
 
     private func deadlineDefinition(

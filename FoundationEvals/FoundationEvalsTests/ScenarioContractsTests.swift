@@ -299,6 +299,50 @@ struct ScenarioContractsTests {
         #expect(report.failures.contains { $0.contains("Siri") })
     }
 
+    @Test func requiredSiriLaneNeedsItsOwnRequiredOutcomeAssertion() throws {
+        var definition = try scenario()
+        definition.assertions = [ScenarioAssertion(
+            kind: .entityIdentifier,
+            observationKey: "selectedNoteID",
+            expectedValue: .string("packing-001"),
+            explanation: "The direct intent selected the note.",
+            applicableLanes: [.intentIntegration]
+        )]
+        definition = try definition.frozen()
+        let siriEvaluation = ScenarioResultEvaluator.evaluate(
+            definition: definition,
+            lane: .siri,
+            observations: [:],
+            executionStatus: .completed
+        )
+        #expect(siriEvaluation.0 == .needsReview)
+        #expect(ScenarioValidator.issues(in: definition).contains {
+            $0.path == "coverage.siri" && $0.severity == .error
+        })
+
+        let boundInvocation = invocation(for: definition)
+        let envelope = evidence(for: definition, invocation: boundInvocation)
+        var successfulRun = ScenarioRun(
+            id: boundInvocation.id,
+            scenarioID: definition.id,
+            scenarioVersion: definition.version,
+            scenarioDigest: definition.definitionDigest,
+            invocation: boundInvocation,
+            startedAt: .now,
+            completedAt: .now,
+            environment: envelope.environment,
+            executionStatus: .completed,
+            outcome: .passed,
+            laneResults: envelope.results,
+            linkedFeatureRunID: nil,
+            importedAt: .now
+        )
+        successfulRun.xctestExitCode = 0
+        let release = ScenarioReleaseCheckEvaluator.report(definition: definition, run: successfulRun)
+        #expect(release.outcome != .passed)
+        #expect(release.failures.contains { $0.contains("Siri outcome lane has no required observable") })
+    }
+
     @Test func comparisonRejectsUnstatedEnvironmentDrift() throws {
         let definition = try scenario()
         let invocation = invocation(for: definition)
@@ -474,6 +518,25 @@ struct ScenarioContractsTests {
         )
         run.xctestExitCode = 0
         #expect(ScenarioReleaseCheckEvaluator.report(definition: definition, run: run).outcome == .passed)
+        var pendingJournal = journal(for: definition, invocation: boundInvocation, phase: .stopped)
+        #expect(!ScenarioReleaseCheckEvaluator.acceptedJournal(for: run, in: [pendingJournal]))
+        #expect(ScenarioReleaseCheckEvaluator.report(
+            definition: definition, run: run, journalAccepted: false
+        ).outcome == .incompleteOrIncompatibleEvidence)
+        pendingJournal.evidenceAccepted = true
+        #expect(ScenarioReleaseCheckEvaluator.acceptedJournal(for: run, in: [pendingJournal]))
+        #expect(ScenarioReleaseCheckEvaluator.report(
+            definition: definition, run: run, journalAccepted: true
+        ).outcome == .passed)
+        var legacyJSON = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(pendingJournal)
+        ) as? [String: Any])
+        legacyJSON.removeValue(forKey: "evidenceAccepted")
+        let legacyJournal = try JSONDecoder().decode(
+            ScenarioExecutionJournal.self,
+            from: JSONSerialization.data(withJSONObject: legacyJSON)
+        )
+        #expect(legacyJournal.evidenceAccepted == nil)
 
         let laneIndex = try #require(run.laneResults.firstIndex { $0.lane == .intentIntegration })
         let completeResults = run.laneResults[laneIndex].assertionResults
@@ -549,6 +612,33 @@ struct ScenarioContractsTests {
             )
         }
         #expect(await executor.reservation(for: destination) == .reserved(invocationID: invocation.id))
+    }
+
+    @Test func corruptJournalCannotDisappearFromRecoveryInventory() async throws {
+        let root = try temporaryDirectory()
+        let persistence = ScenarioPersistence(rootDirectory: root)
+        let definition = try scenario()
+        let invocation = invocation(for: definition)
+        try await persistence.saveJournal(journal(
+            for: definition, invocation: invocation, phase: .running
+        ))
+        let path = root.appending(path: "Journals/\(invocation.id.uuidString).json")
+        try Data("{corrupt".utf8).write(to: path, options: .atomic)
+
+        await #expect(throws: ScenarioPersistenceError.self) {
+            _ = try await persistence.loadJournals()
+        }
+
+        try await persistence.saveJournal(journal(
+            for: definition, invocation: invocation, phase: .running
+        ))
+        try FileManager.default.moveItem(
+            at: path,
+            to: root.appending(path: "Journals/\(UUID().uuidString).json")
+        )
+        await #expect(throws: ScenarioPersistenceError.self) {
+            _ = try await persistence.loadJournals()
+        }
     }
 
     @Test func recoveryRequiredJournalSurvivesRelaunchUntilExplicitlyCleared() async throws {

@@ -24,6 +24,8 @@ struct ScenarioExecutionJournal: Codable, Equatable, Identifiable, Sendable {
     var processStartedAt: Date?
     var updatedAt: Date
     var recoveryReason: String?
+    /// Nil for older or unfinished journals; only true authorizes release evidence.
+    var evidenceAccepted: Bool? = nil
 }
 
 struct ScenarioImportLedger: Codable, Equatable, Sendable {

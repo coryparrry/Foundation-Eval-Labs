@@ -136,6 +136,11 @@ enum ScenarioValidator {
                 error("assertions[\(index)].applicableLanes", "Choose at least one evidence lane or leave lane scope unset.")
             }
         }
+        for lane in ScenarioLane.allCases where definition.coverage[lane] == .required {
+            if !definition.assertions.contains(where: { $0.required && $0.applies(to: lane) }) {
+                error("coverage.\(lane.rawValue)", "The required \(lane.title) lane needs a required observable outcome assertion.")
+            }
+        }
 
         if !definition.safety.deadlineSeconds.isFinite || !(1...900).contains(definition.safety.deadlineSeconds) {
             error("safety.deadlineSeconds", "The execution deadline must be between 1 and 900 seconds.")
@@ -210,6 +215,9 @@ enum ScenarioResultEvaluator {
     ) -> (ScenarioOutcome, [ScenarioAssertionResult]) {
         guard executionStatus == .completed else { return (.notObserved, []) }
         let assertions = definition.assertions.filter { $0.applies(to: lane) }
+        if definition.coverage[lane] == .required && !assertions.contains(where: \.required) {
+            return (.needsReview, [])
+        }
         let results = assertions.map { assertion -> ScenarioAssertionResult in
             guard let observed = observations[assertion.observationKey] else {
                 return .init(
@@ -253,8 +261,8 @@ enum ScenarioResultEvaluator {
     static func overall(definition: ScenarioDefinition, laneResults: [ScenarioLaneResult]) -> ScenarioOutcome {
         let requiredLanes = ScenarioLane.allCases.filter { definition.coverage[$0] == .required }
         guard !requiredLanes.isEmpty,
-              definition.assertions.contains(where: { assertion in
-                  assertion.required && requiredLanes.contains(where: assertion.applies(to:))
+              requiredLanes.allSatisfy({ lane in
+                  definition.assertions.contains { $0.required && $0.applies(to: lane) }
               }) else { return .needsReview }
         let requiredResults = laneResults.filter { requiredLanes.contains($0.lane) }
         if requiredResults.contains(where: { $0.outcome == .failed }) { return .failed }

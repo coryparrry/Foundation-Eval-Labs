@@ -21,6 +21,7 @@ final class ScenarioCoordinator {
     private(set) var isGeneratingSuggestions = false
     private(set) var suggestions: [ScenarioRequestSuggestion] = []
     private(set) var recoveryJournals: [ScenarioExecutionJournal] = []
+    private(set) var journals: [ScenarioExecutionJournal] = []
     private(set) var hasLoaded = false
     var notice: String?
 
@@ -30,6 +31,9 @@ final class ScenarioCoordinator {
     private let evaluationStore: EvaluationStore
     private var ledger = ScenarioImportLedger()
     private var preflightRevision = 0
+    private var cancellationRequested = false
+    private var finalEvidenceCommitStarted = false
+    private var executionTask: Task<ScenarioExecutorResult, Error>?
 
     init(supportDirectory: URL, evaluationStore: EvaluationStore) {
         let root = supportDirectory.appending(path: "IntentLab", directoryHint: .isDirectory)
@@ -85,6 +89,7 @@ final class ScenarioCoordinator {
             runs = try await persistence.loadRuns()
             ledger = try await persistence.loadLedger()
             recoveryJournals = try await executor.reconcileInterruptedJournals()
+            journals = try await persistence.loadJournals()
             if let definition = definitions.last {
                 draft = definition
                 parameterArrayDraftTexts = [:]
@@ -301,9 +306,19 @@ final class ScenarioCoordinator {
     }
 
     func run() async {
+        guard hasLoaded else {
+            notice = "Intent Lab storage must load successfully before a device scenario can run."
+            return
+        }
         guard !isRunning else { return }
         isRunning = true
-        defer { isRunning = false }
+        cancellationRequested = false
+        finalEvidenceCommitStarted = false
+        defer {
+            isRunning = false
+            finalEvidenceCommitStarted = false
+            executionTask = nil
+        }
         var pendingJournal: ScenarioExecutionJournal?
         let runConfiguration = configuration
         let runTrusted = projectTrusted
@@ -311,12 +326,18 @@ final class ScenarioCoordinator {
         let linkedRun = linkedFeatureRun(for: draft)
         do {
             let definition = try await freezeAndSave()
-            let result = try await executor.execute(
-                definition: definition,
-                configuration: runConfiguration,
-                projectTrusted: runTrusted,
-                linkedFeatureEvidenceAvailable: linkedRun != nil
-            )
+            guard !cancellationRequested else { throw XcodeTestExecutorError.cancelled }
+            let task = Task {
+                try Task.checkCancellation()
+                return try await executor.execute(
+                    definition: definition,
+                    configuration: runConfiguration,
+                    projectTrusted: runTrusted,
+                    linkedFeatureEvidenceAvailable: linkedRun != nil
+                )
+            }
+            executionTask = task
+            let result = try await task.value
             pendingJournal = result.journal
             guard result.reportedTestCount == 1 else {
                 throw ScenarioEvidenceImportError.invalidTestCount
@@ -353,13 +374,26 @@ final class ScenarioCoordinator {
                         notice = "The run was retained, but semantic assessment needs review: \(error.localizedDescription)"
                     }
                 }
-                imported.append(try await persistence.saveRun(run, artifactRoot: result.attachmentDirectory))
+                imported.append(run)
+            }
+            imported = Self.evidenceForCommit(imported, cancelled: cancellationRequested)
+            // Cancellation is resolved before immutable evidence is committed.
+            finalEvidenceCommitStarted = true
+            for index in imported.indices {
+                imported[index] = try await persistence.saveRun(
+                    imported[index], artifactRoot: result.attachmentDirectory
+                )
             }
             try await persistence.saveLedger(ledger)
-            let hasFinalEvidence = result.evidenceAttachments.allSatisfy { !$0.isCheckpoint }
-            try await executor.finishEvidenceValidation(journal: result.journal, accepted: hasFinalEvidence)
+            let canReleaseDevice = !cancellationRequested && Self.canReleaseDevice(
+                processExitCode: result.processExitCode,
+                attachments: result.evidenceAttachments,
+                importedRuns: imported
+            )
+            try await executor.finishEvidenceValidation(journal: result.journal, accepted: canReleaseDevice)
             pendingJournal = nil
             recoveryJournals = try await executor.currentRecoveryJournals()
+            journals = try await persistence.loadJournals()
             runs.insert(contentsOf: imported, at: 0)
             selectedRunID = imported.first?.id
             if statedChangedDimensions == changedDimensions { statedChangedDimensions.removeAll() }
@@ -373,18 +407,55 @@ final class ScenarioCoordinator {
                 try? await executor.finishEvidenceValidation(journal: pendingJournal, accepted: false)
             }
             recoveryJournals = (try? await executor.currentRecoveryJournals()) ?? recoveryJournals
+            journals = (try? await persistence.loadJournals()) ?? journals
             notice = error.localizedDescription
         }
         await refreshPreflight()
     }
 
     func cancel() async {
+        if finalEvidenceCommitStarted {
+            notice = "The device test has finished and its evidence is being saved; cancellation can no longer stop this run."
+            return
+        }
+        if isRunning { cancellationRequested = true }
+        executionTask?.cancel()
         if let journal = await executor.cancelActiveExecution() {
             recoveryJournals.removeAll { $0.id == journal.id }
             recoveryJournals.append(journal)
+            journals.removeAll { $0.id == journal.id }
+            journals.append(journal)
+            notice = "Cancellation requested. The device is quarantined until test termination and fixture readiness are proven."
+        } else {
+            notice = "Cancellation requested before the device test started."
         }
-        notice = "Cancellation requested. The device is quarantined until test termination and fixture readiness are proven."
         await refreshPreflight()
+    }
+
+    static func canReleaseDevice(
+        processExitCode: Int32,
+        attachments: [ScenarioEvidenceAttachment],
+        importedRuns: [ScenarioRun]
+    ) -> Bool {
+        processExitCode == 0 &&
+        !attachments.isEmpty && attachments.allSatisfy { !$0.isCheckpoint } &&
+        !importedRuns.isEmpty && importedRuns.allSatisfy { run in
+            run.executionStatus == .completed &&
+            run.laneResults.allSatisfy { lane in
+                lane.executionStatus == .completed &&
+                (lane.lane != .siri || (lane.outcome != .notObserved && lane.outcome != .needsReview))
+            }
+        }
+    }
+
+    static func evidenceForCommit(_ runs: [ScenarioRun], cancelled: Bool) -> [ScenarioRun] {
+        guard cancelled else { return runs }
+        return runs.map { run in
+            var invalid = run
+            invalid.executionStatus = .invalidEvidence
+            invalid.outcome = .needsReview
+            return invalid
+        }
     }
 
     func clearDeviceQuarantine(fixtureReadinessProven: Bool) async {
@@ -394,6 +465,7 @@ final class ScenarioCoordinator {
                 fixtureReadinessProven: fixtureReadinessProven
             )
             recoveryJournals.removeAll { $0.invocation.destinationIdentifier == configuration.destinationIdentifier }
+            journals = try await persistence.loadJournals()
             await refreshPreflight()
         } catch {
             notice = error.localizedDescription
@@ -432,7 +504,8 @@ final class ScenarioCoordinator {
         return ScenarioReleaseCheckEvaluator.report(
             definition: definition,
             run: run,
-            comparison: run.flatMap(comparison(for:))
+            comparison: run.flatMap(comparison(for:)),
+            journalAccepted: run.map { ScenarioReleaseCheckEvaluator.acceptedJournal(for: $0, in: journals) }
         )
     }
 

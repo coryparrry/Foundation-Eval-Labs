@@ -108,7 +108,8 @@ enum ScenarioReleaseCheckEvaluator {
     static func report(
         definition: ScenarioDefinition,
         run: ScenarioRun?,
-        comparison: ScenarioComparisonReport? = nil
+        comparison: ScenarioComparisonReport? = nil,
+        journalAccepted: Bool? = nil
     ) -> ScenarioReleaseCheckReport {
         var failures: [String] = []
         guard let run else {
@@ -128,6 +129,9 @@ enum ScenarioReleaseCheckEvaluator {
         if run.executionStatus != .completed {
             failures.append("The scenario execution did not complete successfully.")
         }
+        if journalAccepted == false {
+            failures.append("The run's execution journal has not accepted its final evidence.")
+        }
         if run.xctestExitCode == nil {
             failures.append("The saved run does not record a successful XCTest exit, so its release evidence is incomplete.")
         } else if let exitCode = run.xctestExitCode, exitCode != 0 {
@@ -136,15 +140,10 @@ enum ScenarioReleaseCheckEvaluator {
         if !ScenarioLane.allCases.contains(where: { definition.coverage[$0] == .required }) {
             failures.append("The scenario has no required evidence lane, so it cannot gate a release.")
         }
-        let requiredObservableAssertions = definition.assertions.filter { assertion in
-            assertion.required && ScenarioLane.allCases.contains {
-                definition.coverage[$0] == .required && assertion.applies(to: $0)
-            }
-        }
-        if requiredObservableAssertions.isEmpty {
-            failures.append("The scenario has no required observable outcome assertion in a required lane.")
-        }
         for lane in ScenarioLane.allCases where definition.coverage[lane] == .required {
+            if !definition.assertions.contains(where: { $0.required && $0.applies(to: lane) }) {
+                failures.append("The required \(lane.title) lane has no required observable outcome assertion.")
+            }
             let results = run.laneResults.filter { $0.lane == lane }
             if results.isEmpty {
                 failures.append("The required \(lane.title) lane is missing.")
@@ -186,5 +185,22 @@ enum ScenarioReleaseCheckEvaluator {
             failures: failures,
             generatedAt: Date()
         )
+    }
+
+    static func acceptedJournal(for run: ScenarioRun, in journals: [ScenarioExecutionJournal]) -> Bool {
+        journals.contains { journal in
+            journal.id == run.id &&
+            journal.invocation.nonce == run.invocation.nonce &&
+            journal.invocation.testIdentity == run.invocation.testIdentity &&
+            journal.invocation.harnessVersion == run.invocation.harnessVersion &&
+            journal.invocation.destinationIdentifier == run.invocation.destinationIdentifier &&
+            journal.invocation.scenarioDigest == run.invocation.scenarioDigest &&
+            journal.invocation.resultBundleIdentity == run.invocation.resultBundleIdentity &&
+            journal.invocation.appProduct == run.invocation.appProduct &&
+            journal.invocation.testProduct == run.invocation.testProduct &&
+            journal.scenarioID == run.scenarioID &&
+            journal.scenarioVersion == run.scenarioVersion &&
+            journal.phase == .stopped && journal.evidenceAccepted == true
+        }
     }
 }
