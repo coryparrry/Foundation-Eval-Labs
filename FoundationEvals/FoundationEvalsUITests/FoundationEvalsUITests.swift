@@ -18,8 +18,8 @@ final class FoundationEvalsUITests: XCTestCase {
         app.typeKey("2", modifierFlags: .command)
 
         XCTAssertTrue(app.staticTexts["Intent Lab"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Connect signed UI tests"].exists)
-        XCTAssertTrue(app.buttons["Run preflight"].exists)
+        XCTAssertTrue(app.staticTexts["Connect an iPhone"].exists)
+        XCTAssertTrue(app.buttons["Choose Project…"].exists)
 
         app.radioButtons["Scenario"].click()
         XCTAssertTrue(app.staticTexts["Define the expected outcome"].exists)
@@ -66,7 +66,7 @@ final class FoundationEvalsUITests: XCTestCase {
         app.activate()
         app.typeKey("2", modifierFlags: .command)
         app.radioButtons["Scenario"].click()
-        app.buttons["Parameters"].click()
+        UITestStorage.selectPane("Parameters", heading: "Scenario", in: app)
 
         let names = app.textFields.matching(identifier: "Parameter name")
         XCTAssertEqual(names.count, 1)
@@ -151,7 +151,7 @@ final class FoundationEvalsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Run evaluation"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Add Case"].exists)
         XCTAssertTrue(app.buttons["Add Case"].isHittable)
-        XCTAssertTrue(app.buttons["Run destination"].exists)
+        XCTAssertTrue(app.buttons["This Mac"].exists)
 
         selectSetup("Instructions", in: app)
         XCTAssertTrue(app.textViews["Model instructions"].exists)
@@ -332,13 +332,7 @@ final class FoundationEvalsUITests: XCTestCase {
     @MainActor
     private func selectSetup(_ title: String, in app: XCUIApplication) {
         app.radioButtons["Setup"].click()
-        let menu = app.popUpButtons["Suite setup"]
-        if menu.exists {
-            menu.click()
-            app.menuItems[title].click()
-        } else {
-            app.buttons[title].click()
-        }
+        UITestStorage.selectPane(title, heading: "Suite setup", in: app)
     }
 
     private func uiTestStorage(name: String) -> URL {

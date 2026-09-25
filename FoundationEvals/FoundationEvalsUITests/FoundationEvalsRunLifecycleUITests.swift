@@ -163,13 +163,7 @@ final class FoundationEvalsRunLifecycleUITests: XCTestCase {
     @MainActor
     private func selectSetup(_ title: String) {
         app.radioButtons["Setup"].click()
-        let menu = app.popUpButtons["Suite setup"]
-        if menu.exists {
-            menu.click()
-            app.menuItems[title].click()
-        } else {
-            app.buttons[title].click()
-        }
+        UITestStorage.selectPane(title, heading: "Suite setup", in: app)
     }
 
     @MainActor

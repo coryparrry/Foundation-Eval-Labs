@@ -13,7 +13,7 @@ final class IntentLabArrayEntryUITests: XCTestCase {
         app.activate()
         app.typeKey("2", modifierFlags: .command)
         app.radioButtons["Scenario"].click()
-        app.buttons["Parameters"].click()
+        UITestStorage.selectPane("Parameters", heading: "Scenario", in: app)
 
         let parameterType = app.popUpButtons.matching(identifier: "Parameter type").firstMatch
         XCTAssertTrue(parameterType.waitForExistence(timeout: 5), app.debugDescription)

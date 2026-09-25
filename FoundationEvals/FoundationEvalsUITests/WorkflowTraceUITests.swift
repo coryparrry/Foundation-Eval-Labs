@@ -484,7 +484,14 @@ private enum WorkflowTraceFixture {
             "results": [firstSample, legacySample, cancelledSample, overflowingSample]
         ]
         let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: runs.appending(path: "trace-inspector-test-fixture.json"), options: .atomic)
+        let suite: [String: Any] = [
+            "id": "D0000000-0000-0000-0000-000000000002",
+            "name": runName
+        ]
+        try JSONSerialization.data(withJSONObject: suite).write(
+            to: directory.appending(path: "suite.json"), options: .atomic
+        )
+        try data.write(to: runs.appending(path: "D0000000-0000-0000-0000-000000000001.json"), options: .atomic)
     }
 
     private static var recordedSample: [String: Any] {

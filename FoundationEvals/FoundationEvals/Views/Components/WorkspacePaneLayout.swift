@@ -26,7 +26,9 @@ struct WorkspacePaneLayout<Page: WorkspacePane, Content: View>: View {
                 Picker(heading, selection: $selection) {
                     ForEach(Array(Page.allCases)) { page in Text(page.title).tag(page) }
                 }
-                .pickerStyle(.menu).fixedSize()
+                .pickerStyle(.menu)
+                .accessibilityIdentifier(heading)
+                .fixedSize()
             }
             VStack(alignment: .leading, spacing: 20) {
                 HStack(spacing: 12) {

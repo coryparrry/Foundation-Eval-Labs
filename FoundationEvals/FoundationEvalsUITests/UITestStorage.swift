@@ -2,6 +2,17 @@ import Foundation
 import XCTest
 
 enum UITestStorage {
+    @MainActor
+    static func selectPane(_ title: String, heading: String, in app: XCUIApplication) {
+        let picker = app.descendants(matching: .any).matching(identifier: heading).firstMatch
+        if picker.exists {
+            picker.click()
+            app.menuItems[title].click()
+        } else {
+            app.buttons[title].click()
+        }
+    }
+
     // The runner's private temporary directory cannot be opened by the application under test.
     // Access to this shared test-only root is granted by FoundationEvalsUITests.entitlements.
     static let root = URL(filePath: "/private/tmp/foundation-evals-ui-tests", directoryHint: .isDirectory)

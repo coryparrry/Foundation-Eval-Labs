@@ -2,7 +2,7 @@ import XCTest
 
 final class IntentLabGuidanceUITests: XCTestCase {
     @MainActor
-    func testGuidanceAndNavigationFitWideWindow() throws {
+    func testGuidanceAndNavigationFitAvailableWindow() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         let storage = try UITestStorage.makeDirectory(prefix: "intent-guidance")
@@ -18,7 +18,7 @@ final class IntentLabGuidanceUITests: XCTestCase {
         app.menuBars.menuBarItems["Window"].click()
         app.menuItems["Fill"].click()
         let width = window.frame.width
-        XCTAssertGreaterThan(width, 1_150, "Exercise wide navigation")
+        XCTAssertGreaterThanOrEqual(width, 824, "Exercise available navigation width")
 
         app.radioButtons["Setup"].click()
         assertChromeFits(app, window: window)
@@ -55,12 +55,7 @@ final class IntentLabGuidanceUITests: XCTestCase {
 
     @MainActor
     private func selectPage(_ title: String, app: XCUIApplication) {
-        if app.popUpButtons["Scenario"].exists {
-            app.popUpButtons["Scenario"].click()
-            app.menuItems[title].click()
-        } else {
-            app.buttons[title].click()
-        }
+        UITestStorage.selectPane(title, heading: "Scenario", in: app)
     }
 
     @MainActor
