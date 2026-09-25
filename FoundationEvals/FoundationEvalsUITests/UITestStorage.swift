@@ -4,8 +4,10 @@ import XCTest
 enum UITestStorage {
     @MainActor
     static func selectPane(_ title: String, heading: String, in app: XCUIApplication) {
-        let picker = app.descendants(matching: .any).matching(identifier: heading).firstMatch
-        if picker.exists {
+        let popUpButton = app.popUpButtons.matching(identifier: heading).firstMatch
+        let menuButton = app.menuButtons.matching(identifier: heading).firstMatch
+        if popUpButton.exists || menuButton.exists {
+            let picker = popUpButton.exists ? popUpButton : menuButton
             picker.click()
             app.menuItems[title].click()
         } else {

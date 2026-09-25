@@ -76,14 +76,14 @@ final class WorkflowTraceUITests: XCTestCase {
                 app.descendants(matching: .any).matching(identifier: "Start from Scratch").firstMatch.click()
                 app.menuItems[title].click()
             }
-            choose("Clear All Runs and Traces")
+            choose("Clear This Suite’s Runs and Traces")
             let dialog = app.sheets.firstMatch
             XCTAssertTrue(dialog.waitForExistence(timeout: 3), app.debugDescription)
             dialog.buttons["Cancel"].click()
             XCTAssertTrue(app.popUpButtons["Trace case"].exists)
 
-            choose("Clear All Runs and Traces")
-            dialog.buttons["Clear All Runs and Traces"].click()
+            choose("Clear This Suite’s Runs and Traces")
+            dialog.buttons["Clear This Suite’s Runs and Traces"].click()
             XCTAssertTrue(app.textFields["Suite name"].waitForExistence(timeout: 3))
             XCTAssertFalse(app.popUpButtons["Trace case"].exists)
             let priorName = app.textFields["Suite name"].value as? String
