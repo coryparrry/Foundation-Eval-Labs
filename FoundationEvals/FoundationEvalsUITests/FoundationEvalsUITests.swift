@@ -108,7 +108,13 @@ final class FoundationEvalsUITests: XCTestCase {
         prompt.click()
         app.typeKey("a", modifierFlags: .command)
         app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [])
-        XCTAssertFalse(app.buttons["Run evaluation"].isEnabled)
+        XCTAssertEqual(prompt.value as? String, "", "The edit must clear the case prompt")
+        // Prompt edits reach suite validation after the debounced save.
+        let runDisabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == false"),
+            object: app.buttons["Run evaluation"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [runDisabled], timeout: 3), .completed)
 
         app.menuBars.menuBarItems["Evaluation"].click()
         XCTAssertFalse(app.menuItems["Run Evaluation"].isEnabled)
