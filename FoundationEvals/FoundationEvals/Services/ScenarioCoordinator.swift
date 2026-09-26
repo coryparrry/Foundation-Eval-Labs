@@ -90,7 +90,15 @@ final class ScenarioCoordinator {
             ledger = try await persistence.loadLedger()
             recoveryJournals = try await executor.reconcileInterruptedJournals()
             journals = try await persistence.loadJournals()
-            if let definition = definitions.last {
+            // Resume the last-run scenario at its latest version, even if it was renamed.
+            let latestDefinitions = ScenarioDefinition.latestVersions(in: definitions)
+            let lastRunDefinition = runs.lazy.compactMap { run in
+                latestDefinitions.first { $0.id == run.scenarioID }
+            }.first
+            let fallbackDefinition = latestDefinitions.max {
+                ($0.name, $0.id.uuidString) < ($1.name, $1.id.uuidString)
+            }
+            if let definition = lastRunDefinition ?? fallbackDefinition {
                 draft = definition
                 parameterArrayDraftTexts = [:]
                 invalidParameterDraftIndices = []

@@ -13,6 +13,8 @@ The host builds once in isolated Derived Data, resolves the exact products named
 
 `SiriProbe` needs a paired physical iPhone with Siri enabled for the test language and the app's shortcuts discoverable. A simulator build proves compilation only; it does not prove Siri behavior.
 
+A completed assertion mismatch is a failed scenario, not a failed evidence-capture process. The harness attaches the final failed result and allows XCTest to finish successfully; the host still rejects that scenario for release. Incomplete or unobserved execution continues to fail XCTest and requires recovery.
+
 The harness resets and relaunches the synthetic fixture between the direct-intent and Siri lanes. Siri completion requires the declared visible state or a state transition, and a failure stores a checksummed screenshot alongside the JSON envelope. Required App Feature coverage is intentionally rejected by desktop preflight because this UI-test bundle only owns Intent Integration and Siri evidence.
 
 Siri permission and confirmation alerts remain operator-controlled. After Siri activation returns, the harness waits for any app or SpringBoard alert to clear before accepting a correlated completion. After any unresolved Siri attempt, the remaining attempts retain that failure without resetting or relaunching the app. This prevents a delayed action from inheriting a later attempt’s context. Approve the prompt on the iPhone and rerun. If XCTest terminates inside Siri activation, the pre-Siri checkpoint preserves direct-intent observations, but the device stays quarantined until recovery is confirmed; checkpoint evidence never proves Siri passed.

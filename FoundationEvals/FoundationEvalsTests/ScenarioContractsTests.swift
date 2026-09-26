@@ -853,6 +853,45 @@ struct ScenarioContractsTests {
         ) == .failed)
     }
 
+    @Test func diagnosticClaimsFeaturePassOnlyFromCompletedPassingEvidence() {
+        let caseID = UUID()
+        let now = Date()
+        func lane(
+            _ kind: ScenarioLane,
+            _ status: ScenarioExecutionStatus,
+            _ outcome: ScenarioOutcome
+        ) -> ScenarioLaneResult {
+            .init(
+                caseID: caseID, attempt: 1, lane: kind,
+                executionStatus: status, outcome: outcome,
+                startedAt: now, completedAt: now
+            )
+        }
+
+        let failedIntent = lane(.intentIntegration, .completed, .failed)
+        let noFeatureSummary = "The direct intent failed. No completed passing feature control is available, so the evidence does not establish where the failure arose."
+        #expect(ScenarioDiagnosticClassifier.message(for: [failedIntent]) == noFeatureSummary)
+        #expect(ScenarioDiagnosticClassifier.message(for: [
+            lane(.appFeature, .timedOut, .notObserved), failedIntent
+        ]) == noFeatureSummary)
+        #expect(ScenarioDiagnosticClassifier.message(for: [
+            lane(.appFeature, .completed, .needsReview), failedIntent
+        ]) == noFeatureSummary)
+        #expect(ScenarioDiagnosticClassifier.message(for: [
+            lane(.appFeature, .timedOut, .passed), failedIntent
+        ]) == noFeatureSummary)
+        #expect(ScenarioDiagnosticClassifier.message(for: [
+            lane(.appFeature, .timedOut, .failed), failedIntent
+        ]) == noFeatureSummary)
+
+        #expect(ScenarioDiagnosticClassifier.message(for: [
+            lane(.appFeature, .completed, .passed), failedIntent
+        ]) == "The feature control passed, but the direct intent returned a wrong or incomplete observable result. An application integration or mapping failure is observed.")
+        #expect(ScenarioDiagnosticClassifier.message(for: [
+            lane(.appFeature, .completed, .failed), failedIntent
+        ]) == "The production feature and direct intent failed similarly. Investigate the application feature first; this evidence does not attribute the failure to Siri.")
+    }
+
     @Test func optionalFeatureFailureDoesNotFailRequiredIntentAndSiriLanes() throws {
         let definition = try scenario()
         let now = Date()

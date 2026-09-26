@@ -271,6 +271,76 @@ struct IntentLabRegressionTests {
     }
 
     @MainActor
+    @Test func reloadingRenamedScenarioSelectsLatestVersionOfLastRunScenario() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EvaluationStore(supportDirectory: root)
+        let persistence = ScenarioPersistence(
+            rootDirectory: store.overviewStorageDirectory.appending(path: "IntentLab", directoryHint: .isDirectory)
+        )
+        var original = ScenarioDefinition.starter()
+        original.name = "Open the packing note"
+        original.target.destinationIdentifier = "physical-device-1"
+        original = try original.frozen()
+        var renamed = original
+        renamed.version = 2
+        renamed.name = "Negative control — wrong expected note"
+        renamed = try renamed.frozen()
+        try await persistence.saveDefinition(original)
+        try await persistence.saveDefinition(renamed)
+
+        let withoutRun = ScenarioCoordinator(supportDirectory: root, evaluationStore: store)
+        await withoutRun.load()
+        #expect(withoutRun.draft.id == renamed.id)
+        #expect(withoutRun.draft.version == renamed.version)
+
+        var unrelated = ScenarioDefinition.starter()
+        unrelated.name = "Zulu unrelated scenario"
+        unrelated.target.destinationIdentifier = "physical-device-1"
+        unrelated = try unrelated.frozen()
+        try await persistence.saveDefinition(unrelated)
+        let now = Date()
+        let invocation = ScenarioInvocationIdentity(
+            id: UUID(), nonce: UUID().uuidString, issuedAt: now,
+            testIdentity: .init(bundleIdentifier: "dev.example.FixtureUITests",
+                                className: "IntentLabScenarioTests", methodName: "testIntentLabScenario"),
+            harnessVersion: ScenarioInvocationIdentity.currentHarnessVersion,
+            destinationIdentifier: "physical-device-1", scenarioDigest: renamed.definitionDigest,
+            resultBundleIdentity: "IntentLab.xcresult"
+        )
+        let failedIntent = ScenarioLaneResult(
+            caseID: renamed.id, attempt: 1, lane: .intentIntegration,
+            executionStatus: .completed, outcome: .failed,
+            startedAt: now, completedAt: now
+        )
+        let failedSiri = (1...(renamed.coverage.siriAttemptCount ?? 3)).map { attempt in
+            ScenarioLaneResult(
+                caseID: renamed.id, attempt: attempt, lane: .siri,
+                executionStatus: .completed, outcome: .failed,
+                startedAt: now, completedAt: now
+            )
+        }
+        let run = ScenarioRun(
+            id: invocation.id, scenarioID: renamed.id, scenarioVersion: renamed.version,
+            scenarioDigest: renamed.definitionDigest, invocation: invocation,
+            startedAt: now, completedAt: now,
+            environment: .init(xcodeVersion: "27", sdkVersion: "27", deviceModel: "iPhone",
+                               operatingSystem: "iOS 27", languageCode: "en", regionCode: "GB",
+                               timeZoneIdentifier: "Europe/London", executedAt: now),
+            executionStatus: .completed, outcome: .failed, laneResults: [failedIntent] + failedSiri,
+            linkedFeatureRunID: nil, importedAt: now
+        )
+        _ = try await persistence.saveRun(run, artifactRoot: nil)
+
+        let reloaded = ScenarioCoordinator(supportDirectory: root, evaluationStore: store)
+        await reloaded.load()
+        #expect(reloaded.selectedRunID == run.id)
+        #expect(reloaded.draft.id == renamed.id)
+        #expect(reloaded.draft.version == renamed.version)
+        #expect(reloaded.draft.name == renamed.name)
+    }
+
+    @MainActor
     @Test func failedOrUnobservedFinalEvidenceKeepsDeviceQuarantined() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

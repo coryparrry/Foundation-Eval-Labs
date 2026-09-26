@@ -290,7 +290,12 @@ enum ScenarioDiagnosticClassifier {
         let feature = results.filter { $0.lane == .appFeature }
         let intent = results.filter { $0.lane == .intentIntegration }
         let siri = results.filter { $0.lane == .siri }
-        let featureFailed = feature.contains { $0.outcome == .failed }
+        let featureFailed = feature.contains {
+            $0.executionStatus == .completed && $0.outcome == .failed
+        }
+        let featurePassed = !feature.isEmpty && feature.allSatisfy {
+            $0.executionStatus == .completed && $0.outcome == .passed
+        }
         let intentFailed = intent.contains { $0.outcome == .failed }
         let intentPassed = !intent.isEmpty && intent.allSatisfy { $0.outcome == .passed }
         let siriFailed = siri.contains { $0.outcome == .failed }
@@ -298,8 +303,11 @@ enum ScenarioDiagnosticClassifier {
         if featureFailed && intentFailed {
             return "The production feature and direct intent failed similarly. Investigate the application feature first; this evidence does not attribute the failure to Siri."
         }
-        if !featureFailed && intentFailed {
+        if featurePassed && intentFailed {
             return "The feature control passed, but the direct intent returned a wrong or incomplete observable result. An application integration or mapping failure is observed."
+        }
+        if intentFailed {
+            return "The direct intent failed. No completed passing feature control is available, so the evidence does not establish where the failure arose."
         }
         if intentPassed && siriFailed {
             return "The direct intent passed, but the Siri-driven outcome failed. The evidence establishes a Siri-experience failure, not Siri's hidden reasoning or the point where the wrong value was introduced."
